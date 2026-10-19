@@ -1458,3 +1458,16 @@ courses come from Nintendo's network, but the game never talks to Nintendo or to
 
 **Would change it:** TGRCode going away or asking us to stop (the server keeps what it imported; a self-hosted
 server never uses it unless started with `--upstream`), or the owner wanting a pre-fetched pool only.
+
+## 2026-10-19 — 100 Mario: SMM1 for the run's start and end, SMM2's screens in between
+
+**Owner, after playing build 367 on the iPad** ("working a lot better, not perfect"): use SMM1's
+screens only for the run's **start and finish** (difficulty select, world map with the castle end
+point, start card, and the ending when you win), and **SMM2's own screens in between**: SMM2's
+course-in, pause, skip, miss / retry, and SMM2 Endless's course-clear flow with its Next / Like /
+Boo result screen. This narrows the earlier "SMM1's screens throughout" plan.
+
+- **Course clear** must follow SMM2 Endless's own clear sequence; showing "Course Complete" straight
+  away (as the build did) is wrong.
+- **Course loading** between the card and the course is noticeably slow (the screen visibly changes
+  before the course appears); hide or shorten that wait.
