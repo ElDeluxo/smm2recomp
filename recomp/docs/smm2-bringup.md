@@ -159,20 +159,44 @@ generated C needs no changes: arm64 shares `generated/smm2` with macOS, and x86-
 
 **Linux arm64 in a VM (Mesa lavapipe):**
 - The build boots to the title screen.
-- Its frames match Metal's except for one thing: the Mario model is missing in the 3D World title course.
-  - His draws are issued, with the same programs, vertex counts and textures as on Metal.
-  - His texture is uploaded and the material alpha uniform is 1.
-  - The translated GLSL matches the MSL statement for statement (Metal's `LARECOMP_SAVE_GLSL=1` writes both). The
-    signed LDC offsets and the bone-matrix reads are the same code.
-  - [obs] He *is* drawn. In a pass with two targets he is drawn into a character layer (1600x900 RG11B10F): pass
-    images (`LARECOMP_DEBUG_PASS_NCOLOR=2`) show him there.
-  - The scene's composite shader then copies him into the scene where target 1 (RG16F) is not exactly 1.0. It
-    discards wherever that target reads 1.0, its cleared value.
-  - [obs] A texel probe (`LARECOMP_DEBUG_PROBE=310,555`) reads target 1 as 1.0 (0x3c00) at Mario's pixels after his
-    pass. His fragment shader's second output never lands there.
-  - So the composite discards him. Not the cause: copy aliases (`LARECOMP_VK_COPY_OPT=0`) and storage aliases
-    (`RECOMP_NO_TEX_ALIAS=1`).
-  - Next: that target's write mask, attachment or clear order in the two-target pass.
+- The Mario model in the 3D World title course (2026-10-19). How SMM2 draws him:
+  - A pass with two targets draws him into a character layer: target 0 (1600x900 RG11B10F, blended) and target 1
+    (RG16F, not blended; cleared to 1.0, his view depth in R and a rim glow in G).
+  - A composite in the scene pass then draws a box around him. Its shader discards where target 1 is 1.0, compares the
+    depth in target 1 with the scene depth, and copies the character layer into the scene.
+- Two causes kept him out, both fixed:
+  - [obs] The composite drew nothing at all. With its output forced to a constant and its discard removed, the scene
+    did not change (`LARECOMP_DEBUG_FS_OUT`, `LARECOMP_DEBUG_FS_NODISCARD`, `LARECOMP_DEBUG_PROBE_DRAWS`). Its box
+    vertices are in a per-frame buffer 2.6 GB into the guest heap, read in place from the imported heap. Lavapipe
+    allows 2 GB allocations (maxMemoryAllocationSize); the 3.2 GB import still works there and shader global memory
+    reads past 2 GB fine, but vertex and index fetches past 2 GB read other memory. Copying the vertices
+    (`LARECOMP_VK_COPY_VERTICES=1`) made the box draw.
+    - Fix (`guest_direct`, exec.c): vertex / index data is read in place only within the device's
+      maxMemoryAllocationSize and maxBufferSize; past that it is copied, as anywhere outside the heap.
+  - [obs] Target 1 was never written by his draw: a texel probe read 1.0 (0x3c00) at his pixels while target 0 had
+    his colour. It was written whenever his draw started a new command buffer (a probe's flush before it), never when
+    it followed the earlier draws in the same command buffer, with or without a pass restart in between
+    (`LARECOMP_DEBUG_PROBE_LAZY`).
+    - Not on our side, as far as can be checked: the validation layers report nothing in that pass, the barrier before
+      every pass is a full one with every image in GENERAL layout, and the state filter (`LARECOMP_VK_STATE_FILTER=0`)
+      and vertex copies change nothing. A standalone Vulkan program with the same targets, formats, blend split,
+      clears and several pipelines writes target 1 correctly on the same lavapipe, so the trigger is narrower.
+    - Workaround (`lavapipe_mrt_split`, exec.c), lavapipe only: in a pass with several targets, some blended and some
+      not, a draw whose program differs from the previous draw's starts a new submission.
+      `LARECOMP_VK_MRT_SPLIT=0 / 1` forces it off / on for any driver. Real drivers are not expected to need it.
+  - [obs] With both fixes the probe reads his depth in target 1 and the composite copies him into the scene (pass
+    images: he is there, as on Metal). The final frame still shows a white blur where he stands: a few texels of the
+    character layer become NaN (`LARECOMP_DEBUG_NAN_SCAN=1`: 5-15 texels at his eyes, after the draw with fragment
+    program 0x729accc000; its colour alpha comes out NaN), and the bloom spreads them. Whether real drivers produce
+    them too is open.
+- Shadow sampling: where there is no shadow map, SMM2 binds a 4x4 R32_FLOAT texture ("DepthShadow") to a shadow
+  sampler. Vulkan compares only depth formats (validation: VUID-vkCmdDrawIndexed-None-06479); the Switch compares the
+  red channel. Such a texture is now sampled through a D32_SFLOAT copy made in the submission's upload commands
+  (`vk_shadow_view`, textures.c).
+- Shader global memory binds the whole 3.2 GB heap as one storage buffer. That is over lavapipe's
+  maxStorageBufferRange (128 MB; VUID-VkWriteDescriptorSet-descriptorType-00333), but lavapipe reads it correctly,
+  and clamping the range there broke the HUD text (its shaders read past 128 MB). NVIDIA, AMD and Intel allow large
+  storage buffers; left as it is for now.
 - Comparing captures needs care with colour:
   - Vulkan read-backs are raw sRGB; the Ryujinx references are window-server grabs.
   - Raw against grab is about 23 % of pixels apart on colour alone, for Metal too.
