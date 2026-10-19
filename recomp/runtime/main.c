@@ -242,17 +242,28 @@ int main(int argc, char **argv) {
 #endif
     const char *root = "extracted";  // (in the data root)
     static char arg_root[1024];
+    bool setup = false;  // --setup: the setup screen even when everything is there
     for (int i = 1; i < argc; i++) {
-        if (!strcmp(argv[i], "--play")) continue;  // (LAS Recomp's start screen isn't part of the shared runtime: the
-                                                   // game always starts straight away; the flag is accepted as before)
+        if (!strcmp(argv[i], "--play")) continue;  // (no setup screen unless something is missing, as before)
+        else if (!strcmp(argv[i], "--setup")) setup = true;
         else if (argv[i][0] != '-' && !realpath(argv[i], arg_root)) root = argv[i];  // (relative to where we started)
         else if (argv[i][0] != '-') root = arg_root;
     }
     rt_paths_init();  // the data root becomes the working directory (runtime/paths.h)
+    // The setup screen (runtime/ui/launcher.mm): in place of the game until the player's files are set up, and after
+    // Quit to Start Screen. Then the game boots in its window.
+    extern bool launcher_needed(const char *root, bool asked);
+    extern void launcher_run(const char *root);
+    extern void launcher_boot_env(void);
+    extern void launcher_update_check_start(void);
+    launcher_update_check_start();  // (notifies only: the setup screen and the overlay menu's Mods tab)
     for (;;) {
+        if (launcher_needed(root, setup)) launcher_run(root);
+        else launcher_boot_env();
+        setup = false;
         boot(root);
         int kind = ui_run();  // window and input on the main thread; returns when a reboot is requested
         teardown();
-        if (kind == RT_REBOOT_TITLE) LOG("[reboot] no start screen: booting the game again\n");
+        if (kind == RT_REBOOT_TITLE) setup = true;  // (Quit to Start Screen: the setup screen)
     }
 }
