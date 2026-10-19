@@ -227,6 +227,17 @@ static void test_push(uint64_t frame, unsigned long start, unsigned long len, co
         if (frame == start || frame == start + len) touch_test(x, y, frame == start);
         return;
     }
+    if (!strcmp(dev, "drag")) {  // "frame:drag:<x0>/<y0>/<x1>/<y1>:frames": a finger held 10 frames at x0, y0, moved to
+        extern void touch_test(int32_t x, int32_t y, bool down);  // x1, y1, held there, lifted after the frames
+        int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+        sscanf(arg, "%d/%d/%d/%d", &x0, &y0, &x1, &y1);
+        if (frame < start || frame > start + len) return;
+        long k = (long)(frame - start) - 10, n = (long)len - 20 > 1 ? (long)len - 20 : 1;
+        if (k < 0) k = 0;
+        if (k > n) k = n;
+        touch_test((int32_t)(x0 + (x1 - x0) * k / n), (int32_t)(y0 + (y1 - y0) * k / n), frame != start + len);
+        return;
+    }
     if (!strcmp(dev, "sdlkey")) {
         if (frame == start || frame == start + len) push_key(SDL_GetScancodeFromName(arg), SDL_KMOD_NONE, frame == start);
         return;
@@ -280,7 +291,7 @@ static void host_test_frame(uint64_t frame) {
             unsigned long start = 0, len = 10;
             char dev[8] = "", name[400] = "";
             if (sscanf(tok, "%lu:%7[a-z]:%399[^:]:%lu", &start, dev, name, &len) < 3) continue;
-            if (!strcmp(dev, "type") || !strcmp(dev, "sdlpad") || !strcmp(dev, "sdlkey") || !strcmp(dev, "shot") || !strcmp(dev, "tap") || !strcmp(dev, "click")) {
+            if (!strcmp(dev, "type") || !strcmp(dev, "sdlpad") || !strcmp(dev, "sdlkey") || !strcmp(dev, "shot") || !strcmp(dev, "tap") || !strcmp(dev, "drag") || !strcmp(dev, "click")) {
                 test_push(frame, start, len, dev, name);
                 continue;
             }
