@@ -387,3 +387,98 @@ bool costume_generate(void) {
 }
 
 const char *costume_overlay_dir(void) { return OUT_DIR; }
+
+// ---------------------------------------------------------------- the costume table (SMM1's Mush/CharaMarioTable.byaml)
+// BYML v1, big-endian: root array of dictionaries with ResName (string) and Rare (int: the category: 0 always owned,
+// 1 / 2 / 3 / 6 the 100 Mario pools of Easy / Normal / Expert / Super Expert, 4 / 5 / 7 others) [obs data]
+static uint32_t be32(const uint8_t *p) { return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3]; }
+static uint32_t be24(const uint8_t *p) { return (uint32_t)p[0] << 16 | (uint32_t)p[1] << 8 | p[2]; }
+static const char *byml_str(const uint8_t *d, size_t n, size_t table, uint32_t i) {
+    if (!table || table + 4 > n || d[table] != 0xC2 || i >= be24(d + table + 1)) return "";
+    size_t o = table + be32(d + table + 4 + 4 * (size_t)i);
+    return o < n ? (const char *)d + o : "";
+}
+static struct { char res[48]; int rare; } *g_table;
+static int g_ntable = -1;
+static void load_table(void) {
+    if (g_ntable >= 0) return;
+    g_ntable = 0;
+    size_t pn, bn;
+    uint8_t *pack = smm1_dump_read("Pack/Static.pack", &pn);
+    LSarc s;
+    if (!pack || !lyt_sarc_open(&s, pack, pn)) { free(pack); return; }
+    const uint8_t *b = lyt_sarc_get(&s, "Mush/CharaMarioTable.byaml", &bn);
+    if (b && bn > 0x10 && b[0] == 'B' && b[1] == 'Y') {
+        size_t keys = be32(b + 4), strs = be32(b + 8), root = be32(b + 12);
+        if (root + 4 <= bn && b[root] == 0xC0) {
+            uint32_t count = be24(b + root + 1);
+            size_t vals = root + 4 + ((count + 3) & ~3u);
+            g_table = calloc(count + 1, sizeof *g_table);
+            for (uint32_t i = 0; i < count && vals + 4 * (size_t)i + 4 <= bn; i++) {
+                if (b[root + 4 + i] != 0xC1) continue;
+                size_t dict = be32(b + vals + 4 * (size_t)i);
+                if (dict + 4 > bn) continue;
+                uint32_t ne = be24(b + dict + 1);
+                char res[48] = "";
+                int rare = -1;
+                for (uint32_t e = 0; e < ne && dict + 4 + 8 * (size_t)e + 8 <= bn; e++) {
+                    const uint8_t *en = b + dict + 4 + 8 * (size_t)e;
+                    const char *key = byml_str(b, bn, keys, be24(en));
+                    uint8_t type = en[3];
+                    uint32_t v = be32(en + 4);
+                    if (!strcmp(key, "ResName") && type == 0xA0) snprintf(res, sizeof res, "%s", byml_str(b, bn, strs, v));
+                    if (!strcmp(key, "Rare") && type == 0xD1) rare = (int)v;
+                }
+                if (res[0]) snprintf(g_table[g_ntable].res, 48, "%s", res), g_table[g_ntable++].rare = rare;
+            }
+        }
+    }
+    lyt_sarc_close(&s);
+    free(pack);
+}
+// the costume's category (Rare), -1 if the table doesn't list it
+int costume_rare(const char *res) {
+    load_table();
+    for (int i = 0; i < g_ntable; i++)
+        if (!strcmp(g_table[i].res, res)) return g_table[i].rare;
+    return -1;
+}
+void costume_list(void) { list_costumes(); }
+
+// the costume's English name and series title (SMM1's Cmn_CharaMarioName / Cmn_CharaMarioTitle, UTF-8)
+static void msg_utf8(const char *table, const char *label, char *out, size_t cap) {
+    out[0] = 0;
+    size_t n;
+    uint8_t *d = smm1_common_msbt(table, &n);
+    LMsbt t;
+    if (d && lyt_msbt_parse(&t, d, n)) {
+        const LMsg *m = lyt_msbt_get(&t, label);
+        size_t k = 0;
+        for (int i = 0; m && i < m->n && k + 4 < cap; i++) {
+            uint32_t c = m->text[i];
+            if (c == LYT_ARG || c == '\n') continue;
+            if (c < 0x80) out[k++] = (char)c;
+            else if (c < 0x800) out[k++] = (char)(0xC0 | c >> 6), out[k++] = (char)(0x80 | (c & 63));
+            else out[k++] = (char)(0xE0 | c >> 12), out[k++] = (char)(0x80 | (c >> 6 & 63)), out[k++] = (char)(0x80 | (c & 63));
+        }
+        out[k] = 0;
+    }
+    free(d);
+}
+void costume_name(const char *res, char *name, size_t cap, char *title, size_t tcap) {
+    smm1_data_open();
+    if (name) msg_utf8("Cmn_CharaMarioName", res, name, cap);
+    if (title) msg_utf8("Cmn_CharaMarioTitle", res, title, tcap);
+    if (name && !name[0]) snprintf(name, cap, "%s", res);
+}
+// the costume's standing frame as a texture (wait.0), -1 if missing
+int costume_sprite(const char *res) {
+    static struct { char res[48]; int tex; } cache[8];
+    static int nc;
+    for (int i = 0; i < nc; i++)
+        if (!strcmp(cache[i].res, res)) return cache[i].tex;
+    Bfres *b = costume_bfres(res);
+    int tex = b ? bfres_texture(b, "wait.0") : -1;
+    if (nc < 8) snprintf(cache[nc].res, 48, "%s", res), cache[nc++].tex = tex;
+    return tex;
+}

@@ -3,7 +3,7 @@
 # each a folder with meta/ and content/) that the SMM2 recomp's SMM1 screens, music, ending and costumes read
 # (games/smm2/mods/smm1/smm1_data.c, costume_gen.c), keeping each title's layout. For devices that can't hold the
 # whole dump (iOS, Android): copy <out folder> to the data folder as smm1/ (or point RECOMP_SMM1_DUMP at it).
-# Alternatively copy mods-generated/smm1-ui-v5/ and mods-generated/costume-romfs/ from a desktop that has generated
+# Alternatively copy mods-generated/smm1-ui-v6/ and mods-generated/costume-romfs/ from a desktop that has generated
 # them: the device then needs no dump at all.
 set -e
 OUT=$1; shift
@@ -23,10 +23,11 @@ for T in "$@"; do
         cp "$T/content/$1" "$D/content/$1"
     }
     for f in "$T"/content/Layout/*.szs; do [ -f "$f" ] && copy "Layout/$(basename "$f")"; done
-    for p in Layout Nwk NormalPlay Lcl StaticSkin Sound; do copy "Pack/$p.pack"; done
+    for p in Layout Nwk NormalPlay Lcl StaticSkin Sound Static; do copy "Pack/$p.pack"; done
     for r in US EU; do copy "Font/BmpFont_$r.szs"; copy "Message/LayoutMsg_${r}en.szs"; copy "Message/CommonMsg_${r}en.szs"; done
     for s in M1 M3 MW WU; do copy "Model/${s}_DV_sky.szs"; done
     for f in "$T"/content/Model/M1_Player_Chara_*.szs; do [ -f "$f" ] && copy "Model/$(basename "$f")"; done
+    for f in "$T"/content/Sound/CharaMario/CharaMario_*.bars; do [ -f "$f" ] && copy "Sound/CharaMario/$(basename "$f")"; done
     for s in $STREAMS; do copy "Sound/Resource/Stream/$s.bfstm"; done
     n=$((n + 1))
 done

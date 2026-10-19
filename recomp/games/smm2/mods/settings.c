@@ -126,6 +126,9 @@ bool net_pretend_online(void) { return mod_hundred() || (getenv("RECOMP_PRETEND_
 // overlapping pipes will follow.
 typedef struct { const char *label, *desc; bool *value; bool def; } GameModToggle;
 static bool t_hundred = true, t_tgrcode;
+static bool t_costumes;  // (mods/costume.c)
+bool costumes_setting(void);
+void costumes_set_setting(bool on);
 
 static void ini_set(const char *key, const char *val) {  // replace or add one key=value line
     const char *path = getenv("RECOMP_MOD_INI") ? getenv("RECOMP_MOD_INI") : "smm2mods.ini";
@@ -160,10 +163,16 @@ int game_mod_toggles(const GameModToggle **out) {
          "(no account needed). Off: the course server set in smm2mods.ini (server=, token=). Takes effect at the "
          "next start.",
          &t_tgrcode, false},
+        // (costumes: mods/costume.c)
+        {"Mystery Mushroom costumes",
+         "SMM1's costumes in Super Mario Bros. style courses: the Big Mushroom becomes the Mystery Mushroom, and a "
+         "won 100 Mario Challenge gives a new costume. Models come from your SMM1 dump. Takes effect at the next start.",
+         &t_costumes, false},
     };
     if (!mod_hundred()) { *out = NULL; return 0; }  // (the mod itself is off: nothing to switch)
     t_hundred = !strcmp(g_mod.ruleset, "hundred");
     t_tgrcode = !strcmp(g_mod.courses, "tgrcode");
+    t_costumes = costumes_setting();
     *out = toggles;
     return (int)(sizeof toggles / sizeof *toggles);
 }
@@ -177,6 +186,7 @@ void game_mod_toggles_changed(void) {
         ini_set("courses", courses);
         LOG("[mod] courses from %s at the next start\n", t_tgrcode ? "TGRCode" : "your server");
     }
+    costumes_set_setting(t_costumes);
 }
 
 // Overrides are registered before the game's first instruction runs (dispatch reads them on every first call). Each

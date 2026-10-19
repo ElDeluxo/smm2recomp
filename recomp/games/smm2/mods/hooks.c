@@ -39,6 +39,8 @@ static void retry_rollback(void) {
 }
 
 void smm2_mod_after(Cpu *c, uint64_t addr) {
+    extern bool costume_after(Cpu *c, uint64_t addr);  // (costume.c: its own hook points)
+    if (costume_after(c, addr)) return;
     if (!mod_hundred_rules()) return;
     switch (addr - MAIN_ADDR(0)) {
     case 0x15877b0:  // strb w9, [x8, #0x48]: "skipped during the miss demo"
