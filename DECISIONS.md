@@ -1506,3 +1506,23 @@ player's machine from their own dump, plus a hook on its press; both screens are
 iPad with the Mods tab.
 
 **Android:** the owner has no Android device; Android is tested on the emulator.
+
+## 2026-10-19 — Edit any course; Nextendo Network for multiplayer; one app-level settings page
+
+**Owner (relayed by mario-maker-c4):**
+1. **Edit any course, not just your own**, in SMM2's own Course Maker: Course World, Endless and 100
+   Mario courses alike, as SMM1 allowed for downloaded courses. Edit buttons go where SMM1 put its
+   edit option for a downloaded course, translated into SMM2's style (course detail page, after a
+   clear, …). The work is the entry points plus loading the downloaded course into the editor (a
+   Coursebot slot). **Open, asked of the owner:** what re-uploading an edited copy of someone else's
+   course does.
+2. **Nextendo Network** (github.com/NextendoNetwork: community-run Switch online servers with a Go
+   NEX/PRUDP server, account/dauth/BAAS servers) **for multiplayer**, and possibly for Course World,
+   Endless and 100 Mario too. **TGRCode and our own server stay**: the online backend (Nextendo / our
+   server) and the course source (Nextendo / our server / TGRCode) are player settings. This widens
+   the earlier "our open-source server only" scope: community-run servers the player chooses are
+   allowed; Nintendo's own servers still never are. Whether Nextendo supports SMM2 is being checked
+   first.
+3. **Settings live at app level**: one settings page in the recomp app's own UI (grown from the
+   overlay menu's Mods tab), not a screen drawn in SMM2's style. It holds the online backend, the
+   course source and every SMM1 feature switch.
