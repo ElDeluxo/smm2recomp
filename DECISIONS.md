@@ -1551,3 +1551,19 @@ with the owner first.
   server only**; nothing connects to Nextendo's servers until the owner has their permission and an
   app registration (the owner is contacting them on Discord). The same pieces give us our own
   local NEX server route later.
+
+## 2026-10-19 — Releases: a launcher plus recompiler per platform, bring your own game
+
+**Owner-approved plan (relayed by mario-maker-c4), modelled on melee-pc** (github.com/999sian/melee-pc):
+per-platform releases that ship **no game code**. The generated C is Nintendo's code, so a release is
+a **launcher plus the recompiler**: the launcher takes the player's dump, checks its hash against the
+known v3.0.3 versions, uses the player's own prod.keys, extracts the dump, recompiles the game on
+first launch with the bundled zig, then runs it; it also takes an optional SMM1 dump (100 Mario,
+costumes) and checks for updates.
+
+- **Windows, Linux and macOS first** (builds on the existing first-launch recompile of the Windows
+  package). **Android and iOS later**, as build-it-yourself paths; iOS can't compile on the device,
+  so it needs a desktop helper that builds, signs and installs the app.
+- Release builds come from GitHub Actions, run only for releases (CI minutes budget).
+- The repository still has no top-level licence for the project's own code; the owner hasn't chosen
+  one (MIT like LAS Recomp, or GPL-3.0 like melee-pc). Until then none is added.

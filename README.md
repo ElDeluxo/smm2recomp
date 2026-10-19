@@ -52,9 +52,9 @@ On top of the original game it adds:
 | 100 Mario Challenge (SMM1) | Playable start to finish, ending included |
 | Endless Challenge (SMM2) | Playable against the course server |
 | Course World (lists, search, download, play, leaderboards) | Working against the course server; likes, comments and uploads in progress |
-| Edit any course (as in SMM1) | Planned |
+| Edit any course (as in SMM1) | In progress |
 | SMM1 feature switches | In progress |
-| Online multiplayer | Planned |
+| Online multiplayer | Planned; network groundwork in progress |
 
 [PROGRESS.md](PROGRESS.md) has the detailed checklist and the evidence behind each item, and
 [DECISIONS.md](DECISIONS.md) records the design decisions and why they were made.

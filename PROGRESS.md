@@ -185,6 +185,11 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     ⬜ online multiplayer: plan in `DECISIONS.md` (local play over our relay first, Network Play at
     the enl layer second)
 
+- ⬜ **Releases (melee-pc style, owner-approved)**: per-platform launcher + recompiler, no game code;
+  dump picker with v3.0.3 hash check, the player's prod.keys, extraction, first-launch recompile with
+  bundled zig, optional SMM1 dump, update check. Windows / Linux / macOS first, then Android / iOS
+  build-it-yourself (iOS via a desktop build-sign-install helper). GitHub Actions on release only.
+
 | Platform | Builds | Boots to title | Plays courses | Frames match Ryujinx | Input replays in sync |
 |---|---|---|---|---|---|
 | macOS (Apple Silicon, Metal) | ✅ | ✅ title rendered, 60 fps | ✅ title course to the goal, Course Maker test play | 🔄 in course: 71 / 90 courses bit-identical (all SMB1/SMB3/SMW), the rest within 20 px except 3D World lava 2.28 % px >24 (title: 2.5-4.8 %) | ✅ 221,189 / 221,189 updates identical (31 sessions) |
