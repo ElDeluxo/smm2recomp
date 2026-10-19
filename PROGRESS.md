@@ -142,7 +142,7 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
       award worth several lives found in a test course (the cap is untested in play)
     - 🔄 SMM1 screens and the ending, host-drawn (`games/smm2/mods/smm1/`: SMCraft's SMM1 layout player
       ported to C, a CPU rasterizer drawn through the overlay on Metal and Vulkan; everything from the
-      player's SMM1 dump, generated into `mods-generated/smm1-ui-v5/`):
+      player's SMM1 dump, generated into `mods-generated/smm1-ui-v6/`):
       - ✅ difficulty select (tabs by unlock, Continue only with a record, OutR/OutL slides), world map
         demos as Block.rpx plays them (MapIn, Telop, the Goombas carrying Peach, AnimB, Mario's jump /
         walk / Go, the castle at the end, lives and n/total counters, A skips to Go), the start card (one
@@ -166,13 +166,19 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
         clear … (skips, misses) → the ending with the run's courses and makers in the credits → back on
         the select (`RECOMP_HUNDRED_AUTO`, `RECOMP_HUNDRED_SHOTS`; evidence in
         `recomp/private/smm2/evidence/e2e5_sx/`, private); pause, Save & Quit and Continue through the run side
-      - ⬜ `HUNDRED_NEXT` from the run side (until then SMM1's map and card show only at the run's start),
-        per-frame sound triggers (SLink database not decoded: sounds are placed by name [inf]), the
+      - ✅ Challenge Modes: with the mod's modes on, the select's header reads "ZL < 100 Mario Challenge
+        > ZR" and ZL / ZR or a tap on it switch to SMM2's Endless (`hundred_mode_switch`); the run side
+        asks `hundred_flow_ready_to_start` before starting a course (true once the card is up); touches
+        don't reach the game under a full host screen
+      - ⬜ per-frame sound triggers (SLink database not decoded: sounds are placed by name [inf]), the
         NSMBU ending's perspective camera; 🔄 Cemu side-by-sides (Cemu runs the owner's SMM1 here, frames
         captured; reaching the ending scene in progress)
   - 🔄 **Settings, one toggle per SMM1 feature** (overlay menu's Mods tab, kept in `smm2mods.ini`):
-    ✅ "100 Mario Challenge (SMM1)" (on screen in the Mods tab: `evidence/mods/mods_tab.png`); ⬜ Mystery Mushroom costumes (model, sounds, physics
-    swaps), mid-air shell jumps, overlapping (overlay) pipes, and more from research/specs/smm1-extras*
+    ✅ "100 Mario Challenge (SMM1)" (on screen in the Mods tab: `evidence/mods/mods_tab.png`); 🔄 "Mystery Mushroom costumes" (`mods/costume.c`: models generated from both dumps, worn as small
+    Mario in SMB1 courses; in game: the costume on from the start (Peach, Samus), the pickup (Super Mushroom
+    → Block costume, its power-up sound), the goal and death sounds, the reward window after the ending;
+    ⬜ a hit taking it off (hook in place, not yet seen in a run), jump / taunt sounds, more than one costume per
+    course), mid-air shell jumps, overlapping (overlay) pipes, and more from research/specs/smm1-extras*
   - 🔄 **Our open-source server everywhere the game would reach Nintendo** (`recomp/docs/mods.md`,
     `games/smm2/mods/world.c`): ✅ Course World's course lists (Hot, Popular, New, detailed search, a
     maker's courses) from `/api/courses`, the course page (likes, plays, clear rate, world record, maker

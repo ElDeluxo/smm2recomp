@@ -96,6 +96,10 @@ int main(int argc, char **argv) {
     }
     if (!smm1_data_open()) return 1;
     if (!strcmp(argv[1], "--flow")) return flow_test_main(argc - 1, argv + 1);
+    if (!strcmp(argv[1], "--costumes")) {  // generate the costume models (mods/smm1/costume_gen.c)
+        extern bool costume_generate(void);
+        return costume_generate() ? 0 : 1;
+    }
     if (!strcmp(argv[1], "--sound") && argc > 3) {  // --sound <stream name> <out.wav>: decode one stream
         size_t n;
         uint8_t *d = smm1_sound_file(argv[2], &n);

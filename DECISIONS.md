@@ -1396,7 +1396,7 @@ before.
 **What:** the host-drawn SMM1 screens (`recomp/games/smm2/mods/smm1/`): difficulty select, world map
 and walk, start card, pause / clear / skip / miss overlays, game over, and the ending (rescue scene,
 Thank-you line, staff credits), from the player's SMM1 dump (base v16 + update v208), generated at
-first use into `<data>/mods-generated/smm1-ui-v5/` (layouts, fonts, texts, the ending's models,
+first use into `<data>/mods-generated/smm1-ui-v6/` (layouts, fonts, texts, the ending's models,
 the screens' music and sound banks). Nothing of SMM1 is in the repository.
 
 **Port, not link (coordinator approved):** "reused rather than rewritten" above meant SMCraft's Rust
@@ -1536,6 +1536,35 @@ SMM2's own Mii renderer could draw). **Decided (owner, option 2):** the credits 
 yellow course-name banner with the maker underneath, like the course card, and no Mii slot. The
 SMM1 rescue scene and Peach's thank-you stay SMM1; the roll ends on THE END / TO BE CONTINUED as
 before.
+
+## 2026-10-19 — Mystery Mushroom costumes: worn as small Mario, the model through a spare slot
+
+**What:** mod 2 (`recomp/games/smm2/mods/costume.c`, `mods/smm1/costume_gen.c`), per
+research/specs/recomp-mods.md §3. At the first start with the switch on, the costume models are built
+from the player's own dumps: SMM2's small SMB1 Mario model with each SMM1 costume's 24x24 frames
+(`Model/M1_Player_Chara_<res>.szs` of the SMM1 dump), written into a rebuilt `Pack/M1_Model.pack`
+(a zstd frame of stored blocks) by the mods' shared RomFS overlay (generator "costumes",
+`<data>/mods-generated/romfs/`), which lays it over the game's.
+Nothing of either game is in the repository.
+
+**How it plays:**
+- The player in costume stays form 0 (small Mario) for the game's logic, so size, physics, hit boxes
+  and block rules are SMM2's own small Mario (SMM1's costume Mario is small too).
+- The look: the model builder loads the course's costume into form slot 12 (Balloon, unused in SMB1,
+  same size class as small Mario) by pointing that slot's model name at `Player_Chara_<res>` for the
+  call; the visual slot setter shows slot 12 where the game asks for slot 0 while the costume is on.
+  One costume per course (a model loads with the player; the pickup can't load one mid-course) [inf].
+- The pickup: SMM1's Mystery Mushroom is the SMB1 skin of the style power-up, so the Big Mushroom from
+  small Mario puts the costume on instead of growing (`costume_item=super`: the Super Mushroom, as
+  SMCraft did). Another power-up replaces it.
+- A hit takes the costume off through the Super → small power-down (hook point 0x15a50a4 reads the
+  form as 1), as a costume absorbs one hit in SMM1.
+- Sound: the costume's power-up, goal and death sounds from SMM1's `Sound/CharaMario` banks on the
+  host mixer; SMM2's goal and death fanfares give way to them.
+- Reward: after a won 100 Mario run the ending shows SMM1's costume window (`Cmn_CMListWindow_01`)
+  with one random costume not owned yet, from SMM1's pools by difficulty (smm1-100mario-code.md §7);
+  owned costumes are kept in `costumes-owned.txt` (category 0 always owned).
+- The switch: "Mystery Mushroom costumes" in the Mods tab (`costumes=1` in `smm2mods.ini`).
 
 ## 2026-10-19 — 100 Mario gets its own Course World button; Endless stays exactly SMM2's
 

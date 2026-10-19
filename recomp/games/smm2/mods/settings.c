@@ -130,6 +130,9 @@ bool net_pretend_online(void) { return mod_hundred() || (getenv("RECOMP_PRETEND_
 // overlapping pipes will follow.
 typedef struct { const char *label, *desc; bool *value; bool def; } GameModToggle;
 static bool t_hundred = true, t_tgrcode, t_local_nex;
+static bool t_costumes;  // (mods/costume.c)
+bool costumes_setting(void);
+void costumes_set_setting(bool on);
 
 void mod_ini_set(const char *key, const char *val) {  // replace or add one key=value line (also backend.c)
     const char *path = getenv("RECOMP_MOD_INI") ? getenv("RECOMP_MOD_INI") : "smm2mods.ini";
@@ -176,6 +179,11 @@ int game_mod_toggles(const GameModToggle **out) {
          "the mod's Course World answers are off. Off: our server (the mod). Nextendo Network: greyed out, awaiting "
          "registration. Takes effect at the next start.",
          &t_local_nex, false},
+        // (costumes: mods/costume.c)
+        {"Mystery Mushroom costumes",
+         "SMM1's costumes in Super Mario Bros. style courses: the Big Mushroom becomes the Mystery Mushroom, and a "
+         "won 100 Mario Challenge gives a new costume. Models come from your SMM1 dump. Takes effect at the next start.",
+         &t_costumes, false},
     };
     // (the mod is off and the backend is ours: nothing to switch)
     mod_settings_load();
@@ -183,6 +191,7 @@ int game_mod_toggles(const GameModToggle **out) {
     t_local_nex = net_backend_setting() == NET_BACKEND_LOCAL_NEX;
     t_hundred = !strcmp(g_mod.ruleset, "hundred");
     t_tgrcode = !strcmp(g_mod.courses, "tgrcode");
+    t_costumes = costumes_setting();
     *out = toggles;
     return (int)(sizeof toggles / sizeof *toggles);
 }
@@ -198,6 +207,7 @@ void game_mod_toggles_changed(void) {
     }
     if (t_local_nex != (net_backend_setting() == NET_BACKEND_LOCAL_NEX))
         net_backend_select(t_local_nex ? NET_BACKEND_LOCAL_NEX : NET_BACKEND_OURS);  // (saved; the next start)
+    costumes_set_setting(t_costumes);
 }
 
 // Overrides are registered before the game's first instruction runs (dispatch reads them on every first call). Each

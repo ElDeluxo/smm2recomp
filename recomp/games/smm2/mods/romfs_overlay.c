@@ -433,7 +433,8 @@ static bool same_identity(const char *path, const char *id) {
 static void generate_all(void) {
     if (!ngens) return;
     char id[1024];
-    snprintf(id, sizeof id, "hundred offered:%d\n", mod_hundred_offered());  // (Challenge Modes: only then)
+    extern bool costumes_on(void);  // (mods/costume.c: the costume models only with the mod on)
+    snprintf(id, sizeof id, "hundred offered:%d\ncostumes on:%d\n", mod_hundred_offered(), costumes_on());  // (Challenge Modes: only then)
     for (int i = 0; i < ngens; i++) {
         size_t l = strlen(id);
         snprintf(id + l, sizeof id - l, "%s:%d\n", gens[i].name, gens[i].version);
@@ -465,7 +466,8 @@ static void generate_all(void) {
 // The game's RomFS overlay (runtime/game_hooks.c, runtime/mods.c, runtime/services/fs.c).
 const char *game_romfs_overlay(void) {
     static pthread_once_t once = PTHREAD_ONCE_INIT;
-    if (!mod_hundred()) return NULL;
+    extern bool costumes_on(void);
+    if (!mod_hundred() && !costumes_on()) return NULL;
     pthread_once(&once, generate_all);
     return gen_dir[0] && !generating ? gen_dir : NULL;
 }
