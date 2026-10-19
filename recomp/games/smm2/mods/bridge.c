@@ -14,10 +14,9 @@
 //   - what happens in the course comes back through the requests the game makes (course start, miss, clear, skip,
 //     suspend) and goes to the flow as hundred_flow_course_started() / hundred_course_result().
 //
-// RECOMP_MOD_AUTOPLAY=1 (=jump) also plays the courses (right + run [+ jump], skip after RECOMP_MOD_AUTOPLAY_SKIP s)
-// for unattended test runs; RECOMP_MOD_FLOW_TEST=<difficulty> makes the stand-in flow below start a run and play it
-// to its end (the evidence runs). Both need LARECOMP_INPUT set (the test-input hook), which also scripts the way to
-// the Endless menu.
+// RECOMP_MOD_AUTOPLAY=1 (=jump) stands in for the player in unattended test runs: it plays the courses (right + run
+// [+ jump], skip after RECOMP_MOD_AUTOPLAY_SKIP s) and presses the result screen's Next; RECOMP_MOD_FLOW_TEST=
+// <difficulty> makes the stand-in flow below start a run and play it to its end (the evidence runs).
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -62,11 +61,13 @@ static void result(int outcome);
 static volatile bool started_pending;    // a course start / retry not yet seen playing
 static volatile uint64_t started_since;
 static void course_started(const char *why);
+extern uint64_t input_player_buttons(void);  // runtime/hle/input.c: keyboard, controllers, on-screen pad
 
 // (flow test) RECOMP_MOD_FLOW_TEST_RESULT_KEYS=<letters>: on the result screen, before the Next presses, one key
 // every 50 frames from frame RECOMP_MOD_FLOW_TEST_RESULT_AT (600) after the clear, with a shot after each:
 // U D L R A B X Y, l r (L / R), z Z (ZL / ZR); h j k l the left stick (left, down, up, right); t a tap at
-// RECOMP_MOD_FLOW_TEST_TAP (x/y in game pixels, Quit's 603/530 by default). True while the keys go on.
+// RECOMP_MOD_FLOW_TEST_TAP (x/y in game pixels, Quit's 603/530 by default); < > ^ v K real arrow / K key events.
+// True while the keys go on.
 static bool result_keys(uint64_t t, uint64_t now, uint64_t *b, uint64_t *nk, uint64_t *k0) {
     const char *keys = getenv("RECOMP_MOD_FLOW_TEST_RESULT_KEYS");
     const char *at = getenv("RECOMP_MOD_FLOW_TEST_RESULT_AT");
@@ -96,6 +97,14 @@ static bool result_keys(uint64_t t, uint64_t now, uint64_t *b, uint64_t *nk, uin
     if (tp) sscanf(tp, "%d/%d", &tx, &ty);
     if (key == 't' && in < 8 && !tap_down) tap_down = true, touch_test(tx, ty, true);
     else if (tap_down && in >= 8) tap_down = false, touch_test(tx, ty, false);
+    // < > ^ v and K: real key events (the player's arrows and A key, through the host input path)
+    extern void input_test_key(const char *name, bool down);  // runtime/hle/input.c
+    static const char real[] = "<>^vK";
+    static const char *const real_names[] = {"Left", "Right", "Up", "Down", "K"};
+    static const char *key_down;
+    const char *rp = strchr(real, key);
+    if (rp && in < 8 && !key_down) key_down = real_names[rp - real], input_test_key(key_down, true);
+    else if (key_down && in >= 8) input_test_key(key_down, false), key_down = NULL;
     static uint64_t shot_for;  // (one shot and one log line per key)
     if (shot_for != drv_since + i + 1) {
         shot_for = drv_since + i + 1, mod_shot("key", 40);
@@ -168,9 +177,9 @@ static void *driver(void *arg) {
             else if (t >= 130 && t < 138) b = BTN_A;
             else if (t > 160) set_drv(DRV_PLAY);
             break;
-        case DRV_PLAY:  // the map's Play, every 2 s until the course starts (presses during the map's walk / telop
-                        // are ignored by the map)
-            if (t > 180 && t % 120 < 8) b = BTN_A;
+        case DRV_PLAY:  // the map's Play, every second until the course starts (presses during the map's walk /
+                        // telop are ignored by the map)
+            if (t > 30 && t % 60 < 8) b = BTN_A;
             break;
         case DRV_COURSE:
             if (!ap) break;
@@ -196,10 +205,14 @@ static void *driver(void *arg) {
             uint64_t nk = 0, k0 = 0;
             if (result_keys(t, now, &b, &nk, &k0)) break;
             if (nk) t = t - (k0 + 50 * nk + 60) + 480;
-            if (t >= 480 && t < 488) b = BTN_RIGHT;
-            else if (t >= 540 && t < 548) b = BTN_DOWN;
-            else if (t >= 600 && t < 608) b = BTN_A;
-            else if (t > 700) { set_drv(play_queued ? DRV_PLAY : DRV_IDLE); play_queued = false; }
+            // A (Next has the focus [obs]) every 2 s from 8 s on until the game leaves the result screen (cNextScene),
+            // up to a minute (the screen may come late when the machine is busy)
+            if (awaiting_next && t >= 480 && t < 4080) {
+                if ((t - 480) % 120 < 8) b = BTN_A;
+            } else if (t >= 480) {
+                set_drv(play_queued ? DRV_PLAY : DRV_IDLE);
+                play_queued = false;
+            }
             break;
         }
         case DRV_RESULT_QUIT: {  // (flow test) the result screen's Quit, tapped: the D-pad doesn't move the focus off
@@ -211,10 +224,14 @@ static void *driver(void *arg) {
             else if (t > 1300) set_drv(DRV_IDLE);
             break;
         }
-        case DRV_BACK:  // B on the Endless menu: back to Course World
-            if (t < 8) b = BTN_B;
-            else set_drv(DRV_IDLE);
+        case DRV_BACK: {  // B on the Endless menu: back to Course World, once the player's own B is released;
+                          // again every 1.5 s while the menu is still there (at most 4 times)
+            bool on_menu = now - menu_seen <= 2;
+            if ((!on_menu && t > 30) || t >= 4 * 90) set_drv(DRV_IDLE);
+            else if (input_player_buttons() & BTN_B) drv_since = now;  // (wait for the release)
+            else if (t % 90 >= 10 && t % 90 < 18 && on_menu) b = BTN_B;
             break;
+        }
         case DRV_SAVE_QUIT:  // the map's Quit (+), then the window's Yes (Right + A until the suspend is posted)
             if (t < 8) b = BTN_PLUS;
             else if (t >= 60 && t < 660 && !suspend_posted) {
@@ -224,7 +241,7 @@ static void *driver(void *arg) {
             break;
         default: break;
         }
-        if (started_pending && now - started_since > 600) course_started("fallback");
+        if (started_pending && now - started_since > 600 && hundred_flow_ready_to_start()) course_started("fallback");
         if (awaiting_next && next_menu_since && now - next_menu_since > 300) {
             // back on the menu after a clear and no map walk: Quit on the result screen, the run is kept
             awaiting_next = false, next_menu_since = 0;
@@ -255,14 +272,40 @@ static void driver_start(void) {
 #define MENU_DISP_EXEC MAIN_ADDR(0x1a24bf0)
 #define MENU_TAB0 MAIN_ADDR(0x1a22260)  // the four tab handlers, 0xc0 apart (Easy .. Super Expert)
 
+// Challenge Modes on SMM2's side: on SMM2's Endless menu, ZL / ZR or a tap on its header ("ZL < Endless Challenge >
+// ZR", relabel.c; the header's band at the top left) switch to the 100 Mario Challenge.
+extern bool touch_first(int32_t *x, int32_t *y);     // runtime/hle/touch.c
+static bool mode_switch_pressed(void) {
+    static uint64_t prev_b;
+    static bool prev_touch;
+    uint64_t b = input_player_buttons() & (1u << 8 | 1u << 9);  // ZL, ZR
+    int32_t x = 0, y = 0;
+    bool touch = touch_first(&x, &y) && x >= 90 && x < 760 && y < 90;
+    bool hit = (b & ~prev_b) || (touch && !prev_touch);
+    prev_b = b, prev_touch = touch;
+    return hit;
+}
+
 static void menu_disp(Cpu *c) {
-    // (SMM2's own Endless Challenge: 100 Mario not offered, or the player chose SMM2's from the 100 Mario select)
+    uint64_t now0 = renderer_present_count();
+    // (re)entering the menu with no run going: Challenge Modes opens on the mode used last
+    if (mod_hundred_offered() && test_difficulty() < 0 && run_d < 0 && now0 - menu_seen > 30 && g_mod.mode_endless &&
+        !mod_smm2_session() && !hundred_flow_active() && !leaving_won && !suspending)
+        mod_set_smm2_session(true);
+    // (SMM2's own Endless Challenge: 100 Mario not offered, or Challenge Modes on Endless)
     if ((!mod_hundred_offered() || mod_smm2_session()) && test_difficulty() < 0) {
-        menu_seen = renderer_present_count();
+        bool settled = now0 - menu_seen <= 30;
+        menu_seen = now0;
         guest_call_orig(c, MENU_DISP_EXEC);
+        if (mod_hundred_offered() && mode_switch_pressed() && settled) {
+            LOG("[mod] bridge: Challenge Modes: to the 100 Mario Challenge\n");
+            mod_remember_mode(false);
+            mod_set_smm2_session(false);
+            hundred_flow_open();
+        }
         return;
     }
-    uint64_t page = c->x[0], now = renderer_present_count();
+    uint64_t page = c->x[0], now = now0;
     bool back = now - menu_seen > 30;  // (first Disp frame after a while: the menu is (back) on screen)
     menu_page = page, menu_seen = now;
     if (pending_tab >= 0) {  // choose the difficulty the way the tab buttons do
@@ -406,7 +449,15 @@ static void course_started(const char *why) {
 }
 
 static void play_exec(Cpu *c) {
-    if (started_pending && g32(c->x[0] + 0x244) == 0) course_started("play state");
+    // A course loaded underneath the flow's map waits at its first play frame until the flow's card is up
+    // (hundred_flow_ready_to_start), so it doesn't run hidden.
+    static bool holding;
+    if (started_pending && run_d >= 0 && mod_hundred_rules() && test_difficulty() < 0 && !hundred_flow_ready_to_start()) {
+        if (!holding) holding = true, LOG("[mod] bridge: the course waits for the flow's card\n");
+        return;
+    }
+    if (holding) holding = false, LOG("[mod] bridge: the course starts\n");
+    if (started_pending) course_started("play state");
     guest_call_orig(c, PLAY_EXEC);
 }
 
@@ -459,7 +510,8 @@ void bridge_event(const char *what, uint32_t d) {
         // as the map's Mario walk (HUNDRED_NEXT); Quit as the menu without it (HUNDRED_GIVEUP_SAVE).
         run_won = !strcmp(what, "clear_last");
         awaiting_next = true, next_menu_since = 0;
-        set_drv(test_difficulty() >= 0 ? DRV_AFTER_CLEAR : DRV_IDLE);  // (the flow test presses Next itself)
+        // (the flow test, or the autoplay standing in for the player, presses Next itself)
+        set_drv(test_difficulty() >= 0 || getenv("RECOMP_MOD_AUTOPLAY") ? DRV_AFTER_CLEAR : DRV_IDLE);
         result(HUNDRED_CLEAR);
     } else if (!strcmp(what, "skip")) {
         set_drv(DRV_IDLE);  // (SMM2's Endless starts the next course at once)
@@ -548,10 +600,9 @@ void hundred_run_finish(void) {
     endless_forget_run(run_d);
     run_d = -1;
     awaiting_next = false;
-    if (run_won) {  // (won: SMM2 is on its map after Next: the map's Quit, the suspend answered locally)
+    if (run_won) {  // (won: the last result screen's Next became its Quit, SMM2 is going back to its menu)
         run_won = false;
-        leaving_won = true, suspend_posted = false;
-        set_drv(DRV_SAVE_QUIT);
+        set_drv(DRV_IDLE);
     } else if (drv != DRV_RESULT_QUIT && drv != DRV_SAVE_QUIT) {
         set_drv(DRV_IDLE);
     }
@@ -559,10 +610,22 @@ void hundred_run_finish(void) {
 
 // B on SMM1's difficulty select: SMM2's own Endless Challenge, whose menu is underneath (both challenges in one
 // build). Leaving that menu (B there) ends it: the next visit opens 100 Mario again.
-void hundred_flow_exit(void) {
+void hundred_flow_exit(void) {  // (B on SMM2's Endless menu underneath: Course World)
+    LOG("[mod] bridge: back to Course World\n");
+    pthread_once(&once, driver_start);
+    set_drv(DRV_BACK);
+}
+
+bool hundred_modes_available(void) { return mod_hundred_offered(); }
+void hundred_mode_switch(void) {  // ZL / ZR / the tap on the flow's select: SMM2's own Endless Challenge
+    LOG("[mod] bridge: Challenge Modes: to SMM2's Endless Challenge\n");
     set_drv(DRV_IDLE);
+    mod_remember_mode(true);
     mod_set_smm2_session(true);
 }
+
+// (the flow's: whether a course may start playing; this stand-in, for builds without it, says yes)
+__attribute__((weak)) bool hundred_flow_ready_to_start(void) { return true; }
 
 // The Endless menu's Disappear state (index 5 of its machine; exec main+0x1a24d30): the menu closes towards Course
 // World (a course start goes through CourseIn / InFade instead).
@@ -573,6 +636,19 @@ void hundred_flow_exit(void) {
 // (0x4d, enter main+0x1bf6630) and back to the menu, 9 comment, 10 tags [inf, from the code].
 #define END_NEXT_SCENE_ENTER MAIN_ADDR(0x1bf6430)
 #define END_ENDLESS_STATUS_ENTER MAIN_ADDR(0x1bf6630)
+#define END_CHECK_CAN_EXEC MAIN_ADDR(0x1bef440)
+// After the run's last clear, Next is turned into Quit (SMM2's Endless would go on to its map and another course):
+// SMM2 goes back to its Endless menu underneath while the flow plays the ending, which Next starts (HUNDRED_NEXT).
+static void end_check_can(Cpu *c) {
+    uint64_t screen = g64(c->x[0] + 0x288);
+    if (awaiting_next && run_won && run_d >= 0 && screen && g8(screen + 0x2a4) && g32(screen + 0x2a0) == 5) {
+        s32(screen + 0x2a0, 8);
+        awaiting_next = false, next_menu_since = 0, leaving_won = true;
+        LOG("[mod] bridge: Next on the result screen (the run is won): SMM2 goes back to its menu\n");
+        result(HUNDRED_NEXT);
+    }
+    guest_call_orig(c, END_CHECK_CAN_EXEC);
+}
 static void end_next_scene(Cpu *c) {
     if (awaiting_next && run_d >= 0) {
         awaiting_next = false, next_menu_since = 0;
@@ -589,7 +665,8 @@ static void end_endless_status(Cpu *c) {
     guest_call_orig(c, END_ENDLESS_STATUS_ENTER);
 }
 static void menu_disappear(Cpu *c) {
-    if (mod_smm2_session() && g32(c->x[0] + 0x244) == 0) mod_set_smm2_session(false);
+    // (towards Course World: the next visit opens on the mode used last)
+    if (g32(c->x[0] + 0x244) == 0) mod_set_smm2_session(g_mod.mode_endless);
     guest_call_orig(c, MENU_DISAPPEAR_EXEC);
 }
 
@@ -693,6 +770,7 @@ void bridge_register(void) {
     hle_override(MENU_DISAPPEAR_EXEC, menu_disappear, "mod: Endless menu Disappear (bridge)");
     hle_override(END_NEXT_SCENE_ENTER, end_next_scene, "mod: course end cNextScene (bridge)");
     hle_override(END_ENDLESS_STATUS_ENTER, end_endless_status, "mod: course end cEndlessMode_GetStatus (bridge)");
+    hle_override(END_CHECK_CAN_EXEC, end_check_can, "mod: course end cPostRatingCheckCan (bridge)");
     if (getenv("RECOMP_MOD_TABPROBE")) {
         hle_override(MENU_TAB0, tab_probe, "probe");
         hle_override(MENU_TAB0 + 0xc0, tab_probe, "probe");

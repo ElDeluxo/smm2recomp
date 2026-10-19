@@ -47,6 +47,13 @@ HOOK_POINTS = {
     0x16ce7f4: (0xB9003A04, 'pending 1-Ups: store (coins)'),
     0x16ce9e0: (0xB9403A04, 'pending 1-Ups: load (items)'),
     0x16cea48: (0xB9003A04, 'pending 1-Ups: store (items)'),
+    # Costumes (costume.c): the damage function's form load (ldr w8, [x19, #0x4a8]); in costume form 0 reads as 1,
+    # so a hit takes the costume off with the Super -> small power-down instead of killing small Mario
+    0x15a50a4: (0xB944AA68, 'costume: damage form load'),
+    # Costumes: the form change request (0x71015a94a0, player, int *form; called directly by the item code) after
+    # its first instruction (sub sp, sp, #0x80): from small Mario the Mystery item's form becomes 0 and the costume
+    # goes on
+    0x15a94a0: (0xD10203FF, 'costume: form change request'),
 }
 
 

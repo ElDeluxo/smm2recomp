@@ -187,7 +187,7 @@ void smm1_game_sound(bool on) { g_game_target = on ? 1 : 0; }
 
 // the sound effects: the screens' sound banks (Pack/Sound.pack -> Sound/Resource/<bank>.bars: a SARC of
 // <name>.bfwav + <name>.bameta), loaded on first use (smm1_se_bank)
-static struct { char name[48]; SPcm *p; } g_sfx[512];
+static struct { char name[80]; SPcm *p; } g_sfx[512];
 static int g_nsfx;
 static char g_banks[32][64];
 static int g_nbanks;
@@ -204,7 +204,9 @@ void smm1_se_bank(const char *bank) {
         if (!dot) continue;
         SPcm *p = smm1_bfwav_decode(s.data + s.e[i].start, s.e[i].end - s.e[i].start);
         if (!p) continue;
-        snprintf(g_sfx[g_nsfx].name, sizeof g_sfx[0].name, "%.*s", (int)(dot - nm), nm);
+        // (a costume's bank: its waves are named "<bank>/<wave>", every costume has a "jump", a "goal"...)
+        if (!strncmp(bank, "CharaMario_", 11)) snprintf(g_sfx[g_nsfx].name, sizeof g_sfx[0].name, "%s/%.*s", bank, (int)(dot - nm), nm);
+        else snprintf(g_sfx[g_nsfx].name, sizeof g_sfx[0].name, "%.*s", (int)(dot - nm), nm);
         g_sfx[g_nsfx++].p = p;
     }
     lyt_sarc_close(&s);

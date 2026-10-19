@@ -76,6 +76,16 @@ static void touch_event(SDL_FingerID id, float fx, float fy, int kind) {  // kin
 
 // (tests: LARECOMP_HOST_INPUT "frame:tap:x/y:frames", runtime/hle/input.c) a touch at game pixels
 #define TEST_FINGER ((SDL_FingerID)0x54455354ull)
+// The first finger down now (game pixels), for a mod's own touch areas over the game's screens; false: none.
+bool touch_first(int32_t *x, int32_t *y) {
+    bool any = false;
+    pthread_mutex_lock(&lock);
+    for (int i = 0; i < MAX_TOUCH && !any; i++)
+        if (touches[i].id && !touches[i].ended) *x = touches[i].x, *y = touches[i].y, any = true;
+    pthread_mutex_unlock(&lock);
+    return any;
+}
+
 void touch_test(int32_t x, int32_t y, bool down) {
     pthread_mutex_lock(&lock);
     Touch *t = NULL;
@@ -126,12 +136,15 @@ static void fill_touch(Cpu *c, int n) {
     static int first;
     if (!first++) LOG("[touch] the game reads the touch screen (%d touches per sample)\n", n);
     memset(out, 0, 16 + 0x28 * (size_t)n);
+    extern bool game_overlay_captured(void);
+    bool hidden = game_overlay_captured();  // a host screen covering the game takes the touches (they free as usual)
     pthread_mutex_lock(&lock);
     *(int64_t *)out = ++sampling;
     int k = 0;
     for (int i = 0; i < MAX_TOUCH && k < n; i++) {
         Touch *t = &touches[i];
         if (!t->id) continue;
+        if (hidden) { t->started = 0; if (t->ended) t->id = 0; continue; }
         uint8_t *s = out + 16 + 0x28 * k++;
         *(uint32_t *)(s + 8) = (t->started ? 1u : 0u) | (t->ended ? 2u : 0u);
         *(uint32_t *)(s + 12) = t->finger;
