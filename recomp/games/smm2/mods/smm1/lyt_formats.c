@@ -318,6 +318,88 @@ uint8_t *lyt_flim_decode(const uint8_t *d, size_t n, int *w, int *h) {
     return surface_rgba(d, size, (uint32_t)*w, (uint32_t)*h, r8(&r, 0x22), tile & 0x1F, (tile >> 5) << 8);
 }
 
+// ================================================================ BNTX (Switch texture archive, a layout's timg/__Combined.bntx)
+// Each BRTI: format (type << 8 | variant: 1 unorm, 6 sRGB), size, block-linear block height, channel selectors and its
+// level-0 data, deswizzled with the runtime's Tegra code and decoded with its BC / ASTC decoders.
+#include "tegra.h"
+#include "astc.h"
+static uint8_t *bntx_decode(const uint8_t *src, size_t n, uint32_t fmt, uint32_t w, uint32_t h, uint32_t bhl,
+                            const uint8_t sel[4], bool *srgb) {
+    uint32_t type = fmt >> 8, var = fmt & 0xFF;
+    *srgb = var == 6;
+    uint32_t bw = 1, bh = 1, bpb = 0;
+    int bc = 0;  // bcsoft kind
+    static const uint8_t astc_dims[][2] = {{4, 4}, {5, 4}, {5, 5}, {6, 5}, {6, 6}, {8, 5}, {8, 6}, {8, 8}, {10, 5},
+                                           {10, 6}, {10, 8}, {10, 10}, {12, 10}, {12, 12}};
+    switch (type) {
+    case 0x02: bpb = 1; break;   // R8
+    case 0x09: bpb = 2; break;   // R8G8
+    case 0x0B: bpb = 4; break;   // R8G8B8A8
+    case 0x1A: bpb = 8, bw = bh = 4, bc = bcsoft_kind(0x41); break;  // BC1
+    case 0x1B: bpb = 16, bw = bh = 4, bc = bcsoft_kind(0x43); break; // BC2
+    case 0x1C: bpb = 16, bw = bh = 4, bc = bcsoft_kind(0x44); break; // BC3
+    case 0x1D: bpb = 8, bw = bh = 4, bc = bcsoft_kind(0x49); break;  // BC4
+    case 0x1E: bpb = 16, bw = bh = 4, bc = bcsoft_kind(0x4B); break; // BC5
+    case 0x20: bpb = 16, bw = bh = 4, bc = bcsoft_kind(0x4D); break; // BC7
+    default:
+        if (type >= 0x2D && type < 0x2D + 14) bpb = 16, bw = astc_dims[type - 0x2D][0], bh = astc_dims[type - 0x2D][1];
+        else return NULL;
+    }
+    uint32_t wb = (w + bw - 1) / bw, hb = (h + bh - 1) / bh;
+    size_t lin_n = (size_t)wb * hb * bpb;
+    uint8_t *lin = malloc(lin_n);
+    tegra_deswizzle(src, lin, wb, hb, 1, bpb, bhl, 0);
+    (void)n;
+    uint8_t *raw = malloc((size_t)w * h * 4);
+    if (bc) bcsoft_decode(bc, lin, w, h, 1, raw);
+    else if (type >= 0x2D) astc_decode_ldr(lin, w, h, bw, bh, *srgb, raw);
+    else
+        for (size_t i = 0; i < (size_t)w * h; i++) {
+            const uint8_t *p = lin + i * bpb;
+            raw[i * 4 + 0] = p[0], raw[i * 4 + 1] = bpb > 1 ? p[1] : 0, raw[i * 4 + 2] = bpb > 2 ? p[2] : 0;
+            raw[i * 4 + 3] = bpb > 3 ? p[3] : 255;
+        }
+    free(lin);
+    for (size_t i = 0; i < (size_t)w * h; i++) {  // channel selectors: 0 zero, 1 one, 2-5 R, G, B, A
+        uint8_t c[4] = {raw[i * 4], raw[i * 4 + 1], raw[i * 4 + 2], raw[i * 4 + 3]};
+        for (int k = 0; k < 4; k++) raw[i * 4 + k] = sel[k] == 0 ? 0 : sel[k] == 1 ? 255 : sel[k] <= 5 ? c[sel[k] - 2] : c[k];
+    }
+    return raw;
+}
+// the textures of a BNTX: names into names[], ids into ids[] (malloc'd); count
+static int bntx_load(const uint8_t *d, size_t n, char (**names)[64], int **ids) {
+    *names = NULL, *ids = NULL;
+    if (n < 0x40 || memcmp(d, "BNTX", 4)) return 0;
+    R r = {d, n, false};
+    size_t nxo = 0x20;
+    if (memcmp(d + nxo, "NX  ", 4)) return 0;
+    uint32_t count = r32(&r, nxo + 4);
+    size_t info = (size_t)r32(&r, nxo + 8);
+    *names = zalloc(64 * (size_t)(count ? count : 1));
+    *ids = zalloc(sizeof(int) * (count ? count : 1));
+    for (uint32_t k = 0; k < count; k++) {
+        size_t b = (size_t)r32(&r, info + 8 * (size_t)k);
+        (*ids)[k] = -1;
+        if (b + 0x80 > n || memcmp(d + b, "BRTI", 4)) continue;
+        size_t nameo = (size_t)r32(&r, b + 0x60);
+        int nl = nameo + 2 < n ? r16(&r, nameo) : 0;
+        snprintf((*names)[k], 64, "%.*s", nl < 63 ? nl : 63, (const char *)d + nameo + 2);
+        uint32_t fmt = r32(&r, b + 0x1C), w = r32(&r, b + 0x24), h = r32(&r, b + 0x28), layout = r32(&r, b + 0x34);
+        uint8_t sel[4] = {d[b + 0x58], d[b + 0x59], d[b + 0x5A], d[b + 0x5B]};
+        size_t ptrs = (size_t)r32(&r, b + 0x70), mip0 = ptrs + 8 <= n ? (size_t)r32(&r, ptrs) : 0;
+        if (!mip0 || mip0 >= n || !w || !h || w > 8192 || h > 8192) continue;
+        bool srgb = false;
+        uint8_t *px = bntx_decode(d + mip0, n - mip0, fmt, w, h, layout & 7, sel, &srgb);
+        if (!px) {
+            fprintf(stderr, "[smm1ui] bntx %s: format %#x not decoded\n", (*names)[k], fmt);
+            continue;
+        }
+        (*ids)[k] = lyt_tex_add((int)w, (int)h, px);
+        if (srgb) lyt_tex_srgb((*ids)[k]);
+    }
+    return (int)count;
+}
+
 // ================================================================ BFFNT (Wii U v3)
 bool lyt_font_has(const LFont *f, uint32_t c) { return c < 0x10000 && f->cmap[c] != 0xFFFF; }
 
@@ -501,23 +583,26 @@ const LMsg *lyt_msbt_get(const LMsbt *t, const char *label) {
 // ================================================================ BFLYT
 // texture-coordinate generator entries are 8 bytes in Wii U v5+ files, 4 in older ones: pick the size that makes
 // the material end where the offset table says (else the 8-byte reading)
-static size_t parse_material_with(const R *r, size_t start, size_t gen, LMat *m);
-static void parse_material(const R *r, size_t start, size_t end, LMat *m) {
-    if (parse_material_with(r, start, 8, m) == end) return;
-    if (parse_material_with(r, start, 4, m) == end) return;
-    parse_material_with(r, start, 8, m);
+static size_t parse_material_with(const R *r, size_t start, size_t gen, bool nx, LMat *m);
+// (Switch layouts, BFLYT 8+: the flags come first, then a word, then the colours; their texture-coordinate generators
+// are 16 bytes)
+static void parse_material(const R *r, size_t start, size_t end, bool nx, LMat *m) {
+    static const size_t gens[4] = {8, 4, 16, 20};
+    for (int i = 0; i < 4; i++)
+        if (parse_material_with(r, start, gens[i], nx, m) == end) return;
+    parse_material_with(r, start, nx ? 16 : 8, nx, m);
 }
-static size_t parse_material_with(const R *r, size_t start, size_t gen, LMat *m) {
+static size_t parse_material_with(const R *r, size_t start, size_t gen, bool nx, LMat *m) {
     {
         memset(m, 0, sizeof *m);
         rstr(r, start, 0x1C, m->name, sizeof m->name);
-        rrgba(r, start + 0x1C, m->black);
-        rrgba(r, start + 0x20, m->white);
-        uint32_t fl = r32(r, start + 0x24);
+        rrgba(r, start + (nx ? 0x24 : 0x1C), m->black);
+        rrgba(r, start + (nx ? 0x28 : 0x20), m->white);
+        uint32_t fl = r32(r, start + (nx ? 0x1C : 0x24));
         int ntex = fl & 3, nmtx = fl >> 2 & 3, ngen = fl >> 4 & 3, ntev = fl >> 6 & 7, nproj = fl >> 15 & 3;
         bool ac = fl >> 9 & 1, bl = fl >> 10 & 1, bll = fl >> 12 & 1, ind = fl >> 14 & 1, sh = fl >> 17 & 1;
         m->texture_only = fl >> 11 & 1;
-        size_t o = start + 0x28;
+        size_t o = start + (nx ? 0x2C : 0x28);
         for (int i = 0; i < ntex; i++, o += 4) {
             uint8_t a = r8(r, o + 2), b = r8(r, o + 3);
             m->tex[i] = (LTexMap){r16(r, o), a & 3, b & 3, a >> 2 & 3, b >> 2 & 3};
@@ -680,6 +765,7 @@ static bool parse_layout(const uint8_t *d, size_t n, LRes *res, Names *names) {
     if (n < 0x14 || memcmp(d, "FLYT", 4)) return false;
     R r = {d, n, d[4] == 0xFE && d[5] == 0xFF};
     size_t o = r16(&r, 6);
+    bool nx = r32(&r, 8) >= 0x08000000;  // (a Switch layout)
     int sections = r16(&r, 0x10), cap = 64, stack[64], sp = 0, last = -1;
     res->pane = zalloc(sizeof(LPane) * (size_t)cap);
     stack[0] = -1;
@@ -700,7 +786,7 @@ static bool parse_layout(const uint8_t *d, size_t n, LRes *res, Names *names) {
             for (int i = 0; i < count; i++) {
                 size_t st = o + r32(&r, body + 4 + (size_t)i * 4);
                 size_t en = i + 1 < count ? o + r32(&r, body + 8 + (size_t)i * 4) : o + size;
-                parse_material(&r, st, en, &res->mat[i]);
+                parse_material(&r, st, en, nx, &res->mat[i]);
             }
         } else if (is_pane(m)) {
             if (res->npane == cap) cap *= 2, res->pane = realloc(res->pane, sizeof(LPane) * (size_t)cap);
@@ -876,6 +962,21 @@ LRes *lyt_load(const char *name) {
         if (!px) fprintf(stderr, "[smm1ui] %s: texture %s not decoded\n", name, s.e[i].name);
         k++;
     }
+    {  // a Switch layout's textures: timg/__Combined.bntx
+        size_t bn = 0;
+        const uint8_t *bt = lyt_sarc_get(&s, "timg/__Combined.bntx", &bn);
+        char (*bnames)[64] = NULL;
+        int *bids = NULL, nb = bt ? bntx_load(bt, bn, &bnames, &bids) : 0;
+        if (nb > 0) {
+            res->timg_name = realloc(res->timg_name, 64 * (size_t)(res->ntimg + nb + 1));
+            res->timg = realloc(res->timg, sizeof(int) * (size_t)(res->ntimg + nb + 1));
+            for (int b = 0; b < nb; b++) {
+                snprintf(res->timg_name[res->ntimg], 64, "%s", bnames[b]);
+                res->timg[res->ntimg++] = bids[b];
+            }
+        }
+        free(bnames), free(bids);
+    }
     res->ntex = names.ntex;
     res->tex = zalloc(sizeof(int) * (size_t)(names.ntex + 1));
     for (int i = 0; i < names.ntex; i++) res->tex[i] = timg_lookup(res, names.tex[i]);
@@ -899,7 +1000,8 @@ LRes *lyt_load(const char *name) {
         LAnim *a = &res->anim[k];
         if (!parse_anim(s.data + s.e[i].start, s.e[i].end - s.e[i].start, a, &tn)) continue;
         if (!a->name[0]) {  // (the tag name from the file name)
-            const char *u = s.e[i].name + 5 + strlen(name);
+            const char *base = strncmp(name, "nx:", 3) ? name : name + 3;
+            const char *u = s.e[i].name + 5 + strlen(base);
             snprintf(a->name, sizeof a->name, "%s", *u == '_' ? u + 1 : u);
             char *dot = strstr(a->name, ".bflan");
             if (dot) *dot = 0;
@@ -931,7 +1033,11 @@ LRes *lyt_load(const char *name) {
     // parts
     res->part = zalloc(sizeof(LRes *) * (size_t)(res->npane + 1));
     for (int i = 0; i < res->npane; i++)
-        if (res->pane[i].kind == LP_PRT) res->part[i] = lyt_load(res->pane[i].prt.layout);
+        if (res->pane[i].kind == LP_PRT) {
+            char pn[80];
+            snprintf(pn, sizeof pn, "%s%s", strncmp(name, "nx:", 3) ? "" : "nx:", res->pane[i].prt.layout);
+            res->part[i] = lyt_load(pn);
+        }
     g_lyts[slot].res = res;
     g_lyts[slot].loading = false;
     return res;

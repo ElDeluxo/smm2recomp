@@ -54,8 +54,8 @@ typedef struct {
     float frame;
 } Bound;
 typedef struct {
-    bool has_t;
-    float t[2];
+    bool has_t, has_s;
+    float t[2], s[2];
     float alpha;  // < 0: none
 } Ovr;
 
@@ -258,6 +258,17 @@ bool lyt_set_pane(LInst *in, const char *path, const float *xy, float alpha) {
     return true;
 }
 
+bool lyt_set_pane_scale(LInst *in, const char *path, const float *s) {
+    const char *name;
+    LInst *p = resolve(in, path, &name);
+    if (!p) return false;
+    int i = lyt_pane_index(p->res, name);
+    if (i < 0) return false;
+    p->ovr[i].has_s = s != NULL;
+    if (s) p->ovr[i].s[0] = s[0], p->ovr[i].s[1] = s[1];
+    return true;
+}
+
 // ---------------------------------------------------------------- evaluation
 static void base_mats(const LRes *r, MS *ms) {
     for (int m = 0; m < r->nmat; m++) {
@@ -341,6 +352,7 @@ static void states(const LInst *in, PS *ps, MS *ms) {
     }
     for (int i = 0; i < r->npane; i++) {
         if (in->ovr[i].has_t) ps[i].t[0] = in->ovr[i].t[0], ps[i].t[1] = in->ovr[i].t[1];
+        if (in->ovr[i].has_s) ps[i].s[0] = in->ovr[i].s[0], ps[i].s[1] = in->ovr[i].s[1];
         if (in->ovr[i].alpha >= 0) ps[i].alpha = in->ovr[i].alpha;
     }
 }
