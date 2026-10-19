@@ -1,9 +1,10 @@
 #!/bin/bash
 # The compiler the start screen builds the game code with on the player's machine (runtime/gamebuild.c): zig (MIT,
 # its clang / lld: Apache-2.0 with LLVM exception), as `zig cc`. Fetches the pinned release for this OS / CPU (or
-# ZIG_TARGET=<arch>-<os>, e.g. x86_64-windows) into build/zig/, checks its hash and keeps only what compiling C for
-# that same machine needs. Shipped as Contents/Resources/zig (macOS), zig/ next to the exe (Windows, Linux).
-# ZIG_OUT=<dir>: put it there instead (packages for another OS: tools/package.sh, without replacing the build's zig).
+# ZIG_TARGET=<arch>-<os>, e.g. x86_64-windows) into build/zig/ and checks its hash. build/zig/ is the build's own
+# compiler and stays whole: it cross-builds the runtime for every target (make TARGET=...).
+# ZIG_OUT=<dir>: a copy to ship instead (tools/package_lib.sh), cut down to what compiling C for that same machine
+# needs. Shipped as Contents/Resources/zig (macOS), zig/ next to the exe (Windows, Linux).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 VER=0.17.0
@@ -33,8 +34,9 @@ if [ "$EXT" = zip ]; then unzip -q "$DL/$NAME.$EXT" -d "$DL"; else tar -xJf "$DL
 mkdir -p "$(dirname "$OUT")"
 mv "$DL/$NAME" "$OUT"
 
-# size: only what compiling C for this same OS needs (the game code is built for the machine it runs on): its libc
-# headers and libc sources; no C++ runtimes (libcxx, libcxxabi) or sanitizers
+# a shipped copy: only what compiling C for this same OS needs (the game code is built for the machine it runs on):
+# its libc headers and libc sources; no C++ runtimes (libcxx, libcxxabi) or sanitizers
+[ -n "${ZIG_OUT:-}" ] || { echo "$OUT: zig $VER for $TARGET, $(du -sh "$OUT" | cut -f1)"; exit 0; }
 L=$OUT/lib
 case "${TARGET#*-}" in
     macos)   inc='darwin'; src='darwin' ;;

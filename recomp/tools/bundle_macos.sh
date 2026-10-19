@@ -130,6 +130,8 @@ python3 ../scripts/check_package.py "$APP"
 mkdir -p dist
 ZIP=dist/SMM2Recomp-macos-arm64.zip
 rm -f "$ZIP"
-ditto -c -k --keepParent "$APP" "$ZIP"
+# no extended attributes: ditto would store them as ._ files, which any unzip but Finder's leaves inside the app,
+# breaking its signature
+ditto -c -k --norsrc --noextattr --noacl --keepParent "$APP" "$ZIP"
 echo "$APP: $(du -sh "$APP" | cut -f1), $(ls "$C/Frameworks" | wc -l | tr -d ' ') dylibs, macOS $MIN+, signed $([ "$IDENTITY" = - ] && echo 'ad hoc' || echo "by $IDENTITY")"
 echo "$ZIP: $(du -h "$ZIP" | cut -f1), $VERSION"

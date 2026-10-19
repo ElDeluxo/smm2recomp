@@ -6,7 +6,7 @@
 #   windows-x86_64: MSYS2 UCRT64 packages, pinned by version and sha256 (repo.msys2.org)
 #   linux-*:        from this machine's Debian / Ubuntu multiarch packages (the release workflow runs in a Debian 13
 #                   container: apt install libsdl3-dev libvulkan-dev libshaderc-dev libvulkan-memory-allocator-dev,
-#                   with :arm64 for linux-aarch64)
+#                   with :arm64 for linux-aarch64, libshaderc1:arm64 in place of libshaderc-dev:arm64)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 TARGET=$1
@@ -49,8 +49,10 @@ linux-x86_64|linux-aarch64)
         cp -R "/usr/include/$h" "$OUT/include/"
     done
     for l in libSDL3.so libvulkan.so libshaderc.so; do
-        [ -e "/usr/lib/$T/$l" ] || { echo "/usr/lib/$T/$l is missing (apt install the -dev packages for ${T%%-*})"; exit 1; }
-        cp -L "/usr/lib/$T/$l" "$OUT/lib/"
+        # libshaderc.so.1 alone will do (libshaderc1:<arch>): libshaderc-dev can't be installed for two architectures
+        s=/usr/lib/$T/$l; [ -e "$s" ] || [ "$l" != libshaderc.so ] || s=$s.1
+        [ -e "$s" ] || { echo "/usr/lib/$T/$l is missing (apt install the -dev packages for ${T%%-*})"; exit 1; }
+        cp -L "$s" "$OUT/lib/$l"
     done
     ;;
 *) echo "fetch_deps.sh: no target $TARGET"; exit 1 ;;

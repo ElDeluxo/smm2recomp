@@ -6,9 +6,12 @@ name: release
 # release; if there is none yet, a draft release is made for the owner to review and publish.
 #   Windows x86-64 (.zip) and Linux x86-64 / arm64 (.tar.gz): cross-built with zig in a Debian 13 container
 #   macOS arm64 (.app in a .zip): built on macOS, signed ad hoc (or with a Developer ID: secrets below)
+# A manual run (workflow_dispatch) builds and checks every package but publishes nothing: the packages stay on the
+# run as artifacts.
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -22,13 +25,15 @@ jobs:
     runs-on: ubuntu-latest
     container: debian:trixie
     steps:
+      # libshaderc-dev can't be installed for both architectures (its spirv-tools isn't multi-arch); arm64 gets only the
+      # library, libshaderc1, and shares the amd64 headers
       - name: Tools and the Linux libraries (both architectures)
         run: |
           dpkg --add-architecture arm64
           apt-get update
-          apt-get install -y --no-install-recommends ca-certificates curl git make zip zstd xz-utils python3 python3-pip \
+          apt-get install -y --no-install-recommends ca-certificates curl git make zip unzip zstd xz-utils python3 python3-pip \
             libsdl3-dev libvulkan-dev libshaderc-dev libvulkan-memory-allocator-dev \
-            libsdl3-dev:arm64 libvulkan-dev:arm64 libshaderc-dev:arm64
+            libsdl3-dev:arm64 libvulkan-dev:arm64 libshaderc1:arm64
       - uses: actions/checkout@v4
       - name: zig and the cross-build dependencies
         working-directory: recomp
@@ -108,6 +113,7 @@ jobs:
       - name: Checksums
         run: cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
       - name: Attach to the release (a draft if there is none yet)
+        if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
