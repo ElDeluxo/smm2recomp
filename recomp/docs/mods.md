@@ -364,6 +364,19 @@ player's SMM1 dump into an SMM2 SMB1-style course. Installed as the title course
 away; the Course Maker is reached with `LARECOMP_HOST_INPUT` (L + R, A, then taps; `frame:drag:x0/y0/x1/y1:frames`
 moves a finger across the touch screen).
 
+**Where this stands (2026-10-19).**
+- Overlapping pipes: done. It covers the Course Maker drag, the course load and play, and the off-case replay.
+- Mid-air shell jumps: the hooks are in, and `RECOMP_SMM1_LOG=1` shows both windows at every shell stomp test. No
+  test course yet shows a mid-air shell jump that works with the setting on and fails with it off. The candidate is
+  a ledge course: Mario drops off a 2-tile start onto a shell sliding back from a wall, and the frame he walks off
+  is swept.
+  - [obs] Dropping at updates 441-447, the shell meets him while he falls at 1.5-2.5 px a frame. SMM2's window
+    there is 8.5-9.5 px against SMM1's 10.
+  - Left: the same sweep with the setting off, to find the frame where the outcome differs.
+  - Left: an off-case replay with shell contacts. The replay so far has pipes but no enemy contact.
+- More SMM1 behaviours from research/specs/smm1-extras* are not started: pipe spawn rates per enemy, spawn caps,
+  Clown Car weights, attack reactions. They are EnemyDB data changes.
+
 **Off-case check.** The same input session on a course with side-by-side pipes, played in the recomp (settings off)
 and in the Ryujinx trace build (`tools/replay_sync.py`'s comparison): 606 of 606 player updates identical, the whole
 12 KB player object and the input block too.
