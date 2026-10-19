@@ -203,6 +203,23 @@ generated C needs no changes: arm64 shares `generated/smm2` with macOS, and x86-
   - Compare raw with raw, or map the raw capture through the colour transform measured from a Metal raw / grab pair
     of the same frame.
 
+**Where this stands (2026-10-19, paused):**
+- Vulkan Mario: both causes fixed (vertex data past the allocation limit; the lavapipe-only draw split). Open: the
+  NaN texels at his eyes (fragment program 0x729accc000, alpha NaN) that bloom into a white blur, on lavapipe.
+  Paused until the owner's Windows test on a real GPU shows whether it happens there. Next step if it does: find
+  the instruction that makes the alpha NaN (an output-side tracer: the NaN checks on registers were folded away by
+  lavapipe's compiler, so trace the outputs instead), and compare with the same values on Metal.
+- Windows package: builds from main with zig. The first-launch build emulated from the package (its own generator,
+  headers and patches, mods' patch points included; 908 files, linked against its import library) produces the game
+  code DLL. Not run on Windows; no zip on the Desktop (the owner paused Windows testing).
+- macOS title frame vs Ryujinx (seed 4, frame 2386; 2.35-2.5 % of pixels > 24 apart): the differences sit on edges
+  everywhere (outlines of the logo, tiles, text), not in flat areas. [obs] Sampling our window grab 0.25-0.5 px
+  higher halves them (2.69 % -> 1.27 % on a bilinear resample); 1 px shifts and blurring don't. So most of what's
+  left is a sub-pixel vertical offset between the two grabs. Not yet known whether it's in the rendering (a half-pixel
+  in the viewport / present) or in the capture (a Retina window grabbed at 1x, its 32 px title bar cropped). Next
+  step: the same test on the raw read-back mapped through the colour transform (`cmtransfer.py`); if the offset
+  stays, check the present pass's texel centres against Ryujinx's. Text and the blink timing are untouched.
+
 ## Open issues
 
 - ~~A title course swapped into another slot crashes the recomp; Ryujinx runs the all-slots mod.~~ Not a recomp bug
