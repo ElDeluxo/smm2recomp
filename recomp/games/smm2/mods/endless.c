@@ -162,6 +162,8 @@ bool mod_maker_id(uint64_t pid, char out[16]) {  // the maker ID behind a player
 const char *mod_own_maker_id(void) { return own_maker_id; }
 
 static bool hundred_rules(void) { return mod_hundred_rules(); }
+// the server keeps a run slot per ruleset: every run request says which (?ruleset=)
+static const char *RULESET(void) { return hundred_rules() ? "hundred" : "smm2"; }
 
 // Name and best per difficulty for the player's own record (online.c GetUsers). Best = the best clears of SMM2's
 // rules, or with SMM1's rules the number of completed 100 Mario runs on that difficulty (the server's hundred_<d>
@@ -247,48 +249,84 @@ static uint32_t clears_now(uint64_t no, uint32_t d) { return g32(record(no, d) +
 
 // ---- GetEndlessModeStatus: the four run records
 
+// The server keeps a run slot per ruleset and difficulty ("runs": SMM2's, "hundred_runs": 100 Mario's); the last
+// status of both, so a Challenge Modes switch shows the other mode's runs at once.
+static struct slot { bool held, complete; uint32_t lives, clears, coins, score, goal; } slots[2][4];
+
+static void read_slot(Json *run, struct slot *s) {
+    bool active = json_bool(json_get(run, "active"), false);
+    s->complete = json_bool(json_get(run, "complete"), false);
+    s->lives = (uint32_t)json_num(json_get(run, "lives"), 0);
+    s->clears = (uint32_t)json_num(json_get(run, "clears"), 0);
+    s->coins = (uint32_t)json_num(json_get(run, "coins"), 0);
+    s->score = (uint32_t)json_num(json_get(run, "score"), 0);
+    s->goal = (uint32_t)json_num(json_get(run, "goal"), 0);
+    s->held = active && s->lives > 0 && !s->complete;
+}
+
+// One run record (NetObj's, or the menu's copy in the UI cache: the same 0x38-byte layout) from the current
+// Challenge Mode's slot for difficulty d (the run state kept here follows it).
+// The run state +4 is 1 for a run that can go on: the menu offers Continue only for state 1 or 2 with lives (+0x30)
+// and a history [obs 0x7101a26850]; 0 resets its map to an empty run. +0x11: the start lives New Game reads (the
+// game has no default).
+static void write_record(uint64_t r, uint32_t d) {
+    pthread_mutex_lock(&state_lock);
+    struct slot s = slots[hundred_rules()][d];
+    runs[d].coins = s.coins, runs[d].score = s.score, runs[d].complete = s.complete, runs[d].goal = s.goal;
+    runs[d].lives = s.lives, runs[d].clears = s.clears, runs[d].active = s.held;
+    pthread_mutex_unlock(&state_lock);
+    bool cont = s.held;
+    uint8_t lv = (uint8_t)(s.lives > 255 ? 255 : s.lives);
+    s8(r + 0x00, 1);
+    s32(r + 0x04, cont ? 1 : 0);
+    s8(r + 0x08, cont ? (uint8_t)(s.coins % 100) : 0);
+    s32(r + 0x0c, cont ? s.score : 0);
+    s8(r + 0x10, cont ? lv : 0);
+    s8(r + 0x11, hundred_rules() ? 100 : 5);
+    s64(r + 0x18, 0);
+    s64(r + 0x20, 0);
+    s8(r + 0x28, cont ? 1 : 0);  // (the play part: a run that can go on has lives; none shows none)
+    s32(r + 0x2c, cont ? s.clears : 0);
+    s8(r + 0x30, cont ? lv : 0);
+}
+
 WRAPPER(get_status, 0x14ec2d0) {
     Json *st = srv_call("GET", "/api/endless", NULL, NULL);
     if (!st) { finish(c, no, false, 2); return; }
-    uint8_t start_lives = hundred_rules() ? 100 : 5;
-    netobj_lock(c);
+    bool both = json_get(st, "hundred_runs") != NULL;  // (an older server: one slot, its run says the ruleset)
+    pthread_mutex_lock(&state_lock);
     for (uint32_t d = 0; d < 4; d++) {
-        uint64_t r = record(no, d);
-        Json *run = json_get(json_get(st, "runs"), DIFF[d]);
-        bool active = json_bool(json_get(run, "active"), false);
-        bool complete = json_bool(json_get(run, "complete"), false);
-        uint32_t lives = (uint32_t)json_num(json_get(run, "lives"), 0);
-        uint32_t clears = (uint32_t)json_num(json_get(run, "clears"), 0);
-        uint32_t coins = (uint32_t)json_num(json_get(run, "coins"), 0);
-        uint32_t score = (uint32_t)json_num(json_get(run, "score"), 0);
-        // Present for every difficulty: New Game reads the start lives from here (the game has no default). The
-        // run state +4 is 1 for a run that can go on: the menu offers Continue only for state 1 or 2 with lives
-        // (+0x30) and a history [obs 0x7101a26850]; 0 resets its map to an empty run.
-        bool cont = active && lives > 0 && !complete;
-        uint8_t lv = (uint8_t)(lives > 255 ? 255 : lives);
-        s8(r + 0x00, 1);
-        s32(r + 0x04, cont ? 1 : 0);
-        s8(r + 0x08, (uint8_t)(coins % 100));
-        s32(r + 0x0c, score);
-        s8(r + 0x10, cont ? lv : 0);
-        s8(r + 0x11, start_lives);
-        s64(r + 0x18, 0);
-        s64(r + 0x20, 0);
-        // The play part: a run that can go on (Continue) has lives; a finished or completed one shows none.
-        s8(r + 0x28, cont ? 1 : 0);
-        s32(r + 0x2c, cont ? clears : 0);
-        s8(r + 0x30, cont ? lv : 0);
-        pthread_mutex_lock(&state_lock);
-        runs[d].coins = coins, runs[d].score = score, runs[d].complete = complete;
-        runs[d].active = cont, runs[d].lives = lives, runs[d].clears = clears;
-        runs[d].goal = (uint32_t)json_num(json_get(run, "goal"), 0);
-        pthread_mutex_unlock(&state_lock);
-        MLOG("status %s: %s lives %u clears %u%s\n", DIFF[d], active ? "run" : "no run", lives, clears,
-             complete ? " (complete)" : "");
+        struct slot s[2] = {{0}};
+        if (both) {
+            read_slot(json_get(json_get(st, "runs"), DIFF[d]), &s[0]);
+            read_slot(json_get(json_get(st, "hundred_runs"), DIFF[d]), &s[1]);
+        } else {
+            Json *run = json_get(json_get(st, "runs"), DIFF[d]);
+            bool h = !strcmp(json_str(json_get(run, "ruleset"), "smm2"), "hundred");
+            read_slot(run, &s[h]);
+        }
+        slots[0][d] = s[0], slots[1][d] = s[1];
+        MLOG("status %s: SMM2 %s lives %u, 100 Mario %s lives %u%s\n", DIFF[d], s[0].held ? "run" : "no run",
+             s[0].lives, s[1].held ? "run" : "no run", s[1].lives, s[1].complete ? " (complete)" : "");
     }
+    pthread_mutex_unlock(&state_lock);
+    netobj_lock(c);
+    for (uint32_t d = 0; d < 4; d++) write_record(record(no, d), d);
     netobj_unlock(c);
     json_free(st);
     finish(c, no, true, 0);
+}
+
+// (the UI cache: Cache +0x15e598 holds the menu's copy of the records [obs 0x7101520fd0])
+#define UI_CACHE MAIN_ADDR(0x2c115e0)
+// A Challenge Modes switch: the run records again as the other mode sees them (the game's and the menu's copies).
+void endless_apply_mode(void) {
+    uint64_t no = netobj(), cache = g64(UI_CACHE);
+    for (uint32_t d = 0; d < 4; d++) {
+        if (no && g64(no + NO_RECORDS) && d < g32(no + NO_RECORDS_COUNT)) write_record(record(no, d), d);
+        if (cache && g64(cache + 0x15e598) && d < g32(cache + 0x15e590))
+            write_record(g64(cache + 0x15e598) + 0x38ull * d, d);
+    }
 }
 
 // ---- the next course, known before the game asks for it (the flow's start card shows it, as SMM1's does): the
@@ -307,7 +345,7 @@ static Json *next_courses(const char *path) {
 static void *prefetch_thread(void *arg) {
     int d = (int)(intptr_t)arg;
     char path[96];
-    snprintf(path, sizeof path, "/api/endless/%s/next?count=1", DIFF[d]);
+    snprintf(path, sizeof path, "/api/endless/%s/next?count=1&ruleset=%s", DIFF[d], RULESET());
     Json *j = next_courses(path);
     Json *m = json_at(json_get(j, "courses"), 0);
     uint32_t id;
@@ -350,7 +388,7 @@ void endless_prepare_run(int d, bool resume) {
 WRAPPER(init_run, 0x14ece20) {
     uint32_t d = req_diff(no, NO_DIFF);
     char path[64], body[64];
-    snprintf(path, sizeof path, "/api/endless/%s/start", DIFF[d]);
+    snprintf(path, sizeof path, "/api/endless/%s/start?ruleset=%s", DIFF[d], RULESET());
     snprintf(body, sizeof body, "{\"ruleset\":\"%s\"}", hundred_rules() ? "hundred" : "smm2");
     int st;
     Json *j = srv_call("POST", path, body, &st);
@@ -377,7 +415,7 @@ WRAPPER(get_play_info, 0x14ed750) {
     Json *h[4] = {0};
     for (int d = 0; d < 4; d++) {
         char path[64];
-        snprintf(path, sizeof path, "/api/endless/%s/history", DIFF[d]);
+        snprintf(path, sizeof path, "/api/endless/%s/history?ruleset=%s", DIFF[d], RULESET());
         int st;
         h[d] = srv_call("GET", path, NULL, &st);  // (404: no run on that difficulty)
     }
@@ -505,7 +543,7 @@ WRAPPER(search_courses, 0x14d8550) {
     }
     uint32_t d = req_diff(no, NO_SEARCH_DIFF);
     char path[96];
-    snprintf(path, sizeof path, "/api/endless/%s/next?count=10", DIFF[d]);
+    snprintf(path, sizeof path, "/api/endless/%s/next?count=10&ruleset=%s", DIFF[d], RULESET());
     Json *j = next_courses(path);
     if (!j) { finish(c, no, false, 2); return; }
     Json *list = json_get(j, "courses");
@@ -616,7 +654,7 @@ WRAPPER(course_post, 0x14f2910) {
     if (d >= 0) {
         char code[12], path[64], body[96];
         code_of(id, code);
-        snprintf(path, sizeof path, "/api/endless/%s/result", DIFF[d]);
+        snprintf(path, sizeof path, "/api/endless/%s/result?ruleset=%s", DIFF[d], RULESET());
         snprintf(body, sizeof body, "{\"code\":\"%s\",\"result\":\"broken\"}", code);
         Json *j = srv_call("POST", path, body, NULL);
         json_free(j);
@@ -643,7 +681,7 @@ static uint8_t *take_prefetched(uint32_t id, size_t *len) {
 static void *prefetch_data_thread(void *arg) {
     int d = (int)(intptr_t)arg;
     char path[96];
-    snprintf(path, sizeof path, "/api/endless/%s/next?count=2", DIFF[d]);
+    snprintf(path, sizeof path, "/api/endless/%s/next?count=2&ruleset=%s", DIFF[d], RULESET());
     Json *j = next_courses(path);
     Json *m = json_at(json_get(j, "courses"), 1);
     uint32_t id;
@@ -760,7 +798,7 @@ WRAPPER(start_course, 0x14ecf30) {
         return;
     }
     char path[64], body[160];
-    snprintf(path, sizeof path, "/api/endless/%s/result", DIFF[d]);
+    snprintf(path, sizeof path, "/api/endless/%s/result?ruleset=%s", DIFF[d], RULESET());
     snprintf(body, sizeof body, "{\"code\":\"%s\",\"result\":\"%s\"}", code,
              bridge_take_start_over() ? "start_over" : "death");
     Json *j = srv_call("POST", path, body, NULL);
@@ -797,7 +835,7 @@ WRAPPER(clear_course, 0x14ed120) {
     pthread_mutex_unlock(&state_lock);
     char code[12], path[64], body[256];
     code_of(id, code);
-    snprintf(path, sizeof path, "/api/endless/%s/result", DIFF[d]);
+    snprintf(path, sizeof path, "/api/endless/%s/result?ruleset=%s", DIFF[d], RULESET());
     snprintf(body, sizeof body,
              "{\"code\":\"%s\",\"result\":\"clear\",\"pending\":%u,\"coins\":%u,\"score\":%u,\"frames_left\":0}", code,
              pending, dcoins, dscore);
@@ -829,7 +867,7 @@ WRAPPER(skip_course, 0x14ed5e0) {
     uint64_t id = g64(no + NO_COURSE_ID);
     char code[12], path[64], body[160];
     code_of(id, code);
-    snprintf(path, sizeof path, "/api/endless/%s/result", DIFF[d]);
+    snprintf(path, sizeof path, "/api/endless/%s/result?ruleset=%s", DIFF[d], RULESET());
     snprintf(body, sizeof body, "{\"code\":\"%s\",\"result\":\"skip\",\"during_miss\":false}", code);
     Json *j = srv_call("POST", path, body, NULL);
     if (j) {
@@ -849,7 +887,7 @@ WRAPPER(skip_course, 0x14ed5e0) {
 static void post_simple(Cpu *c, uint64_t no, const char *what) {
     uint32_t d = req_diff(no, NO_DIFF);
     char path[64];
-    snprintf(path, sizeof path, "/api/endless/%s/%s", DIFF[d], what);
+    snprintf(path, sizeof path, "/api/endless/%s/%s?ruleset=%s", DIFF[d], what, RULESET());
     Json *j = srv_call("POST", path, "{}", NULL);
     if (j) {
         pthread_mutex_lock(&state_lock);
@@ -909,17 +947,6 @@ void endless_forget_run(int d) {
     pthread_mutex_lock(&state_lock);
     memset(&runs[d], 0, sizeof runs[d]);
     pthread_mutex_unlock(&state_lock);
-}
-
-// The start lives New Game reads (run record +0x11) in the network object and the UI cache (Cache +0x15e598, the
-// records' copy [obs 0x7101520fd0]): 5 for SMM2's own Endless, 100 for 100 Mario, when the player switches.
-#define UI_CACHE MAIN_ADDR(0x2c115e0)
-void endless_set_start_lives(uint8_t lives) {
-    uint64_t no = netobj(), cache = g64(UI_CACHE);
-    for (uint32_t d = 0; d < 4; d++) {
-        if (no && g64(no + NO_RECORDS) && d < g32(no + NO_RECORDS_COUNT)) s8(record(no, d) + 0x11, lives);
-        if (cache && g64(cache + 0x15e598) && d < g32(cache + 0x15e590)) s8(g64(cache + 0x15e598) + 0x38ull * d + 0x11, lives);
-    }
 }
 
 bool endless_has_course(uint64_t id) {  // world.c: is this course the one an Endless run is on

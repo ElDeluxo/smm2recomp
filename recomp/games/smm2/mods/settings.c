@@ -116,8 +116,8 @@ bool mod_smm2_session(void) { mod_settings_load(); return smm2_session; }
 void mod_set_smm2_session(bool on) {
     if (on == smm2_session) return;
     smm2_session = on;
-    extern void endless_set_start_lives(uint8_t lives);
-    endless_set_start_lives(on || !mod_hundred_offered() ? 5 : 100);
+    extern void endless_apply_mode(void);  // endless.c: the run records as this mode sees them (start lives too)
+    endless_apply_mode();
     LOG("[mod] %s\n", on ? "SMM2's own Endless Challenge (SMM2's rules)" : "back to the 100 Mario Challenge");
 }
 
