@@ -324,7 +324,7 @@ calls, in this order and all at boot (about frame 280, long before Course World 
 | DataStore.GetUserNameNgType (65) | 0 (the name is fine) |
 | DataStore.SyncUserProfile (49) {name, Mii (the console's CharInfo), region, country ...} | the profile back |
 | DataStore.GetMiiClothes (63) | none |
-| DataStore.GetNewNotification (125) | four zero bytes [inf: the request function reads one 4-byte field] (an error here crashed the game's network worker later: "Pure virtual function called") |
+| DataStore.GetNewNotification (125) | a structure of three bools, all false [obs: its response extractor, main+0x5ef890, reads the structure header and three bools] (an error answer here crashed the game's network worker later: "Pure virtual function called") |
 
 [obs] The Mii in a UserInfo is the 0x58-byte `nn::mii::CharInfo`: the GetUsers converter (main+0x14d0a60) copies
 the buffer into the user entry as it is.
