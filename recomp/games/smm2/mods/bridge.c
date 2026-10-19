@@ -41,6 +41,8 @@ static volatile int drv = DRV_IDLE;
 static volatile uint64_t drv_since, course_since;
 static volatile int run_d = -1;          // the flow's run (difficulty), -1 none
 static volatile int pending_tab = -1;    // a difficulty to select on the game thread (the tab's handler)
+static volatile int broken_d = -1;       // a corrupt course left the run of this difficulty: back to it
+static volatile uint64_t broken_tap;     // the Challenge Modes button was tapped (after a corrupt course) then
 static volatile int tab_target = -1;     // a difficulty to select with L / R
 static volatile int tab_presses;
 static volatile uint64_t menu_page, menu_seen;  // the Endless menu page and the frame it was last in Disp
@@ -99,8 +101,8 @@ static bool result_keys(uint64_t t, uint64_t now, uint64_t *b, uint64_t *nk, uin
     else if (tap_down && in >= 8) tap_down = false, touch_test(tx, ty, false);
     // < > ^ v and K: real key events (the player's arrows and A key, through the host input path)
     extern void input_test_key(const char *name, bool down);  // runtime/hle/input.c
-    static const char real[] = "<>^vK";
-    static const char *const real_names[] = {"Left", "Right", "Up", "Down", "K"};
+    static const char real[] = "<>^vK[]";  // ([ ] the ZL / ZR keys)
+    static const char *const real_names[] = {"Left", "Right", "Up", "Down", "K", "1", "3"};
     static const char *key_down;
     const char *rp = strchr(real, key);
     if (rp && in < 8 && !key_down) key_down = real_names[rp - real], input_test_key(key_down, true);
@@ -190,10 +192,22 @@ static void *driver(void *arg) {
                 if (jump && t % 90 < 20) b |= BTN_A;
             }
             break;
-        case DRV_BROKEN:  // the "corrupt" window: A every 2 s for 10 s, then the map's Play
-            if (t >= 120 && t % 120 < 8) b = BTN_A;
-            else if (t > 600) set_drv(DRV_PLAY);
+        case DRV_BROKEN: {  // "The course data is corrupt." on the map: its OK leaves for Course World's menu, the
+                            // focus on Courses [obs]. Back in: a tap on Challenge Modes every 4 s from 4 s after
+                            // the OK while the Endless menu isn't up, then (menu_disp) Continue and Play: the run
+                            // goes on without the course. (A minute at most.)
+            extern void touch_test(int32_t x, int32_t y, bool down);  // runtime/hle/touch.c
+            static bool down;
+            if (t >= 60 && t < 68) b = BTN_A;
+            else if (t >= 300 && (t - 300) % 240 < 8 && now - menu_seen > 60 && !down)
+                down = true, broken_tap = now, touch_test(864, 466, true);  // (the button's middle, 1280x720)
+            else if (down && (t - 300) % 240 >= 8) down = false, touch_test(864, 466, false);
+            else if (t > 3600) {
+                LOG("[mod] bridge: no way back from the corrupt course\n");
+                set_drv(DRV_IDLE);
+            }
             break;
+        }
         case DRV_PAUSE_TEST:  // (flow test) + in the course: SMM2's pause, which the mod keeps closed
             if (t < 8) b = BTN_PLUS;
             else if (t > 30) set_drv(DRV_COURSE);
@@ -307,6 +321,11 @@ static void select_pending_tab(Cpu *c, uint64_t page) {
 
 static void menu_disp(Cpu *c) {
     uint64_t now0 = renderer_present_count();
+    if (drv == DRV_BROKEN && broken_d >= 0 && broken_tap > drv_since) {  // (back after a corrupt course)
+        LOG("[mod] bridge: back on the Endless menu after the corrupt course: Continue\n");
+        tab_target = broken_d, broken_d = -1, over_save = false;
+        set_drv(DRV_CONTINUE);
+    }
     // (re)entering the menu with no run going: Challenge Modes opens on the mode used last
     if (mod_hundred_offered() && test_difficulty() < 0 && run_d < 0 && now0 - menu_seen > 30 && g_mod.mode_endless &&
         !mod_smm2_session() && !hundred_flow_active() && !leaving_won && !suspending)
@@ -517,6 +536,10 @@ void bridge_event(const char *what, uint32_t d) {
         LOG("[mod] bridge: the course again (retry)\n");
         started_since = renderer_present_count(), started_pending = true;
     } else if (!strcmp(what, "clear") || !strcmp(what, "clear_last")) {
+        // (the result screen's comment button wants the course's "comments on" flag, course global +0x860 [inf,
+        // main+0x1be7d30]: our server takes comments on every course)
+        uint64_t course = g64(MAIN_ADDR(0x2c4b710));
+        if (course) s8(course + 0x860, 1);  // (not +0x861: that one greys the Tag button [obs])
         // SMM2's own clear: goal, fanfare, result screen (Boo / Like / Quit / Next) are the player's. Next shows up
         // as the map's Mario walk (HUNDRED_NEXT); Quit as the menu without it (HUNDRED_GIVEUP_SAVE).
         run_won = !strcmp(what, "clear_last");
@@ -532,6 +555,8 @@ void bridge_event(const char *what, uint32_t d) {
         mod_shot("map", 200);
     } else if (!strcmp(what, "broken")) {  // "The course data is corrupt.": OK, then the run goes on (Play)
         LOG("[mod] bridge: a broken course: the window is answered, the next course comes\n");
+        mod_shot("broken", 30), mod_shot("broken", 300), mod_shot("broken", 700), mod_shot("broken", 1200);
+        broken_d = (int)d;
         set_drv(DRV_BROKEN);
         result(HUNDRED_SKIP);
     } else if (!strcmp(what, "suspend")) {

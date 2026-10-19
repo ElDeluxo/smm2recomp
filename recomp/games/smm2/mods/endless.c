@@ -749,6 +749,21 @@ WRAPPER(get_course_file, 0x14de010) {
     }
     memcpy(plain, data, COURSE_SIZE);
     free(data);
+    {  // (tests: RECOMP_MOD_TEST_BREAK=<n>:<code> hands the game course <code>'s data in place of the n-th course,
+       // e.g. a course the game finds broken)
+        static int downloads;
+        const char *tb = getenv("RECOMP_MOD_TEST_BREAK");
+        const char *other = tb ? strchr(tb, ':') : NULL;
+        if (other && ++downloads == atoi(tb)) {
+            char p2[64];
+            size_t n2 = 0;
+            snprintf(p2, sizeof p2, "/api/courses/%s/data", other + 1);
+            uint8_t *d2 = srv_get_bytes(p2, &n2);
+            if (d2 && n2 == COURSE_SIZE) memcpy(plain, d2, COURSE_SIZE);
+            free(d2);
+            LOG("[mod] test: course %s's data in place of %s\n", other + 1, code);
+        }
+    }
     s64(keyobj, KEY_TABLE);
     uint8_t *out = (uint8_t *)(uintptr_t)dest;
     uint32_t crc = crc32(plain, COURSE_SIZE);
@@ -784,7 +799,10 @@ WRAPPER(start_course, 0x14ecf30) {
     code_of(id, code);
     if (!miss) {  // a new course: the server's lives and clears as they are
         Json *st = srv_call("GET", "/api/endless", NULL, NULL);
-        Json *run = json_get(json_get(st, "runs"), DIFF[d]);
+        // (this mode's slot: "hundred_runs" for 100 Mario on a server with both; an older one has "runs" only)
+        Json *slots = json_get(st, "runs");
+        if (hundred_rules() && json_get(st, "hundred_runs")) slots = json_get(st, "hundred_runs");
+        Json *run = json_get(slots, DIFF[d]);
         bool ok = run != NULL;
         if (ok) set_play(c, no, d, (uint32_t)json_num(json_get(run, "lives"), 0), (uint32_t)json_num(json_get(run, "clears"), 0));
         pthread_mutex_lock(&state_lock);
