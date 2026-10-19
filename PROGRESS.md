@@ -192,8 +192,11 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     ✅ **Proof 1**: with `backend=local-nex` the game resolves its NEX host to the test server, opens TLS, upgrades
     the WebSocket and sends its NEX login (`ValidateAndRequestTicketWithParam`, decoded, token checked; evidence
     in `/Volumes/SSD/smm-work/recomp-net/evidence/proof1/`, private); ✅ default backend unchanged (no sockets,
-    no lookups); ⬜ Proof 2: the login, the secure connection and SMM2's DataStore calls answered by a local NEX
-    server so Course World opens through the game's own NEX client; ⬜ Nextendo (owner's go-ahead)
+    no lookups); ✅ **Proof 2**: `tools/nex_test_server` answers the ticket, the secure connection, Register,
+    GetIntegerSettings and SMM2's DataStore login calls (GetUsers, GetUserNameNgType, SyncUserProfile,
+    GetMiiClothes, GetNewNotification), and Course World's top screen opens through the game's **own** NEX client,
+    no mod override involved (`evidence/proof2/`, private); ✅ UDP port parking for PIA; ⬜ course lists, downloads
+    and the rest of DataStore on the local NEX server; ⬜ Nextendo (owner's go-ahead, app registration, sign-in)
 
 - ⬜ **Releases (melee-pc style, owner-approved)**: per-platform launcher + recompiler, no game code;
   dump picker with v3.0.3 hash check, the player's prod.keys, extraction, first-launch recompile with

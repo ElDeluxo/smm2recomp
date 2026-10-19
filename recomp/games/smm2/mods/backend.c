@@ -7,6 +7,7 @@
 //   tls_trust=local-ca | any                RECOMP_NET_TLS_TRUST
 //   tls_ca=<path>                           RECOMP_NET_TLS_CA
 //   id_token_file=<path>                    RECOMP_NET_ID_TOKEN_FILE
+//   nex_token_file=<path>                   RECOMP_NET_NEX_TOKEN_FILE
 //   net_log=1                               RECOMP_NET_LOG
 //
 // backend=ours (default) is the mod's path: the overrides answer Course World from our course server. Any other
@@ -24,7 +25,7 @@ static const char *ini_path(void) { return getenv("RECOMP_MOD_INI") ? getenv("RE
 
 bool game_net_config(const char *key, char *out, size_t cap) {
     static const char *const keys[] = {"backend", "nex_test_server", "net_hosts", "tls_trust", "tls_ca",
-                                       "id_token_file", "net_log"};
+                                       "id_token_file", "nex_token_file", "net_log"};
     bool known = false;
     for (size_t i = 0; i < sizeof keys / sizeof *keys; i++) known |= !strcmp(keys[i], key);
     FILE *f = known ? fopen(ini_path(), "r") : NULL;

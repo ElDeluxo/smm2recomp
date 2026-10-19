@@ -2,9 +2,11 @@
 //
 // The token is a JWT: header {"alg":"HS256","typ":"JWT","kid":"recomp-local"}; claims {"iss":"recomp-local",
 // "sub": the account ID (16 hex digits), "aud": the title ID, "iat", "exp" (+3 hours), "jti": random, "typ":
-// "id_token", "nintendo": {"ai": title ID, "av": the game's version}}. The claims follow the shape of a network
-// service account's ID token [inf: kinnay's NintendoClients wiki, "BaaS"]; the issuer and the key are ours, so no
-// server but a test server that reads our key accepts it.
+// "id_token", "nintendo": {"ai": title ID, "av": the game's version}, "tv": the game's version, and with
+// nex_token_file= "nnex": that NEX login token}. The claims follow the shape of a network service account's ID token
+// [inf: kinnay's NintendoClients wiki, "BaaS"]; "nnex" / "tv" are where a community NEX server looks for its own
+// login token and the game version [inf: research/specs/recomp-nextendo.md §2.1, from their published docs]. The
+// issuer and the key are ours: the game does not check the signature, a server checks its own token inside.
 #include "token.h"
 
 #include <pthread.h>
@@ -66,11 +68,7 @@ static void load(void) {
     random_bytes((uint8_t *)&nsa_id, sizeof nsa_id);
     random_bytes(key, sizeof key);
     have_key = true;
-#ifdef _WIN32
-    mkdir("net");
-#else
-    mkdir("net", 0700);
-#endif
+    mkdir("net", 0700);  // (Windows: the runtime's compat header takes the mode too)
     if ((f = fopen(ACCOUNT_FILE, "w"))) {
         fprintf(f, "# The local network service account for the game's own online code (runtime/net/token.h). "
                    "Private: the key signs this account's ID tokens.\nnsa_id %016llx\nkey ", (unsigned long long)nsa_id);
@@ -124,21 +122,31 @@ size_t net_id_token(char *out, size_t cap) {
     char jtis[17];
     b64url(jti, sizeof jti, jtis, sizeof jtis);
     long long now = (long long)time(NULL);
-    char claims[512];
+    char nnex[512] = "";
+    const char *nf = net_nex_token_file();
+    if (nf) {
+        char t[400];
+        size_t tn = from_file(nf, t, sizeof t);
+        bool ok = tn > 0;
+        for (size_t i = 0; i < tn; i++) ok &= t[i] > ' ' && t[i] != '"' && t[i] != '\\';
+        if (ok) snprintf(nnex, sizeof nnex, ",\"nnex\":\"%s\"", t);
+        else if (tn) LOG("[token] nex_token_file: not a token (left out)\n");
+    }
+    char claims[1024];
     snprintf(claims, sizeof claims,
              "{\"iss\":\"recomp-local\",\"sub\":\"%016llx\",\"aud\":\"%016llx\",\"iat\":%lld,\"exp\":%lld,"
-             "\"jti\":\"%s\",\"typ\":\"id_token\",\"nintendo\":{\"ai\":\"%016llx\",\"av\":\"%s\"}}",
+             "\"jti\":\"%s\",\"typ\":\"id_token\",\"nintendo\":{\"ai\":\"%016llx\",\"av\":\"%s\"},\"tv\":\"%s\"%s}",
              (unsigned long long)nsa_id, (unsigned long long)GAME_TITLE_ID, now, now + 3 * 3600, jtis,
-             (unsigned long long)GAME_TITLE_ID, GAME_DISPLAY_VERSION);
+             (unsigned long long)GAME_TITLE_ID, GAME_DISPLAY_VERSION, GAME_DISPLAY_VERSION, nnex);
     static const char header[] = "{\"alg\":\"HS256\",\"typ\":\"JWT\",\"kid\":\"recomp-local\"}";
-    char *buf = malloc(2048);
-    size_t n = b64url((const uint8_t *)header, strlen(header), buf, 2048);
+    char *buf = malloc(4096);
+    size_t n = b64url((const uint8_t *)header, strlen(header), buf, 4096);
     buf[n++] = '.';
-    n += b64url((const uint8_t *)claims, strlen(claims), buf + n, 2048 - n);
+    n += b64url((const uint8_t *)claims, strlen(claims), buf + n, 4096 - n);
     uint8_t mac[32];
     mbedtls_md_hmac(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), key, sizeof key, (const uint8_t *)buf, n, mac);
     buf[n++] = '.';
-    n += b64url(mac, sizeof mac, buf + n, 2048 - n);
+    n += b64url(mac, sizeof mac, buf + n, 4096 - n);
     if (n >= cap) n = 0;
     else memcpy(out, buf, n + 1);
     free(buf);

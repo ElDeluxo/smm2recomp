@@ -22,6 +22,8 @@
 //                                                CA; any: accept any certificate (only towards local addresses)
 //   RECOMP_NET_TLS_CA         tls_ca=            the local test CA (PEM), default net/test-ca.pem in the data folder
 //   RECOMP_NET_ID_TOKEN_FILE  id_token_file=     a backend-issued account id token to send instead of the local one
+//   RECOMP_NET_NEX_TOKEN_FILE nex_token_file=    a backend's NEX login token, carried in the local ID token's "nnex"
+//                                                claim (the shape a community server reads; runtime/net/token.c)
 //   RECOMP_NET_LOG            net_log=1          log every socket, name, TLS and token call
 #pragma once
 #include <stdbool.h>
@@ -61,5 +63,6 @@ const char *net_nsd_environment(void); // the nsd environment that replaces '%' 
 NetTrust net_tls_trust(void);
 const char *net_tls_ca_path(void);
 const char *net_id_token_file(void);   // NULL: none (the local token, runtime/net/token.c)
+const char *net_nex_token_file(void);  // NULL: none
 
 void ip_to_str(uint32_t ip, char out[16]);

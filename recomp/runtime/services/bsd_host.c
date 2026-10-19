@@ -10,6 +10,9 @@
 // core given up (kernel_host_wait_begin), so the rest of the game runs. Errno numbers are FreeBSD's (hostsock.h).
 // UDP ports: a port the game binds that is taken on the host (two game instances on one machine) is bound to another
 // host port and the game keeps seeing its own; the same pair is used again when the game binds that port again.
+// A UDP socket the game bound to a port and closes is parked for PARK_SECONDS rather than closed: PIA probes the NAT
+// check, closes and binds the same port again ~100 ms later, and peer-to-peer needs the NAT mapping of that host
+// port to survive [inf: research/specs/recomp-nextendo.md §2.1 item 8].
 //
 // Message layouts as in bsd.c: results {i32 ret, u32 errno} (+ a length); addresses are FreeBSD's sockaddr_in
 // {u8 len, u8 family 2, u16 port BE, u32 addr BE, 8 zero}; pollfd {i32 fd, i16 events, i16 revents}.
@@ -30,11 +33,13 @@
 
 #define MAX_FDS 128
 #define WAIT_SLICE_MS 50
+#define PARK_SECONDS 10
+#define MAX_PARKED 16
 
 struct BsdSock {
     hsock_t h;
     int type;              // 1 stream, 2 datagram
-    bool nonblock, closed, listening;
+    bool nonblock, closed, listening, bound;
     int refs;              // the fd table + calls in progress + ssl connections (under lock)
     uint32_t bound_ip;     // as the game sees it (host order)
     uint16_t guest_port;   // the port the game sees as its own (host order), 0 none yet
@@ -47,6 +52,33 @@ static BsdSock *table[MAX_FDS];
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static struct { uint16_t guest, host; } port_map[64];
 static int nport_map;
+static struct { uint16_t guest; hsock_t h; uint64_t until; } parked[MAX_PARKED];  // (under lock)
+static int nparked;
+
+// under lock: park a closed UDP socket's host socket (false: not parked, close it)
+static bool park(BsdSock *s) {
+    if (s->type != 2 || !s->bound || !s->guest_port) return false;
+    uint64_t now = plat_now_ns();
+    for (int i = 0; i < nparked;)  // (expired ones go)
+        if (parked[i].until <= now) hsock_close(parked[i].h), parked[i] = parked[--nparked];
+        else i++;
+    if (nparked == MAX_PARKED) hsock_close(parked[0].h), parked[0] = parked[--nparked];
+    parked[nparked].guest = s->guest_port, parked[nparked].h = s->h;
+    parked[nparked++].until = now + PARK_SECONDS * 1000000000ull;
+    return true;
+}
+
+// under lock: the parked host socket of a guest UDP port (taken out), HSOCK_BAD none
+static hsock_t unpark(uint16_t guest) {
+    uint64_t now = plat_now_ns();
+    for (int i = 0; i < nparked; i++)
+        if (parked[i].guest == guest && parked[i].until > now) {
+            hsock_t h = parked[i].h;
+            parked[i] = parked[--nparked];
+            return h;
+        }
+    return HSOCK_BAD;
+}
 
 static void result(IpcResp *resp, int32_t ret, uint32_t err) {
     OUT(int32_t, 0) = ret, OUT(uint32_t, 4) = ret < 0 ? err : 0;
@@ -70,10 +102,11 @@ BsdSock *bsd_sock_ref(int fd) {
 void bsd_sock_unref(BsdSock *s) {
     if (!s) return;
     pthread_mutex_lock(&lock);
-    bool last = --s->refs == 0;
+    bool last = --s->refs == 0, kept = last && park(s);
     pthread_mutex_unlock(&lock);
     if (last) {
-        hsock_close(s->h);
+        if (kept) NLOG("[bsd] UDP port %u parked (%d s)\n", s->guest_port, PARK_SECONDS);
+        else hsock_close(s->h);
         free(s);
     }
 }
@@ -461,6 +494,18 @@ static void do_bind(BsdSock *s, int fd, IpcReq *req, IpcResp *resp) {
     uint16_t port;
     if (!get_addr(in_buf(req, 0), &ip, &port)) { result(resp, -1, BSD_EINVAL); return; }
     if (ip && !net_ip_is_local(ip)) { result(resp, -1, BSD_EADDRNOTAVAIL); return; }
+    if (s->type == 2 && port) {  // the same port again soon after a close: its parked host socket (NAT mapping kept)
+        pthread_mutex_lock(&lock);
+        hsock_t h = unpark(port);
+        pthread_mutex_unlock(&lock);
+        if (h != HSOCK_BAD) {
+            hsock_close(s->h);
+            s->h = h, s->bound = true, s->bound_ip = ip, s->guest_port = port;
+            NLOG("[bsd] bind %d: UDP port %u again: the parked host socket (port %u) is reused\n", fd, port, host_port_of(h));
+            result(resp, 0, 0);
+            return;
+        }
+    }
     uint16_t hport = port;
     pthread_mutex_lock(&lock);
     for (int i = 0; i < nport_map; i++)
@@ -485,7 +530,7 @@ static void do_bind(BsdSock *s, int fd, IpcReq *req, IpcResp *resp) {
         }
     }
     if (r != 0) { result(resp, -1, hsock_bsd_errno(hsock_errno())); return; }
-    s->bound_ip = ip;
+    s->bound_ip = ip, s->bound = true;
     s->guest_port = port ? port : host_port_of(s->h);
     char t[16];
     ip_to_str(ip, t);

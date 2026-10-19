@@ -25,7 +25,7 @@ static uint32_t test_ip = 0x7f000001;
 static uint16_t test_port = 44300;
 static Rule rules[MAX_RULES];
 static int nrules;
-static char ca_path[512] = "net/test-ca.pem", token_file[512];
+static char ca_path[512] = "net/test-ca.pem", token_file[512], nex_token_file[512];
 
 static pthread_mutex_t rev_lock = PTHREAD_MUTEX_INITIALIZER;
 static struct { uint32_t ip; char name[128]; } rev[16];
@@ -95,6 +95,7 @@ static void load(void) {
     if (cfg("RECOMP_NET_TLS_TRUST", "tls_trust", v, sizeof v)) trust = !strcmp(v, "any") ? NET_TRUST_ANY : NET_TRUST_LOCAL_CA;
     if (cfg("RECOMP_NET_TLS_CA", "tls_ca", v, sizeof v) && v[0]) snprintf(ca_path, sizeof ca_path, "%s", v);
     if (cfg("RECOMP_NET_ID_TOKEN_FILE", "id_token_file", v, sizeof v)) snprintf(token_file, sizeof token_file, "%s", v);
+    if (cfg("RECOMP_NET_NEX_TOKEN_FILE", "nex_token_file", v, sizeof v)) snprintf(nex_token_file, sizeof nex_token_file, "%s", v);
     if (backend_eff != NET_BACKEND_LOCAL_NEX) return;  // (ours: no name resolves, no game socket reaches the host)
     // explicit entries first (first match wins), then the game's hosts -> the test server
     if (cfg("RECOMP_NET_HOSTS", "net_hosts", v, sizeof v)) {
@@ -127,6 +128,7 @@ uint16_t net_dest_port(uint32_t ip, uint16_t port) { init(); return ip == test_i
 NetTrust net_tls_trust(void) { init(); return trust; }
 const char *net_tls_ca_path(void) { init(); return ca_path; }
 const char *net_id_token_file(void) { init(); return token_file[0] ? token_file : NULL; }
+const char *net_nex_token_file(void) { init(); return nex_token_file[0] ? nex_token_file : NULL; }
 const char *net_nsd_environment(void) { return "lp1"; }
 
 int net_backend_options(const NetBackendOption **out) {

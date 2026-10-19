@@ -276,6 +276,7 @@ out ("awaiting registration").
 | `tls_trust=` | `RECOMP_NET_TLS_TRUST` | `local-ca` (default): the server must present a certificate from the local test CA (`net/test-ca.pem`); `any`: any certificate, only towards local addresses |
 | `tls_ca=` | `RECOMP_NET_TLS_CA` | another CA file |
 | `id_token_file=` | `RECOMP_NET_ID_TOKEN_FILE` | a backend-issued ID token to send instead of the local one |
+| `nex_token_file=` | `RECOMP_NET_NEX_TOKEN_FILE` | a backend's NEX login token (Nextendo's `nx2.` token), carried in the local ID token's `nnex` claim; a secret: never logged |
 | `net_log=1` | `RECOMP_NET_LOG=1` | log every socket, name, TLS and token call (TLS plaintext: the first 160 bytes of each read / write) |
 
 ### Pieces
@@ -283,11 +284,11 @@ out ("awaiting registration").
 | Piece | Where | What |
 |---|---|---|
 | Configuration | `runtime/net/netcfg.c` | backend, **deny-by-default redirect table** (with `local-nex`: `*.nintendo.net`, `*.nintendo.com`, `*.nintendowifi.net`, `*.nintendo.co.jp`, `*.nintendoswitch.cn` → the test server; every other name: no such name), destination policy (a game socket reaches loopback and the table's targets only), TLS trust |
-| Sockets | `runtime/services/bsd_host.c` (bsd.c dispatches) | `bsd:u` / `bsd:s` on host sockets (POSIX and Winsock, `runtime/net/hostsock.h`): TCP and UDP, non-blocking I/O, poll / select, socket options, accept / listen, FreeBSD errno numbers. Blocking calls wait in 50 ms slices with the guest thread's core released (`kernel_host_wait_begin`). A UDP port the game binds that is taken on the host gets another host port, and the game keeps seeing its own, the same pair again on a rebind (two instances on one machine). Connects / sends elsewhere: `ENETUNREACH`, logged. The virtual LAN keeps its own path |
+| Sockets | `runtime/services/bsd_host.c` (bsd.c dispatches) | `bsd:u` / `bsd:s` on host sockets (POSIX and Winsock, `runtime/net/hostsock.h`): TCP and UDP, non-blocking I/O, poll / select, socket options, accept / listen, FreeBSD errno numbers. Blocking calls wait in 50 ms slices with the guest thread's core released (`kernel_host_wait_begin`). A UDP port the game binds that is taken on the host gets another host port, and the game keeps seeing its own, the same pair again on a rebind (two instances on one machine). A UDP socket the game bound and closes is **parked** for 10 s and handed back when the game binds that port again (PIA closes and rebinds after its NAT check; the NAT mapping must survive). Connects / sends elsewhere: `ENETUNREACH`, logged. The virtual LAN keeps its own path |
 | Names | `runtime/services/names.c` | `nsd:u` / `nsd:a` (`%` → `lp1`: the game asks for `g22306d00-%.s.n.srv.nintendo.net`) and `sfdnsres` (GetAddrInfo(WithOptions), GetHostByName(WithOptions)) from the redirect table only; the host's DNS is never asked |
 | TLS | `runtime/services/ssl.c` + `third_party/mbedtls` (3.6.7 LTS, Apache-2.0) | `ssl`: contexts, connections over the game's socket, handshake (TLS 1.2), read / write / peek / pending / poll, ALPN (http/1.1 only), server certificate out. The **runtime's** trust policy decides (the game's own CAs and client certificates are ignored); when the game names an address as the host, the name last resolved to it is used for SNI and the check ("rebuilt") |
-| Account | `runtime/net/token.c`, `services/acc.c` | a local network service account ID and an ID token: a JWT (HS256, `kid` `recomp-local`) signed with a local key, both kept in `net/account.txt` in the data folder (private). `id_token_file=` plugs a real backend's token in |
-| Test server | `tools/nex_test_server/` (Python, standard library + the `openssl` command) | TLS on a local address, the HTTP/1.1 WebSocket upgrade, PRUDP Lite (SYN, CONNECT, acks, pings), RMC; decodes and logs the login, checks the token's signature with `net/account.txt`; answers the login with an error for now. Makes the local test CA and its certificate in `recomp/private/smm2/net/` on first run (git-ignored; the proprietary guard blocks keys and certificates) |
+| Account | `runtime/net/token.c`, `services/acc.c` | a local network service account ID (`GetAccountId`; the game logs in with it as its NEX user name) and an ID token: a JWT (HS256, `kid` `recomp-local`, claims shaped like a network service account's plus `tv` = the game version and, with `nex_token_file=`, `nnex`) signed with a local key, both kept in `net/account.txt` in the data folder (private). `id_token_file=` plugs a whole backend-issued token in instead |
+| Test server | `tools/nex_test_server/` (Python, standard library + the `openssl` command) | a local NEX server: TLS on a local address, the HTTP/1.1 WebSocket upgrade, PRUDP Lite (SYN, CONNECT, acks, pings, fragments, resends), RMC, the Kerberos-style ticket (RC4 + HMAC-MD5), the secure server on PRUDP port 2, and enough of SMM2's DataStore for Course World's login (table below). Every request is logged and decoded where known; the token's signature is checked with `net/account.txt` and masked in the log. Makes the local test CA and its certificate in `recomp/private/smm2/net/` on first run (git-ignored; the proprietary guard blocks keys and certificates) |
 
 ### What the game does [obs, v3.0.3, backend local-nex]
 
@@ -299,21 +300,45 @@ DoNotCloseSocket on, verify option 0x3, host name set), does the handshake, send
 PRUDP Lite in binary frames: SYN (stream RVSecure, port 31 → 1, supported functions 6), CONNECT (with a lite
 connection signature), DATA: RMC `Authentication.ValidateAndRequestTicketWithParam` {platform 3, user name = the
 account ID in decimal, `AuthenticationInfo` {the ID token, NGS version 4, token type 2, server version 0}, NEX
-version 40605, client version 60}.
+version 40605, client version 60}. Given a ticket and the station URL `prudps:/address=0.0.0.1;port=1;...;sid=2`
+("the same server"), it opens PRUDP port 30 → 2 **on the same WebSocket**, sends the ticket in its CONNECT, then
+calls, in this order and all at boot (about frame 280, long before Course World opens):
+
+| Request | The test server's answer |
+|---|---|
+| SecureConnection.Register (its station URL `prudp:/address=127.0.0.1;port=1;Pl=3;Tpt=2;...;sid=30`) | success, connection id, the URL back |
+| Utility.GetIntegerSettings(0) | an empty map |
+| DataStore.GetUsers (48) {own PID, option 0xe284} | one UserInfo (revision 3): the PID, a maker code, the name, a default Mii (CharInfo, the same as `services/mii.c`'s), country US. An empty list sends Course World to "Create Maker Avatar" (which needs the console's Mii editor) |
+| DataStore.GetUserNameNgType (65) | 0 (the name is fine) |
+| DataStore.SyncUserProfile (49) {name, Mii (the console's CharInfo), region, country ...} | the profile back |
+| DataStore.GetMiiClothes (63) | none |
+| DataStore.GetNewNotification (125) | four zero bytes [inf: the request function reads one 4-byte field] (an error here crashed the game's network worker later: "Pure virtual function called") |
+
+[obs] The Mii in a UserInfo is the 0x58-byte `nn::mii::CharInfo`: the GetUsers converter (main+0x14d0a60) copies
+the buffer into the user entry as it is.
+
+**Proof 2** (2026-10-19): with these answers Course World's top screen opens through the game's **own** NEX client
+(Courses, Leaderboards, Network Play, Endless Challenge, Ninji Speedruns, the Maker card with the Mii); no mod
+override ran (no `[mod]` line). Evidence (private): `/Volumes/SSD/smm-work/recomp-net/evidence/proof2/`. Course
+lists, course downloads and the rest of DataStore are not answered yet (they log and get Core::NotImplemented).
 
 ### Try it
 
     python3 -m tools.nex_test_server --log /tmp/nex.log        # from the repository root; listens on 127.0.0.1:44300
     cd recomp/private/smm2 && RECOMP_NET_BACKEND=local-nex RECOMP_NET_LOG=1 ../../build/smm2/smm2recomp extracted
 
-Then go to Course World: the server logs the game's TLS connection, the upgrade, the PRUDP handshake and the decoded
-login (the token's signature masked), and the game shows a communication error (the login is refused for now).
+The server logs the game's TLS connection, the upgrade, the PRUDP handshakes, the decoded login (the token's
+signature masked) and every request; then go to Course World: its top screen opens.
 
-### Before a real Nextendo connection
+### Before a real Nextendo connection (research/specs/recomp-nextendo.md)
 
-- the owner's go-ahead: Nextendo's permission and an app registration (their developer portal is closed);
-- their account / BaaS flow: the ID token from their servers (`id_token_file=` or a sign-in that writes it), and the
-  real account ID;
-- trust: their CA pinned (a third `tls_trust` mode), and redirect entries to public addresses, both behind an
-  explicit setting (today every redirect target must be a local address);
-- the rest of NEX: the ticket, the secure connection, DataStore (SMM2) and matchmaking.
+- the owner's go-ahead: Nextendo's permission and **an app registration** (a client ID for the recomp; their
+  developer portal is team-only, and their first-party client ID must not be used);
+- **app-level sign-in**: OAuth 2.0 with PKCE (loopback redirect on desktop, `ASWebAuthenticationSession` on iOS),
+  then their NEX token each launch (24 h); it goes into the ID token's `nnex` claim (`nex_token_file=` today);
+  `GetAccountId` must return their PID (today: the local account's ID);
+- **trust and addresses**: their CA pinned (a third `tls_trust` mode) and redirect entries to their public
+  addresses, both behind an explicit setting (today every redirect target must be a local address and nothing
+  else is reachable); UDP to arbitrary peers for PIA (today: refused);
+- the rest is the game's own code: NAT check (`nncs1/2`), MatchmakeExtension, PIA peer-to-peer; their gates (a
+  verified e-mail, one device at a time) show as login errors.
