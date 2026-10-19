@@ -3,6 +3,7 @@
 // Formats: Yaz0 (decoded by lyt_yaz0; written uncompressed, every flag bit a literal), SARC (little endian), MSBT
 // LBL1 / TXT2, BFLYT sections. Generators register from constructors; the generation runs at the first
 // game_romfs_overlay() call (the RomFS opening), into a fresh folder renamed into place when all have run.
+#define _XOPEN_SOURCE 700  // (glibc: nftw and FTW_* are X/Open)
 #include "romfs_overlay.h"
 
 #include <errno.h>
