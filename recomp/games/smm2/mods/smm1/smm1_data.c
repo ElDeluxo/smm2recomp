@@ -167,6 +167,38 @@ static uint8_t *dump_file(const char *rel, size_t *n) {
     return NULL;
 }
 
+static bool g_found;
+static void ensure_dump(void) {
+    if (!g_found) find_dump(), g_found = true;
+}
+uint8_t *smm1_dump_read(const char *rel, size_t *n) {
+    ensure_dump();
+    return dump_file(rel, n);
+}
+int smm1_dump_list(const char *reldir, const char *prefix, char (**names)[96]) {
+    ensure_dump();
+    int count = 0, cap = 0;
+    *names = NULL;
+    size_t pl = strlen(prefix);
+    for (int t = 0; t < g_ntitles; t++) {
+        char dir[1200];
+        snprintf(dir, sizeof dir, "%s/%s", g_titles[t].content, reldir);
+        DIR *d = opendir(dir);
+        if (!d) continue;
+        struct dirent *e;
+        while ((e = readdir(d))) {
+            if (strncmp(e->d_name, prefix, pl)) continue;
+            bool dup = false;
+            for (int i = 0; i < count && !dup; i++) dup = !strcmp((*names)[i], e->d_name);
+            if (dup) continue;
+            if (count == cap) cap = cap ? cap * 2 : 64, *names = realloc(*names, sizeof **names * (size_t)cap);
+            snprintf((*names)[count++], 96, "%s", e->d_name);
+        }
+        closedir(d);
+    }
+    return count;
+}
+
 // ---------------------------------------------------------------- generating the cache
 static int g_written;
 static void put(const char *rel, const uint8_t *d, size_t n) {
@@ -241,7 +273,7 @@ static const char *first_existing(const char *const *rels) {
 }
 
 static bool generate(void) {
-    find_dump();
+    find_dump(), g_found = true;
     if (!g_ntitles) {
         fprintf(stderr, LOGP "no SMM1 dump found (set RECOMP_SMM1_DUMP to the folder of your extracted Super Mario Maker "
                         "base game and update): the SMM1 screens are off\n");
