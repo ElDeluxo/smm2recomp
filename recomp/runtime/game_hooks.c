@@ -66,6 +66,7 @@ WEAK void flags_ext_save_written(const char *path, uint64_t addr, int64_t off, i
 
 // ---- screenshots requested by game code or tests (renderers: saved after the next present)
 WEAK char g_window_shot_request[256];
+WEAK char g_frame_shot_request[256];  // (runtime/nvn: the next presented frame, saved at its own size)
 
 // ---- widescreen (renderers): the game's own 16:9 output, unchanged
 WEAK bool widescreen_allowed(void) { return false; }
