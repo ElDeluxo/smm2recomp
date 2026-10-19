@@ -70,7 +70,7 @@ Then press **Set up and play**. It:
 2. copies the console's shared fonts and a few system data archives from the firmware into `fonts\` and `sysdata\`;
 3. recompiles the game code: the generator turns `extracted\exefs` into C, zig compiles it with one job per CPU
    thread, and links `extracted\smm2game.dll` against the exe. This takes from a few minutes to half an hour; on
-   Linux the same build took 29 minutes in an 8-core VM, on an M4 Pro Mac about 20 minutes with 6 jobs;
+   Linux the same build took 29 minutes in an 8-core VM, on an M4 Pro Mac 41 minutes with 8 jobs while other builds kept it busy (load ~19);
 4. starts the game.
 
 Every step shows its progress, and a failure says what went wrong and what to do (the details are in `logs\` and

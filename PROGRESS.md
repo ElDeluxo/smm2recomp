@@ -242,12 +242,24 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     overlay menu's Mods tab, "Check for updates" switch); `RECOMP_UPDATE_TAGS=v0.2.0` shows it offline
   - ✅ **Packages** (`make app-macos`, `make TARGET=... package`; each checked by `scripts/check_package.py`,
     which fails on anything from a dump - names, magics, the known ExeFS hashes, key lines, recompiled code):
-    macOS `.app` 319 MB → zip 96 MB (macOS 15+, ad hoc signed); Windows zip 113 MB (425 MB);
-    Linux x86-64 tar.gz LINUX64 ; Linux arm64 tar.gz LINUXARM
+    macOS `.app` 320 MB → zip 96 MB (macOS 15+, ad hoc signed); Windows zip 113 MB (425 MB);
+    Linux x86-64 tar.gz 113 MB (373 MB); Linux arm64 tar.gz 104 MB (341 MB). Runtime exes: macOS 2.6 MB, Windows 2.7 MB,
+    Linux 13.7 / 14.3 MB; the bulk is zig (241-308 MB unpacked) and Python (73-115 MB)
   - ✅ **Release workflow** `.github/workflows/release.yml`: only on `v*` tags; Windows + Linux cross-built in a
     Debian 13 container, macOS on a macOS runner, every package re-checked, attached to the release (a draft if
     none) - ⬜ not run yet (no tag)
-  - E2E_MAC
+  - ✅ **macOS end to end** (2026-10-19, the .app from `make app-macos`, a fresh data folder): the setup screen
+    filled in with the owner's extracted dump folders (keys and firmware found in Ryujinx's folder by the screen
+    itself, SMM1 dump given) → layout + v3.0.3 check (6 s; build ids and hashes match, RomFS 3,805 files) → fonts
+    and system data from the firmware with the bundled hactool (9 s) → recompile with the bundled Python + zig
+    (41 min, 8 jobs, the machine loaded by other agents) → the game in the same window → title screen
+    (seed 4, frame 2400, "Ver. 3.0.3"). No 32-hex value in any log. Captures (private):
+    `recomp/private/evidence/releases/` (setup screen, steps, progress, title). The first start of a freshly signed
+    .app waited ~5 min in dyld while macOS checked the bundle (once per build)
+  - 🔄 **Where this stands (2026-10-19, paused at the owner's call):** launcher flow ~90 % (NSP / XCI extraction
+    through the screen untested end to end: the owner's NSPs' metadata, tickets and versions read correctly with
+    the bundled hactool, the extraction itself not run - ~6 GB); packages ~90 % (all four build and pass the check;
+    none run on Windows / Linux); release workflow ~80 % (written, YAML checked, never run: needs a tag); docs ~95 %
   - ⬜ Windows / Linux packages not run on their systems yet; Linux AppImage (bundled SDL3); notarized macOS app
     (needs a Developer ID); Android / iOS stay build-it-yourself (iOS: a desktop build-sign-install helper)
 
