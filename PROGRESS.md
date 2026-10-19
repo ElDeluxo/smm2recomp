@@ -82,9 +82,11 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
   0.03 % > 48; forest poison 0.20 % / 0.05 %; deterministic in both runtimes, so a real difference: the lava surface
   draw, not yet found). Table and how: `recomp/docs/smm2-bringup.md` ("In-course frames"); evidence
   `recomp/private/smm2/evidence/frames-r3/` (side-by-sides, diff maps, tables; private)
-- 🔄 Audio vs Ryujinx (rough, 2026-10-19): each runtime's mixed output dumped and aligned: boot / logo audio matches
-  (levels within ~0.5 dB, the same silences); in a course the recomp is ~5 dB quieter and 8-12 dB quieter above
-  500 Hz. Suspect [inf]: the audio renderer ignores the game's splitters (96 of them), which route voices to mixes
+- ✅ Audio vs Ryujinx (rough check, 2026-10-19): each runtime's mixed output dumped and aligned. Boot / logo audio
+  matched; in a course the recomp was ~5 dB quieter (10 dB above 2 kHz) because voices sent through splitters were
+  dropped. Fixed (splitters, the AuxiliaryBuffer and BiquadFilter effects): the course's level now -27.5 dB against
+  Ryujinx's -27.6, every octave band within 0.6 dB, 70 sound onsets against 69 (not sample-aligned: audio runs on host
+  time)
 - ✅ Windows / Linux ports (2026-10-19): `make -C recomp TARGET=windows-x86_64 | linux-x86_64 | linux-aarch64 GAME=smm2
   DEPS=<deps> all package`, cross-built from macOS with zig; the SMM2 fixes ported to the Vulkan backend and the GLSL
   translator (conditional rendering, report values, buffer clears, cull-both skip, 3D target slices, first-render

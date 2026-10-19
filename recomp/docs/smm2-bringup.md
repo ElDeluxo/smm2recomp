@@ -311,6 +311,13 @@ Each runtime's mixed output dumped (recomp `LARECOMP_AUDIO_WAV`; Ryujinx's trace
 PCM before the host volume), the same session (the stock title course to the goal), aligned by the loudness envelope:
 - [obs] Boot and logo audio match: levels within ~0.5 dB per half second, the same silences, waveforms correlating up
   to 0.97 in places.
-- [obs] In the course the recomp is ~5 dB quieter overall and 8-12 dB quieter above 500 Hz.
-- [inf] Likely cause: the audio renderer ignores the game's splitters ("splitter section present (ignored)"; SMM2
-  sets up 96), so whatever reaches a mix through a splitter is lost. Next: implement splitter routing.
+- [obs] In the course the recomp was ~5 dB quieter overall and 8-12 dB quieter above 2 kHz: voices the game sends
+  through a splitter were dropped. The renderer ignored the splitter section, and a voice's "no mix" is 0x7FFFFFFF
+  (Ryujinx's `UnusedMixId`), not -1. Fixed (`runtime/services/audio.c`): splitter states and destinations parsed
+  (version 1 / 2), voices route channel c to destinations c, c + channels, ..., sub mixes buffer k % buffers to
+  destination k (both as Ryujinx's command generator does); the AuxiliaryBuffer and BiquadFilter effects SMM2 also
+  uses (mix 7, mix 4) are implemented too.
+- [obs] After the fix, over the 39 s of the course: overall level -27.5 dB against Ryujinx's -27.6, every octave band
+  from 62 Hz to 16 kHz within 0.6 dB, 70 loud onsets against 69, loudness envelopes correlating 0.76. Sound events
+  land at slightly different wall-clock times (audio runs on host time; loading and pacing differ), so the waveforms
+  don't line up sample for sample.
