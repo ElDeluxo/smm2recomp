@@ -39,7 +39,8 @@ HOST_MAGICS = {'Mach-O binary', 'Mach-O universal binary', 'Windows PE binary'}
 GAME_MAGICS = [m for m in cnp.MAGICS if m[2] not in HOST_MAGICS]
 HOST_EXTENSIONS = {'.exe', '.dll', '.so', '.dylib', '.a', '.lib', '.o', '.obj', '.pyd'}
 GAME_EXTENSIONS = (cnp.BLOCKED_EXTENSIONS - HOST_EXTENSIONS) | {'.bfttf', '.bfotf', '.cnmt', '.romfs', '.istorage'}
-KNOWN_SHA256 = {h: f'the v3.0.3 ExeFS file "{n}"' for n, h in versions.EXEFS_SHA256.items()}
+CERT_EXTENSIONS = {'.pem', '.key', '.crt', '.der', '.p12', '.pfx', '.csr'}
+KNOWN_SHA256 ={h: f'the v3.0.3 ExeFS file "{n}"' for n, h in versions.EXEFS_SHA256.items()}
 DATA_DIRS = {'extracted', 'exefs', 'romfs', 'sysdata', 'private', 'generated', 'mods-generated', '.gamebuild', 'save',
              'cache'}
 DATA_FILES = {'prod.keys', 'title.keys', 'dev.keys', 'setup.json', 'launcher.ini', 'larecomp.ini', 'smm2mods.ini',
@@ -69,7 +70,8 @@ def check_member(rel: str, size: int, read) -> list[str]:
         problems.append('the game code library built from a dump')
     if GEN_CHUNK.match(name) and not in_zig:
         problems.append('a recompiled game code chunk')
-    if suffix in GAME_EXTENSIONS:
+    if suffix in GAME_EXTENSIONS and not (suffix in CERT_EXTENSIONS and (in_zig or in_python)):
+        # (zig's and Python's own test certificates are theirs; a key or certificate anywhere else is not)
         problems.append(f'blocked file type {suffix}')
     if name.startswith('nintendo_') and suffix in {'.ttf', '.otf', '.bfttf'}:
         problems.append('a console font')
