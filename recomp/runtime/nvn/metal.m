@@ -1323,6 +1323,14 @@ void backend_present(NvnTexture *t) {
         save_png(b->tex, path);
         if (getenv("LARECOMP_EXIT_AFTER_SHOT")) { fflush(stderr); _exit(0); }
     }
+    {   // one capture of the presented frame at its own size, asked for by a game hook (games/smm2/trace.c
+        // RECOMP_TRACE_SHOT; the path names "frame_" so the visible crop applies)
+        extern char g_frame_shot_request[256];
+        if (g_frame_shot_request[0] && b && b->tex) {
+            save_png(b->tex, g_frame_shot_request);
+            g_frame_shot_request[0] = 0;
+        }
+    }
     {   // RECOMP_DUMP_TEX=<frame>: every live 2D texture of at least 64x64 that the GPU drew into, as it is after that
         // frame's present, to build/tex_<frame>_<n>.png (with its label in the log): the state of each render target
         static long dump_at = -2;

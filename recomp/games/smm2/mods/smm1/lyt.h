@@ -34,11 +34,15 @@ void lyt_sarc_close(LSarc *s);
 typedef struct {
     int w, h;
     uint8_t *px;  // RGBA8, straight alpha
+    bool srgb;    // colour channels sRGB-encoded (Cafe formats 20-23): decoded to linear when sampled
 } LTex;
 int lyt_tex_add(int w, int h, uint8_t *px);  // takes px
+void lyt_tex_srgb(int id);                   // mark a texture's colour as sRGB
 const LTex *lyt_tex(int id);                 // NULL for -1 / unknown
+static inline bool lyt_format_srgb(int cafe_fmt) { return cafe_fmt >= 20 && cafe_fmt <= 23; }
 // BFLIM -> RGBA8 (malloc'd), with the format's channel mapping (luminance / alpha formats replicate one channel).
 uint8_t *lyt_flim_decode(const uint8_t *d, size_t n, int *w, int *h);
+int lyt_flim_format(const uint8_t *d, size_t n);  // the BFLIM's Cafe format code, -1 if not a BFLIM
 // A GX2 surface (Cafe format code as in BFLIM, tile mode, swizzle word) -> RGBA8 with the raw channels (BC4/BC5: R / RG)
 uint8_t *lyt_surface_raw(const uint8_t *d, size_t n, uint32_t w, uint32_t h, int fmt, uint32_t mode, uint32_t swz);
 
@@ -98,6 +102,8 @@ typedef struct {
 typedef struct {
     char name[29];
     uint8_t black[4], white[4];
+    bool has_shadow;                         // the font shadow parameter: the shadow pass's own black / white
+    uint8_t shadow_black[4], shadow_white[4];
     int ntex, nsrt, ngen, ntev, nproj;
     LTexMap tex[3];
     LTexSrt srt[3];
@@ -242,6 +248,10 @@ typedef struct {
 #define LQ_WRAP_T1 6
 #define LQ_LINEAR (1u << 8)
 #define LQ_TRI (1u << 9)  // a triangle: corners TL, TR, BL (BR = TR + BL - TL); only the half s + t < 1 is drawn
+// a font sheet texel (one channel: 0 clear, 1/2 border, 1 fill): colour mix(black, white, 2a - 1), alpha 2a (the
+// border in the black colour), or with LQ_FONT_NOBORDER alpha 2a - 1 (the text box's invisible-border flag)
+#define LQ_FONT (1u << 10)
+#define LQ_FONT_NOBORDER (1u << 11)
 #define LQ_COMB_C 12  // 0 replace (tex1), 1 modulate, 2 add, 5 subtract, 15 none
 #define LQ_COMB_A 16
 #define LQ_BLEND_OP 20  // 0 off, 1 add, 2 subtract, 3 reverse subtract, 4 min, 5 max
@@ -270,6 +280,7 @@ bool lyt_clear_text(LInst *i, const char *pane_path);
 bool lyt_set_visible(LInst *i, const char *pane_path, int vis);  // 0 hide, 1 show, -1 back to the animations
 // Force a pane's translate (x, y) / alpha (0-255) over its animations (NULL / < 0: keep the animated value).
 bool lyt_set_pane(LInst *i, const char *pane_path, const float *xy, float alpha);
+bool lyt_set_pane_scale(LInst *i, const char *pane_path, const float *s);  // NULL: back to the animations
 // A pane's values after the bound animations (in its parent's space).
 typedef struct {
     float t[3], r[3], s[2], size[2], alpha;

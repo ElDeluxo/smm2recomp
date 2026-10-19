@@ -74,6 +74,19 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
   (not exactly alignable: Ryujinx grabs are wall-clock timed). Ryujinx against itself: 0.3-1.8 %.
   Evidence: `recomp/private/smm2/evidence/r1/final_*` (`_side_by_side.png`, `_diff.png`, `_recomp.png`; private,
   not in git)
+- 🔄 In-course frames vs Ryujinx, lockstep (2026-10-19): 90 reference courses (5 styles x 10 themes, night for the four
+  2D styles), the same game state in both runtimes (both freeze at the same player update, every `sead::Random`
+  seeded alike) and the presented frame captured raw at 1080p. **71 of 90 bit-identical** at update 900 (70 at 1200):
+  every SMB1, SMB3 and SMW course, day and night; NSMBU and 3D World within 20 pixels of +-1-4 levels, except NSMBU
+  underwater (3,706 px, <= 17 levels; 0.00 % > 24) and the 3D World liquid surfaces (castle lava 2.28 % > 24 /
+  0.03 % > 48; forest poison 0.20 % / 0.05 %; deterministic in both runtimes, so a real difference: the lava surface
+  draw, not yet found). Table and how: `recomp/docs/smm2-bringup.md` ("In-course frames"); evidence
+  `recomp/private/smm2/evidence/frames-r3/` (side-by-sides, diff maps, tables; private)
+- ✅ Audio vs Ryujinx (rough check, 2026-10-19): each runtime's mixed output dumped and aligned. Boot / logo audio
+  matched; in a course the recomp was ~5 dB quieter (10 dB above 2 kHz) because voices sent through splitters were
+  dropped. Fixed (splitters, the AuxiliaryBuffer and BiquadFilter effects): the course's level now -27.5 dB against
+  Ryujinx's -27.6, every octave band within 0.6 dB, 70 sound onsets against 69 (not sample-aligned: audio runs on host
+  time)
 - ✅ Windows / Linux ports (2026-10-19): `make -C recomp TARGET=windows-x86_64 | linux-x86_64 | linux-aarch64 GAME=smm2
   DEPS=<deps> all package`, cross-built from macOS with zig; the SMM2 fixes ported to the Vulkan backend and the GLSL
   translator (conditional rendering, report values, buffer clears, cull-both skip, 3D target slices, first-render
@@ -128,25 +141,34 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
       award worth several lives found in a test course (the cap is untested in play)
     - 🔄 SMM1 screens and the ending, host-drawn (`games/smm2/mods/smm1/`: SMCraft's SMM1 layout player
       ported to C, a CPU rasterizer drawn through the overlay on Metal and Vulkan; everything from the
-      player's SMM1 dump, generated into `mods-generated/smm1-ui-v4/`):
+      player's SMM1 dump, generated into `mods-generated/smm1-ui-v5/`):
       - ✅ difficulty select (tabs by unlock, Continue only with a record, OutR/OutL slides), world map
         demos as Block.rpx plays them (MapIn, Telop, the Goombas carrying Peach, AnimB, Mario's jump /
         walk / Go, the castle at the end, lives and n/total counters, A skips to Go), the start card (one
-        little Mario per life, AnimA/AnimB by case, held until the course starts, Out over it), pause,
-        clear, hold-to-skip countdown, the card after a miss, game over
+        little Mario per life, AnimA/AnimB by case, held until the course plays, Out over it; "Loading
+        courses..." while the server gathers them); between courses SMM2's own screens (course-in, pause,
+        skip, retry, clear and its Next / Like / Boo result), then SMM1's map and card after each clear
+        (`HUNDRED_NEXT` from the run side)
       - ✅ the ending from the binary: the rescue scene in the cleared course's style (SMB1, SMB3, SMW
         sprites; NSMBU's 3-D Mario posed with its walk), Peach (Toad on Easy), the Thank-you line by
-        difficulty, credits `Nwk_StaffCredit_01/00/03` with each course and maker, TO BE CONTINUED... /
-        END / THE END; nothing skips (as SMM1); a hook for the Mystery Mushroom reward
+        difficulty, the credits roll on SMM1's timing (`Nwk_StaffCredit_01/00/03`) with each cleared course
+        as SMM2's own course card (`Play_CourseIn_00` from the game's romfs: name banner, maker underneath,
+        no Mii), TO BE CONTINUED... / END / THE END; nothing skips (as SMM1); a hook for the Mystery
+        Mushroom reward
+      - ✅ checked against SMM1 itself in Cemu (owner's dump, private captures in
+        `evidence/cemu/`): colours composed in linear light into an sRGB frame as SMM1 does, font border
+        and shadow parameters, the balloon's place and dot pattern, the styles' skies, NSMBU Mario's yaw,
+        skinning, depth and lighting; NSMBU's 3-D sky is an approximation (fixed picture) [inf]
       - ✅ SMM1's music and sounds (Course World stream per difficulty with the beat bounce, the map
-        streams, the ending and staff-roll music, the screens' sound banks), the game's sound faded under
+        streams, the ending and staff-roll music incl. SMW's Toad tune, the screens' sound banks), the game's sound faded under
       - ✅ a whole Super Expert run against the local server, unattended: select → map → card → course →
         clear … (skips, misses) → the ending with the run's courses and makers in the credits → back on
         the select (`RECOMP_HUNDRED_AUTO`, `RECOMP_HUNDRED_SHOTS`; evidence in
         `recomp/private/smm2/evidence/e2e5_sx/`, private); pause, Save & Quit and Continue through the run side
-      - ⬜ a New Game straight after an ending (SMM2 isn't back on its Endless menu after a win: run side),
+      - ⬜ `HUNDRED_NEXT` from the run side (until then SMM1's map and card show only at the run's start),
         per-frame sound triggers (SLink database not decoded: sounds are placed by name [inf]), the
-        NSMBU ending's perspective camera, Cemu side-by-side (no Cemu installed)
+        NSMBU ending's perspective camera; 🔄 Cemu side-by-sides (Cemu runs the owner's SMM1 here, frames
+        captured; reaching the ending scene in progress)
   - 🔄 **Settings, one toggle per SMM1 feature** (overlay menu's Mods tab, kept in `smm2mods.ini`):
     ✅ "100 Mario Challenge (SMM1)" (on screen in the Mods tab: `evidence/mods/mods_tab.png`); ⬜ Mystery Mushroom costumes (model, sounds, physics
     swaps), mid-air shell jumps, overlapping (overlay) pipes, and more from research/specs/smm1-extras*
@@ -165,7 +187,7 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
 
 | Platform | Builds | Boots to title | Plays courses | Frames match Ryujinx | Input replays in sync |
 |---|---|---|---|---|---|
-| macOS (Apple Silicon, Metal) | ✅ | ✅ title rendered, 60 fps | ✅ title course to the goal, Course Maker test play | 🔄 title, 5 courses / 4 styles: 2.5-4.8 % px >24, 0.13-1.15 % >96 | ✅ 221,189 / 221,189 updates identical (31 sessions) |
+| macOS (Apple Silicon, Metal) | ✅ | ✅ title rendered, 60 fps | ✅ title course to the goal, Course Maker test play | 🔄 in course: 71 / 90 courses bit-identical (all SMB1/SMB3/SMW), the rest within 20 px except 3D World lava 2.28 % px >24 (title: 2.5-4.8 %) | ✅ 221,189 / 221,189 updates identical (31 sessions) |
 | Windows (x64, Vulkan) | ✅ cross-built with zig: exe 2.4 MB + game DLL 186 MB, needs SDL3.dll, libiconv-2.dll, libshaderc_shared.dll, vulkan-1.dll (driver); player zip 85 MB | ⬜ not run (no Windows machine) | ⬜ | ⬜ | ⬜ |
 | Linux arm64 (Vulkan) | ✅ cross-built with zig: exe 11.9 MB + game .so 688 MB, needs libSDL3.so.0, libvulkan.so.1, libshaderc.so.1, glibc 2.36; player zip 71 MB | ✅ title rendered (Debian 13 VM, Mesa lavapipe, ~7 fps); package first launch recompiled the game code from the dump (29 min) and booted | ⬜ | 🔄 seed 4 frame 2386 vs macOS same frame: 0.6 % px >24, 0.17 % >96 (Mario model missing on Vulkan); colour-managed vs Ryujinx 2.99 % >24, 0.24 % >96 (macOS 2.35 / 0.11) | ⬜ |
 | Linux x64 (Vulkan) | ✅ cross-built with zig: exe 11.3 MB + game .so 856 MB (generated/smm2-c, x86-64-v3), same libraries; player zip 74 MB | ⬜ not run | ⬜ | ⬜ | ⬜ |

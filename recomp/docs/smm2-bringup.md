@@ -259,3 +259,65 @@ Per-session tables (each test, frames compared, identical, first divergence): `p
 - [obs] A game title course in another slot than its own crashes on loading in both runtimes alike (recomp: a null
   read; Ryujinx: the emulator exits at the same point; see "Open issues"), so the title screen apparently expects
   each slot's own course [inf]; SMCraft's test courses load in any slot.
+
+## In-course frames against Ryujinx (lockstep, 2026-10-19)
+
+### Method
+
+- Courses: SMCraft's renderer reference courses (`mmk ref-courses`, full CLI on the `smcraft-archive` branch), one per
+  style x theme (ground, underground, castle, airship, water, ghost house, snow, desert, sky, forest) and night for the
+  four 2D styles: 90 courses with the same first screen (terrain shapes, seven block kinds, coins, a pipe, a penned
+  Goomba). [obs] As archived they all fell back to the blank course in both runtimes: their wrapper left the SARC data
+  where the game doesn't expect it (the trace courses' wrapper moves it to 0x100), and a sized Koopa placement makes the
+  game reject the course; both changed in a scratch build, outside the repository.
+- Same game state: each course is installed as all ten title courses; both runtimes run an idle script from the first
+  player update with every `sead::Random` seeded alike (`SMM2_SEED=4 SMM2_SEED_ALL=1`; Ryujinx: the IPS patch), and
+  at player update k the game waits 0.5 s and the next presented frame is captured (`RECOMP_TRACE_SHOT`; Ryujinx's
+  trace build `RYU_TRACE_SHOT`: the guest's presented texture). Raw RGB at 1920x1080 in both (`LARECOMP_SCALE=1`:
+  with the default "Match display" the recomp renders at the window's pixel size, 720p in a small window, and the
+  frames are then soft). Window-server grabs weren't possible (no screen-recording permission in the session) and
+  raw-against-raw is like for like without the display's colour management.
+- Checks: the capture is not off by a frame (the recomp's frames k-2..k+2 against Ryujinx's k: k is the closest by
+  far); both runtimes repeat themselves (Ryujinx three runs, the recomp five to twelve).
+
+### Results (updates 900 and 1200)
+
+| style | courses | bit-identical | within 20 px (+-1-4 levels) | more |
+|---|---|---|---|---|
+| SMB1 (M1) | 20 | 20 / 20 | - | - |
+| SMB3 (M3) | 20 | 20 / 20 | - | - |
+| SMW (MW) | 20 | 20 / 20 | - | - |
+| NSMBU (WU) | 20 | 8 / 9 | 10 / 9 | underwater 3,706 px (max 17 levels, 0.00 % > 24); underwater night ~300 px |
+| 3D World (3W) | 10 | 3 / 1 | 5 / 7 | castle lava 2.28 % > 24, 0.03 % > 48; forest poison 0.20 % / 0.05 % |
+| **all** | 90 | **71 / 70** | | |
+
+Per-course tables (pixels differing, > 24 / > 48 / > 96, mean), side-by-sides and diff maps:
+`private/smm2/evidence/frames-r3/`.
+
+- [obs] The 3D World liquids differ deterministically (both runtimes repeat themselves exactly), so it's a real
+  rendering difference. It is confined to the lava / poison surface: one draw (an uber shader with two scrolling
+  layers, a shadow-map compare and light probes), later bloomed and colour-graded like everything else (other 3D World
+  themes are exact through the same passes). Not: the sampler LOD bias (applying it, possible on Metal from macOS 26,
+  moves away from Ryujinx: MoltenVK evidently doesn't either), fast math (IEEE math moves away too), a capture
+  offset. Open [?].
+- [obs] Twice, on the first capture of a course, the recomp's twinkling stars / bubbles differed (WU snow night,
+  WU water); twelve later runs (idle, CPU-loaded, GPU-loaded next to Ryujinx, cold shader compiles) never repeated it.
+  Unknown [?]: watch for it.
+- The +-1-4 level differences in NSMBU / 3D World are rounding (a handful of pixels per frame).
+
+### Audio (rough)
+
+Each runtime's mixed output dumped (recomp `LARECOMP_AUDIO_WAV`; Ryujinx's trace build `RYU_AUDIO_WAV`, the renderer's
+PCM before the host volume), the same session (the stock title course to the goal), aligned by the loudness envelope:
+- [obs] Boot and logo audio match: levels within ~0.5 dB per half second, the same silences, waveforms correlating up
+  to 0.97 in places.
+- [obs] In the course the recomp was ~5 dB quieter overall and 8-12 dB quieter above 2 kHz: voices the game sends
+  through a splitter were dropped. The renderer ignored the splitter section, and a voice's "no mix" is 0x7FFFFFFF
+  (Ryujinx's `UnusedMixId`), not -1. Fixed (`runtime/services/audio.c`): splitter states and destinations parsed
+  (version 1 / 2), voices route channel c to destinations c, c + channels, ..., sub mixes buffer k % buffers to
+  destination k (both as Ryujinx's command generator does); the AuxiliaryBuffer and BiquadFilter effects SMM2 also
+  uses (mix 7, mix 4) are implemented too.
+- [obs] After the fix, over the 39 s of the course: overall level -27.5 dB against Ryujinx's -27.6, every octave band
+  from 62 Hz to 16 kHz within 0.6 dB, 70 loud onsets against 69, loudness envelopes correlating 0.76. Sound events
+  land at slightly different wall-clock times (audio runs on host time; loading and pacing differ), so the waveforms
+  don't line up sample for sample.

@@ -5,13 +5,14 @@
 // meta/meta.xml whose title id is Super Mario Maker's (US 1018DC00, EU 1018DD00, JP 1014B700) next to a content/
 // folder. The disc's base game (v16) and the update (v208, which has Super Expert) are overlaid, newer over older.
 //
-// At the first launch that needs them, the files are generated into <data folder>/mods-generated/smm1-ui-v4/:
+// At the first launch that needs them, the files are generated into <data folder>/mods-generated/smm1-ui-v5/:
 //   layout/<Name>.arc   every layout archive of Pack/{Layout,Nwk,NormalPlay,Lcl}.pack and the loose Layout/*.szs
 //                       (Yaz0 removed: SARC of blyt/ anim/ timg/)
 //   font/<Name>.bffnt   the bitmap fonts of Font/BmpFont_<region>.szs
 //   msg/<Layout>.msbt   the English layout texts (Message/LayoutMsg_<US|EU>en.szs), common/<Group>/<Name>.msbt
 //   model/<Name>.bfres  the ending scene's models from Pack/StaticSkin.pack: <Style>_Object_peach (Peach / Toad and
-//                       the ground), <Style>_Player_{Mario,SpMario}Mdl (Mario), Yaz0 and SARC removed
+//                       the ground), <Style>_Player_{Mario,SpMario}Mdl (Mario), Yaz0 and SARC removed; the
+//                       styles' sky distant views <Style>_DV_sky (Model/*.szs)
 //   sound/<Name>.bfstm  the screens' music (Sound/Resource/Stream), sound/<Name>.bars their sound effects
 // Nothing of it is in the repository; the folder is the player's own, like the rest of the data folder.
 #include "smm1_data.h"
@@ -26,7 +27,7 @@
 
 #include "lyt.h"
 
-#define CACHE "mods-generated/smm1-ui-v4"
+#define CACHE "mods-generated/smm1-ui-v5"
 #define LOGP "[smm1ui] "
 
 #ifdef _WIN32
@@ -298,6 +299,24 @@ static bool generate(void) {
             lyt_sarc_close(&ps);
         }
         free(pack);
+        // the styles' sky distant views (Model/<Style>_DV_sky.szs): what the rescue scene shows behind its ground
+        static const char *sky[4] = {"M1_DV_sky", "M3_DV_sky", "MW_DV_sky", "WU_DV_sky"};
+        for (int st = 0; st < 4; st++) {
+            char rel[128], out[128];
+            snprintf(rel, sizeof rel, "Model/%s.szs", sky[st]);
+            size_t zn, an;
+            uint8_t *z = dump_file(rel, &zn);
+            uint8_t *arc = z ? lyt_yaz0(z, zn, &an) : NULL;
+            LSarc inner;
+            if (arc && lyt_sarc_open(&inner, arc, an)) {
+                size_t bn;
+                const uint8_t *bf = lyt_sarc_get(&inner, "Output.bfres", &bn);
+                snprintf(out, sizeof out, "model/%s.bfres", sky[st]);
+                if (bf) put(out, bf, bn);
+                lyt_sarc_close(&inner);
+            }
+            free(arc), free(z);
+        }
     }
     // the screens' music and sound effects
     {
@@ -348,12 +367,40 @@ static bool generate(void) {
 }
 
 // ---------------------------------------------------------------- the loader the layout player uses
+// "nx:<Layout>": one of SMM2's own layouts, from the game's romfs (Layout/<Layout>.Nin_NX_NVN.szs: Yaz0, a SARC holding
+// <Layout>.arc)
+static uint8_t *ld_arc_nx(const char *name, size_t *n) {
+    char p[400];
+    snprintf(p, sizeof p, "extracted/romfs/Layout/%s.Nin_NX_NVN.szs", name);
+    size_t zn, an, in;
+    uint8_t *z = smm1_read_file(p, &zn);
+    uint8_t *arc = z ? lyt_yaz0(z, zn, &an) : NULL;
+    free(z);
+    LSarc s;
+    uint8_t *out = NULL;
+    if (arc && lyt_sarc_open(&s, arc, an)) {
+        char inner[160];
+        snprintf(inner, sizeof inner, "%s.arc", name);
+        const uint8_t *a = lyt_sarc_get(&s, inner, &in);
+        if (a) {
+            out = malloc(in);
+            memcpy(out, a, in);
+            *n = in;
+        }
+        lyt_sarc_close(&s);
+    }
+    free(arc);
+    if (!out) fprintf(stderr, LOGP "SMM2 layout %s not found at %s\n", name, p);
+    return out;
+}
 static uint8_t *ld_arc(const char *name, size_t *n) {
+    if (!strncmp(name, "nx:", 3)) return ld_arc_nx(name + 3, n);
     char p[300];
     snprintf(p, sizeof p, CACHE "/layout/%s.arc", name);
     return smm1_read_file(p, n);
 }
 static uint8_t *ld_msbt(const char *layout, size_t *n) {
+    if (!strncmp(layout, "nx:", 3)) return NULL;  // (SMM2's texts are set by the caller)
     char p[300];
     snprintf(p, sizeof p, CACHE "/msg/%s.msbt", layout);
     return smm1_read_file(p, n);

@@ -75,7 +75,13 @@ each on the game's own layout where it has one:
   records every server course from its start and hands over the cleared run), the server
   re-simulating it; refused, a plain `clear` with the time follows; with play options that change
   play (`Host::play_options_affect_play`) the clear goes without a time and no replay [inf].
-  Signed out: the anonymous clear report as before. 100 Mario in SMM2's presentation reports the
+  Signed out: the anonymous clear report as before.
+**Done:** each row is SMM2's own course card, `Play_CourseIn_00` read from the game's romfs at run
+time (the layout player now reads Switch BFLYT 8+/9 and BNTX textures with the runtime's Tegra
+deswizzle, BC and ASTC decoders), with the course name and maker set and the ID, flag, Mii and the
+card's other parts hidden. Each card sits where SMM1's row would be on that frame, scaled 0.6, so the
+roll keeps SMM1's timing, scroll and music. Its text uses SMM1's bitmap MessageFont: SMM2's message
+font is a scalable OpenType font from the console's system fonts, which the recomp does not ship. 100 Mario in SMM2's presentation reports the
   run's courses cleared after each clear (`endless`; the server keeps the best) [inf: as the run
   grows, so a run that ends any way counts].
 - **Input:** `FrontInput::text` (one typed key per tick: a character, '\u{8}' erase, '\n' done,
@@ -1349,7 +1355,7 @@ before.
 **What:** the host-drawn SMM1 screens (`recomp/games/smm2/mods/smm1/`): difficulty select, world map
 and walk, start card, pause / clear / skip / miss overlays, game over, and the ending (rescue scene,
 Thank-you line, staff credits), from the player's SMM1 dump (base v16 + update v208), generated at
-first use into `<data>/mods-generated/smm1-ui-v4/` (layouts, fonts, texts, the ending's models,
+first use into `<data>/mods-generated/smm1-ui-v5/` (layouts, fonts, texts, the ending's models,
 the screens' music and sound banks). Nothing of SMM1 is in the repository.
 
 **Port, not link (coordinator approved):** "reused rather than rewritten" above meant SMCraft's Rust
@@ -1393,8 +1399,13 @@ Course World music with one track per difficulty and the beat bounce timed from 
 - **When the course is fetched.** SMM1 downloads the next course while its map plays and starts it
   after the card. SMM2 starts a course as soon as it has it, so the flow asks the run side for it only
   once the card is up; the card holds until SMM2 reports the start, then plays its Out over the course.
-- **The clear screen and the card after a miss cover the game** (SMM1 draws them over the course):
-  SMM2's own result screen and retry card are underneath.
+- **Between courses the screens are SMM2's** (owner, 2026-10-19, entry below): SMM2's course-in,
+  pause, skip, miss / retry and Endless's clear with its Next / Like / Boo result screen. The flow's
+  SMM1 pause, clear, miss card, hold-to-skip and game over are no longer shown in a run (the code
+  stays in `screens.c`). After a clear, once the player leaves SMM2's result screen with Next
+  (`HUNDRED_NEXT`), the flow shows SMM1's map (Mario to the next dot) and the card, as SMM1 does
+  between courses, or the ending when the run is won. The card stays up until the course is playing,
+  which hides the load and SMM2's course-in.
 - **The fade to the card** is an iris on Mario as SMM1's fader type 7 does; its length is [inf].
 - **Sounds** are SMM1's own, placed by name on the events the binary fires (the SLink trigger table
   that pins each to a frame is not decoded) [inf].
@@ -1471,3 +1482,55 @@ Boo result screen. This narrows the earlier "SMM1's screens throughout" plan.
   away (as the build did) is wrong.
 - **Course loading** between the card and the course is noticeably slow (the screen visibly changes
   before the course appears); hide or shorten that wait.
+
+## 2026-10-19 — 100 Mario ending credits in SMM2's look (decided)
+
+**Owner (relayed by session mario-maker-c4), tentative:** "we won't have the Miis", so the SMM1-style
+credits (`Nwk_StaffCredit_*` rows with each maker's Mii face) will probably need to change to
+something more in line with SMM2's look. Not final: the SMM1 rescue scene and thank-you stay; only
+the credits roll is in question. Options put to the owner: keep SMM1's rows with another picture
+in the Mii slot; switch to an SMM2-style course list for the credits; or keep SMM1's rows with real
+Miis, if the course source supplies Mii data (TGRCode's course records carry the maker's Mii, which
+SMM2's own Mii renderer could draw). **Decided (owner, option 2):** the credits roll uses SMM2's look: each cleared course as SMM2's
+yellow course-name banner with the maker underneath, like the course card, and no Mii slot. The
+SMM1 rescue scene and Peach's thank-you stay SMM1; the roll ends on THE END / TO BE CONTINUED as
+before.
+
+## 2026-10-19 — 100 Mario gets its own Course World button; Endless stays exactly SMM2's
+
+**Owner:** separate menu entries. The **100 Mario Challenge** gets its own button in Course World,
+and SMM2's **Endless Challenge** button behaves exactly as in SMM2 (it no longer opens the 100 Mario
+select, and nothing relies on pressing B there). Replaces the interim "B on the SMM1 select leads to
+SMM2's Endless" route. The new button comes from a Course World layout overlay generated on the
+player's machine from their own dump, plus a hook on its press; both screens are checked on the
+iPad with the Mods tab.
+
+**Android:** the owner has no Android device; Android is tested on the emulator.
+
+## 2026-10-19 — Edit any course; Nextendo Network for multiplayer; one app-level settings page
+
+**Owner (relayed by mario-maker-c4):**
+1. **Edit any course, not just your own**, in SMM2's own Course Maker: Course World, Endless and 100
+   Mario courses alike, as SMM1 allowed for downloaded courses. Edit buttons go where SMM1 put its
+   edit option for a downloaded course, translated into SMM2's style (course detail page, after a
+   clear, …). The work is the entry points plus loading the downloaded course into the editor (a
+   Coursebot slot). **Re-uploading (owner chose):** an edited copy of someone else's course uploads as a new
+   course under the uploader's name, credited "based on <code> by <maker>".
+2. **Nextendo Network** (github.com/NextendoNetwork: community-run Switch online servers with a Go
+   NEX/PRUDP server, account/dauth/BAAS servers) **for multiplayer**, and possibly for Course World,
+   Endless and 100 Mario too. **TGRCode and our own server stay**: the online backend (Nextendo / our
+   server) and the course source (Nextendo / our server / TGRCode) are player settings. This widens
+   the earlier "our open-source server only" scope: community-run servers the player chooses are
+   allowed; Nintendo's own servers still never are. Whether Nextendo supports SMM2 is being checked
+   first.
+3. **Settings live at app level**: one settings page in the recomp app's own UI (grown from the
+   overlay menu's Mods tab), not a screen drawn in SMM2's style. It holds the online backend, the
+   course source and every SMM1 feature switch.
+
+## 2026-10-19 — 100 Mario's Course World button: try a real sixth button
+
+**Owner (asked directly in session mario-maker-76):** of the options (take Ninji Speedruns' slot,
+take the Super Worlds globe, or try a real sixth button), the owner chose **try a real sixth
+button** built into Course World's top menu page (`Nwk_Title_00`), with its own panes, update, draw
+and cursor navigation. If that proves unworkable, the fallback is Ninji Speedruns' slot, confirmed
+with the owner first.

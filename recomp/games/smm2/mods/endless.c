@@ -56,6 +56,7 @@ static struct {
     bool active;             // the server's run: can go on / lives / clears / goal (0: endless)
     uint32_t lives, clears, goal;
     uint64_t current;        // the course being (or about to be) played
+    uint64_t last_done;      // the last course cleared (its play result comes after)
     int ncredits;            // the run's cleared courses (for the ending's credits)
     int form;                // Mario at the last goal: 0 small, 1 big (the ending's Mario)
     struct hundred_credit credits[32];
@@ -624,6 +625,48 @@ WRAPPER(course_post, 0x14f2910) {
     finish(c, no, true, 0);
 }
 
+// The next course's file, fetched while the current one is played (the server's queue: the course after the one at
+// its head), so the next download is immediate.
+static pthread_mutex_t pf_lock = PTHREAD_MUTEX_INITIALIZER;
+static uint32_t pf_id;
+static uint8_t *pf_data;
+static size_t pf_len;
+
+static uint8_t *take_prefetched(uint32_t id, size_t *len) {
+    pthread_mutex_lock(&pf_lock);
+    uint8_t *d = NULL;
+    if (pf_data && pf_id == id) d = pf_data, *len = pf_len, pf_data = NULL, pf_id = 0;
+    pthread_mutex_unlock(&pf_lock);
+    return d;
+}
+
+static void *prefetch_data_thread(void *arg) {
+    int d = (int)(intptr_t)arg;
+    char path[96];
+    snprintf(path, sizeof path, "/api/endless/%s/next?count=2", DIFF[d]);
+    Json *j = next_courses(path);
+    Json *m = json_at(json_get(j, "courses"), 1);
+    uint32_t id;
+    if (m && code_to_data_id(json_str(json_get(m, "code"), ""), &id)) {
+        snprintf(path, sizeof path, "/api/courses/%s/data", json_str(json_get(m, "code"), ""));
+        size_t len = 0;
+        uint8_t *data = srv_get_bytes(path, &len);
+        pthread_mutex_lock(&pf_lock);
+        free(pf_data);
+        pf_data = data, pf_len = len, pf_id = data ? id : 0;
+        pthread_mutex_unlock(&pf_lock);
+        if (data) MLOG("next course's data fetched ahead: %s\n", json_str(json_get(m, "code"), ""));
+    }
+    json_free(j);
+    return NULL;
+}
+
+static void prefetch_data(uint32_t d) {
+    pthread_t th;
+    pthread_create(&th, NULL, prefetch_data_thread, (void *)(intptr_t)d);
+    pthread_detach(th);
+}
+
 // The course file the game expects: a 0x10-byte header {u32 1, u16 0x10, u16 0, u32 CRC32 of the course, "SCDL"},
 // the course (0x5bfc0 bytes) encrypted with the game's own course encryption (main+0x8b3070, AES-128-CBC with a key
 // from the game's key table, IV and CMAC in the 0x30-byte block that follows). Nothing of the key leaves the game.
@@ -651,7 +694,9 @@ WRAPPER(get_course_file, 0x14de010) {
     code_of(id, code);
     snprintf(path, sizeof path, "/api/courses/%s/data", code);
     size_t len = 0;
-    uint8_t *data = srv_get_bytes(path, &len);
+    uint8_t *data = take_prefetched((uint32_t)id, &len);
+    if (data) MLOG("course %s: prefetched\n", code);
+    else data = srv_get_bytes(path, &len);
     if (!data || len != COURSE_SIZE || !dest) {
         LOG("[mod] course %s: %s\n", code, data ? "not a course (size)" : "download failed");
         free(data);
@@ -708,6 +753,7 @@ WRAPPER(start_course, 0x14ecf30) {
         runs[d].current = id;
         pthread_mutex_unlock(&state_lock);
         bridge_event("start", d);
+        prefetch_data(d);
         LOG("[mod] course start %s (%s): lives %u\n", code, DIFF[d], lives_now(no, d));
         json_free(st);
         finish(c, no, ok, 2);
@@ -761,7 +807,7 @@ WRAPPER(clear_course, 0x14ed120) {
         bool complete = json_bool(json_get(j, "run_complete"), false);
         set_play(c, no, d, lives, clears);
         pthread_mutex_lock(&state_lock);
-        runs[d].coins += dcoins, runs[d].score += dscore, runs[d].started = 0;
+        runs[d].coins += dcoins, runs[d].score += dscore, runs[d].started = 0, runs[d].last_done = id;
         if (form >= 0) runs[d].form = form;
         add_credit(d, id);
         if (complete) runs[d].complete = true;
@@ -879,7 +925,7 @@ void endless_set_start_lives(uint8_t lives) {
 bool endless_has_course(uint64_t id) {  // world.c: is this course the one an Endless run is on
     pthread_mutex_lock(&state_lock);
     bool v = false;
-    for (int d = 0; d < 4; d++) v |= id && (runs[d].current == id || runs[d].started == id);
+    for (int d = 0; d < 4; d++) v |= id && (runs[d].current == id || runs[d].started == id || runs[d].last_done == id);
     pthread_mutex_unlock(&state_lock);
     return v;
 }
