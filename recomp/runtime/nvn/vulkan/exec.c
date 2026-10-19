@@ -293,6 +293,7 @@ void vk_full_barrier(VkCommandBuffer cb) {
     vkCmdPipelineBarrier2(cb, &di);
 }
 
+static const void *g_pass_last_prog;  // the program of the current pass's last draw (lavapipe_mrt_split)
 static void ring_retire(void);
 void vc_flush(void);
 
@@ -965,6 +966,39 @@ static void vk_end_pass_at(int line) {
             LOG("[probe] pass %d depth (%p) at %d,%d: %.9f\n", debug_pass_no, (void *)g_pass_depth, px, py, dv);
         }
     }
+    {   // LARECOMP_DEBUG_NAN_SCAN=1: the debug frame's B10G11R11 targets are scanned at each pass end for Inf / NaN texels
+        static int scan = -1;
+        if (scan < 0) scan = getenv("LARECOMP_DEBUG_NAN_SCAN") != NULL;
+        for (int i = 0; scan && g_debug_frame && i < g_pass_ncolor; i++) {
+            TexBackend *b = g_pass_color[i] ? (TexBackend *)g_pass_color[i]->backend : NULL;
+            if (!b || !b->image || b->format != VK_FORMAT_B10G11R11_UFLOAT_PACK32 || b->samples > 1) continue;
+            for (uint32_t lv = 0; lv < b->levels; lv++)
+                for (uint32_t ly = 0; ly < b->layers; ly++) {  // (every level and layer: cube faces, mips)
+                    uint32_t w = b->width >> lv ? b->width >> lv : 1, h = b->height >> lv ? b->height >> lv : 1;
+                    uint64_t n = (uint64_t)w * h;
+                    VkSpan out = vk_readback(n * 4);
+                    VkBufferImageCopy c = {.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, lv, ly, 1}, .imageExtent = {w, h, 1}};
+                    VkCommandBuffer cb = vk_cmd();
+                    vk_full_barrier(cb);
+                    vkCmdCopyImageToBuffer(cb, b->image, VK_IMAGE_LAYOUT_GENERAL, out.buf, 1, &c);
+                    renderer_flush();
+                    const uint32_t *px = out.ptr;
+                    uint64_t bad = 0;
+                    char first[256] = "";
+                    size_t fl = 0;
+                    for (uint64_t k = 0; k < n; k++) {
+                        uint32_t v = px[k];
+                        if (((v >> 6) & 31) == 31 || ((v >> 17) & 31) == 31 || ((v >> 27) & 31) == 31) {
+                            if (bad < 6) fl += (size_t)snprintf(first + fl, sizeof first - fl, " (%llu,%llu)=%08x", (unsigned long long)(k % w),
+                                                                (unsigned long long)(k / w), v);
+                            bad++;
+                        }
+                    }
+                    if (bad) LOG("[nan] target %d (%p %ux%u level %u layer %u): %llu non-finite texels:%s\n", i, (void *)g_pass_color[i],
+                                 w, h, lv, ly, (unsigned long long)bad, first);
+                }
+        }
+    }
     static int no_pass_png = -1;  // LARECOMP_DEBUG_NO_PASSES=1: the debug frame's log without its pass images
     if (no_pass_png < 0) no_pass_png = getenv("LARECOMP_DEBUG_NO_PASSES") != NULL;
     if (g_debug_frame && !no_pass_png && st.rt.ncolor && st.rt.color[0] && st.rt.color[0]->backend) {
@@ -999,6 +1033,7 @@ static void begin_pass(void) {
     st.rt_dirty = false;
     VkCommandBuffer cb = vk_cmd();
     vk_full_barrier(cb);  // passes, copies and dispatches see each other's results
+    g_pass_last_prog = NULL;
     {
         NvnTexture *t0n = st.rt.ncolor ? st.rt.color[0] : NULL;
         dl_note("pass %d color %ux%u fmt %#x depth %p", st.rt.ncolor, t0n ? t0n->width : 0, t0n ? t0n->height : 0, t0n ? t0n->format : 0,
@@ -1648,13 +1683,6 @@ static VkPrimitiveTopology topo_class_base(uint8_t c) {
     return c == 0 ? VK_PRIMITIVE_TOPOLOGY_POINT_LIST : c == 1 ? VK_PRIMITIVE_TOPOLOGY_LINE_LIST : VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
 }
 
-// The format can blend as a colour attachment (integer formats can't).
-static bool blendable(VkFormat f) {
-    VkFormatProperties p;
-    vkGetPhysicalDeviceFormatProperties(g_vk.phys, f, &p);
-    return (p.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT) != 0;
-}
-
 static void build_pipeline(void *arg) {
     Pipe *pp = arg;
     PipeKey *k = &pp->k;
@@ -1699,14 +1727,6 @@ static void build_pipeline(void *arg) {
             cba[i].dstAlphaBlendFactor = blend_factor(b[4]);
             cba[i].colorBlendOp = blend_op(b[5]);
             cba[i].alphaBlendOp = blend_op(b[6]);
-        } else if (k->blend_on && k->color[i] != VK_FORMAT_UNDEFINED && blendable(k->color[i])) {
-            // A target without blending next to one with it: blending as a plain write (ONE, ZERO) instead of off.
-            // Mesa's lavapipe blended such a target with the other's factors: SMM2's character layer pass writes
-            // its mask to target 1 with alpha 0, which then never landed, and the composite dropped Mario.
-            cba[i].blendEnable = VK_TRUE;
-            cba[i].srcColorBlendFactor = cba[i].srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-            cba[i].dstColorBlendFactor = cba[i].dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
-            cba[i].colorBlendOp = cba[i].alphaBlendOp = VK_BLEND_OP_ADD;
         }
     }
     VkPipelineColorBlendStateCreateInfo cb = {.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
@@ -2036,10 +2056,8 @@ static void resolve_feedback(Prog *pr) {
             if (g_debug_frame && (src->aspect & VK_IMAGE_ASPECT_DEPTH_BIT)) {
                 static int nd;
                 char path[128];
-                snprintf(path, sizeof path, "build/fbdepth_%03d_src.pgm", nd);
-                debug_save_depth(src, path);
-                snprintf(path, sizeof path, "build/fbdepth_%03d_snap.pgm", nd++);
-                debug_save_depth(dst, path);
+                snprintf(path, sizeof path, "build/fbdepth_%03d_src.pgm", nd++);  // (the snapshot can't be read back: no
+                debug_save_depth(src, path);                                    //  transfer-source usage)
                 cb = vk_cmd();
             }
             feedback_tex[nfeedback] = t;
@@ -2553,6 +2571,10 @@ static void texture_info(int stage, ShaderInfo *si, int i, VkDescriptorImageInfo
                 memo[ms].tex = e->tex; memo[ms].vh = vh; memo[ms].frame = frame; memo[ms].gen = vk_view_gen;
                 memo[ms].type = (uint8_t)st_->type; memo[ms].has_view = e->has_view; memo[ms].view = view;
             }
+            if (st_->shadow && st_->type == TEXTYPE_2D) {  // (a colour texture compared: through a depth copy, textures.c)
+                VkImageView sv = vk_shadow_view(naliases ? alias_read(e->tex) : e->tex);
+                if (sv) view = sv;
+            }
             renderer_texture_scale(e->tex, &sc[0], &sc[1]);
             wh[0] = e->tex->width; wh[1] = e->tex->height;
             for (int k = 0; k < nfeedback; k++)
@@ -2782,6 +2804,32 @@ static bool topology(uint32_t mode, VkPrimitiveTopology *t, uint8_t *cls) {
     }
 }
 
+// Mesa's lavapipe (llvmpipe, Mesa 25.0): in a pass with several colour targets, some blended and some not, a draw that
+// follows another program's draws in the same command buffer can leave its unblended targets unwritten. SMM2's
+// character layer pass (3D World title): Mario's draw kept target 0 (blended colour) but not target 1 (the RG16F depth
+// mask, not blended), so the composite discarded him. Nothing is invalid there (validation layers: silent), the barrier
+// before each pass is a full one in GENERAL layout, and the target is written when that draw starts a new command
+// buffer. So, on lavapipe only, such a draw goes into a new submission. LARECOMP_VK_MRT_SPLIT=0 / 1: never / any driver.
+static void lavapipe_mrt_split(Prog *pr) {
+    static int on = -1;
+    if (on < 0) {
+        const char *e = getenv("LARECOMP_VK_MRT_SPLIT");
+        on = e ? atoi(e) : strstr(g_vk.props.deviceName, "llvmpipe") != NULL;
+        if (on) LOG("[vk] draws into mixed-blend multi-target passes start a new submission (lavapipe)\n");
+    }
+    if (!on || !in_pass || st.rt_dirty || st.rt.ncolor < 2 || !g_pass_last_prog || g_pass_last_prog == pr) return;
+    uint32_t used = 0, blended = 0;
+    for (int i = 0; i < st.rt.ncolor && i < 8; i++) {
+        if (!st.rt.color[i] || !((st.channel_mask >> (i * 4)) & 0xF)) continue;
+        used |= 1u << i;
+        if ((st.color_state[0] >> i) & 1) blended |= 1u << i;
+    }
+    if (!blended || blended == used) return;
+    vk_end_pass();
+    renderer_submit();
+    st.rt_dirty = true;
+}
+
 static void draw_(CmdRec *r, bool indexed);
 static void draw(CmdRec *r, bool indexed) {
     PROF_T0();
@@ -2856,7 +2904,9 @@ static void draw_(CmdRec *r, bool indexed) {
     snap_reason = "draw-colorwrite";
     for (int i = 0; i < st.rt.ncolor; i++)
         if (st.rt.color[i] && ((st.channel_mask >> (i * 4)) & 0xF)) snapshots_invalidate(st.rt.color[i]);
+    lavapipe_mrt_split(pr);
     begin_pass();
+    if (in_pass) g_pass_last_prog = pr;
     VkCommandBuffer cb = vk_cmd();
 
     uint32_t mode = (uint32_t)r->x[0];

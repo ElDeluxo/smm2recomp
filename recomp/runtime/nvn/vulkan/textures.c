@@ -834,6 +834,62 @@ VkImageView vk_view(NvnTexture *t, const NvnTextureView *v, bool has_view, bool 
     return vk_dummy_view(want_textype);
 }
 
+// A colour texture sampled with depth comparison (a shadow sampler): Vulkan compares only in depth formats, the Switch
+// compares the red channel of anything. SMM2 binds a 4x4 R32_FLOAT "DepthShadow" where there's no shadow map (and the
+// validation layers flagged it: VUID-vkCmdDrawIndexed-None-06479). Such a 2D texture is sampled through a depth copy
+// (R32_SFLOAT -> D32_SFLOAT, R16_UNORM -> D16_UNORM, level 0), copied image -> buffer -> image in the submission's
+// upload commands, once per submission: what the GPU drew into it earlier in the same submission is a submission late.
+// NULL: not such a texture (the caller keeps its view).
+VkImageView vk_shadow_view(NvnTexture *t) {
+    TexBackend *b = t ? t->backend : NULL;  // (the sampled view made it: vk_view ran vk_tex just before)
+    if (!b || !b->image || (b->aspect & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) || b->samples > 1) return VK_NULL_HANDLE;
+    VkFormat df = b->format == VK_FORMAT_R32_SFLOAT ? VK_FORMAT_D32_SFLOAT : b->format == VK_FORMAT_R16_UNORM ? VK_FORMAT_D16_UNORM
+                                                                                                           : VK_FORMAT_UNDEFINED;
+    if (df == VK_FORMAT_UNDEFINED) return VK_NULL_HANDLE;
+    enum { NSHADOW = 16 };
+    static struct { TexBackend *src; VkImage srcimg; TexBackend d; uint64_t seq; } tab[NSHADOW];
+    static int rr;
+    int k = -1;
+    for (int i = 0; i < NSHADOW; i++)
+        if (tab[i].src == b && tab[i].srcimg == b->image && tab[i].d.width == b->width && tab[i].d.height == b->height) k = i;
+    if (k < 0) {  // a new one (the oldest goes: its last submission may still read it)
+        k = rr++ % NSHADOW;
+        if (tab[k].d.image) vk_defer_image(tab[k].d.image, tab[k].d.mem);
+        memset(&tab[k], 0, sizeof tab[k]);
+        VkImageCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D, .format = df,
+                                .extent = {b->width, b->height, 1}, .mipLevels = 1, .arrayLayers = 1, .samples = VK_SAMPLE_COUNT_1_BIT,
+                                .tiling = VK_IMAGE_TILING_OPTIMAL, .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                                .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED};
+        VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
+        if (vmaCreateImage(g_vk.vma, &ci, &ai, &tab[k].d.image, &tab[k].d.mem, NULL) != VK_SUCCESS) {
+            memset(&tab[k], 0, sizeof tab[k]);
+            return VK_NULL_HANDLE;
+        }
+        tab[k].src = b, tab[k].srcimg = b->image;
+        tab[k].d.format = df, tab[k].d.width = b->width, tab[k].d.height = b->height, tab[k].d.depth = 1;
+        tab[k].d.layers = tab[k].d.levels = tab[k].d.samples = 1;
+        tab[k].d.aspect = VK_IMAGE_ASPECT_DEPTH_BIT, tab[k].d.base_type = VK_IMAGE_VIEW_TYPE_2D;
+        vk_image_init_layout(vk_upload_cmd(), tab[k].d.image, VK_IMAGE_ASPECT_DEPTH_BIT);
+        LOG("[vk] %ux%u colour texture sampled with depth comparison: through a depth copy (format %d -> %d)\n", b->width,
+            b->height, b->format, df);
+    }
+    if (tab[k].seq != vk_pending_seq()) {
+        tab[k].seq = vk_pending_seq();
+        uint32_t bpp = df == VK_FORMAT_D32_SFLOAT ? 4 : 2;
+        VkSpan buf = vk_transient((uint64_t)b->width * b->height * bpp, 16);
+        VkCommandBuffer cb = vk_upload_cmd();
+        VkBufferImageCopy c = {.bufferOffset = buf.off, .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                               .imageExtent = {b->width, b->height, 1}};
+        vkCmdCopyImageToBuffer(cb, b->image, VK_IMAGE_LAYOUT_GENERAL, buf.buf, 1, &c);
+        vk_full_barrier(cb);
+        c.imageSubresource.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+        vkCmdCopyBufferToImage(cb, buf.buf, tab[k].d.image, VK_IMAGE_LAYOUT_GENERAL, 1, &c);
+        vk_full_barrier(cb);
+    }
+    static const VkComponentMapping id = {0};
+    return vk_image_view(&tab[k].d, VK_IMAGE_VIEW_TYPE_2D, df, 0, 1, 0, 1, id, VK_IMAGE_ASPECT_DEPTH_BIT);
+}
+
 // 1x1 black textures for unbound slots, per type
 VkImageView vk_dummy_view(int textype) {
     static TexBackend dummies[10];
