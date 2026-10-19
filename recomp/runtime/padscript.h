@@ -23,3 +23,10 @@ int64_t padscript_pos(void);          // script frames applied so far (from the 
 int64_t padscript_len(void);          // script frames in all
 bool padscript_done(void);            // every frame applied
 int padscript_parse_button(const char *name, uint64_t *bit);  // 0 if not a button name
+// The presented-frame clock (RECOMP_PAD_CLOCK=frame): padscript_frame() each present; RECOMP_PAD_ORIGIN=player starts it
+// at the first player update (padscript_origin(), from the game's hook). padscript_frames(): presents since then (-1:
+// not yet). RECOMP_FRAME_SHOT="k1,k2,..." saves the presented frame k after the origin to
+// <RECOMP_TRACE_SHOT_DIR>/recomp_frame_f<k>.png (menus and other screens without a player, in lockstep with Ryujinx).
+void padscript_origin(void);
+void padscript_frame(void);
+int64_t padscript_frames(void);

@@ -401,7 +401,24 @@ void input_frame(uint64_t frame) {
     extern void watch_arm(void);
     watch_arm();
     host_test_frame(frame);
-    if (padscript_active() && !padscript_game_clock()) padscript_tick();  // RECOMP_PAD_CLOCK=frame
+    padscript_frame();  // the presented-frame clock (RECOMP_PAD_CLOCK=frame, RECOMP_FRAME_SHOT)
+    {
+        static const char *fs;
+        static int init;
+        if (!init) { init = 1; fs = getenv("RECOMP_FRAME_SHOT"); }
+        int64_t k = padscript_frames();
+        for (const char *p = fs; p && *p && k >= 0;) {
+            char *end;
+            long long v = strtoll(p, &end, 0);
+            if (end == p) break;
+            if (v == k) {
+                extern char g_frame_shot_request[256];
+                const char *dir = getenv("RECOMP_TRACE_SHOT_DIR");
+                snprintf(g_frame_shot_request, sizeof g_frame_shot_request, "%s/recomp_frame_f%lld.png", dir ? dir : "build", v);
+            }
+            p = *end ? end + 1 : end;
+        }
+    }
     // (without a script the game's own presses below, g_test_buttons from a mod, still apply: e.g. the 100 Mario
     // mod driving SMM2's hidden Endless menu for a real player)
     const char *spec = getenv("LARECOMP_INPUT");

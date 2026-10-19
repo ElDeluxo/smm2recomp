@@ -50,6 +50,8 @@ BLOCKED_EXTENSIONS = {
     ".7z", ".rar",
     # native binaries and translated shaders: the recomp generates these locally from the dump
     ".elf", ".o", ".obj", ".a", ".lib", ".so", ".dylib", ".dll", ".exe", ".spv", ".nss", ".kip",
+    # the Metal back-end's shader / pipeline cache (the game's shaders, translated and compiled: data folder cache/)
+    ".metal", ".metallib", ".air",
     # app packages built from the dump (they carry its recompiled code) and their signing keys
     ".apk", ".aab", ".dex", ".ipa", ".keystore", ".jks",
 }
@@ -89,6 +91,8 @@ MAGICS = [
     (0, b"\xca\xfe\xba\xbe", "Mach-O universal binary"),
     (0, b"MZ", "Windows PE binary"),
     (0, b"\x03\x02\x23\x07", "SPIR-V shader"),
+    (0, b"MTLB", "Metal library (compiled shaders)"),
+    (0, b"\xcb\xfe\xba\xbe", "Metal binary archive (compiled pipelines)"),
     # per-frame player traces (recomp games/smm2/trace.c, the Ryujinx trace build): snapshots of game memory
     (0, b"TRC1", "player state trace (game memory)"),
 ]

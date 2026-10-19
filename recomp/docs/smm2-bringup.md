@@ -362,3 +362,46 @@ PCM before the host volume), the same session (the stock title course to the goa
   from 62 Hz to 16 kHz within 0.6 dB, 70 loud onsets against 69, loudness envelopes correlating 0.76. Sound events
   land at slightly different wall-clock times (audio runs on host time; loading and pacing differ), so the waveforms
   don't line up sample for sample.
+
+### Where the frame work stands (paused 2026-10-19)
+
+- Sampler border colours are now honoured (`renderer.m` `sampler_for`): 3D World castle lava 2.28 % -> 0.22 % px
+  >24. Depth clamp (`nvnCommandBufferSetDepthClamp`) is recorded and applied (SMM2 leaves it off; Vulkan ignores it).
+  The 90-course recheck with both stopped after 23 courses (all still identical): resume from M1_sky_night.
+- Left: 3D World forest (0.20 %: glint quads on the poison water, an effect draw [inf]), NSMBU underwater (+-1-2
+  levels, rounding [inf]).
+- Menus in lockstep: a presented-frame clock from the first player update on both sides (`RECOMP_PAD_CLOCK=frame
+  RECOMP_PAD_ORIGIN=player`, `RECOMP_FRAME_SHOT=k1,k2,...`; the Ryujinx trace build's `RYU_TRACE_FRAMECLOCK=1
+  RYU_TRACE_FRAMESHOT`). Built, not yet run against Ryujinx.
+
+## First-use shader compiles: the Metal shader caches (2026-10-19)
+
+iPad build 24 stalled 3.5 s on the first use of a compute program, and every first draw with a new program waited
+for its compile. Measured on macOS (M4 Pro, a heavily loaded machine: absolute times are noisy): the stock title
+course to presented frame 2750 (both compute programs included), with `LARECOMP_SHADER_SALT` so that Metal's own
+cache misses:
+
+| Run | Compile time | Worst 2 s window of compiles | Compute programs built in |
+|---|---|---|---|
+| cold (nothing cached) | 55-64 s | 22-28 s | 290-455 ms each |
+| precompiled shaders, no pipeline cache yet | 21-34 s (back-end only) | 3.6-15.7 s | 540-850 ms |
+| precompiled shaders + pipeline cache (steady state) | 3.1 s | 0.6 s | 3-5 ms, from the cache |
+
+- [obs] The front-end (MSL to AIR, `newLibraryWithSource`) was most of the cost (~70 of ~85 s in one cold run),
+  pipeline creation (AIR to GPU code) the rest.
+- [obs] Metal's own on-disk cache can't be relied on: it's shared by every process and size-limited, and a "second
+  launch" an hour of other compiles later was fully cold again (138 s). An app update may clear it too [?].
+- Three layers now, all in the data folder's `cache/` (Documents on iOS, which an app update keeps):
+  `cache/shaders/` (the translated MSL, as before; warmed in the background at start-up unless precompiled);
+  `cache/metallib/` and `metallib/` (precompiled with `tools/precompile_shaders.sh`, Metal's offline compiler, so
+  Mac only: `make_ios_app.sh` precompiles `RECOMP_IOS_DATA`'s shaders, plus `RECOMP_IOS_SHADERS` folders, into the
+  app); `cache/pipelines/NNNN.bin` (Metal binary archives of the pipelines built, written from a background queue).
+- [obs] Saving an archive again after adding to it (or after loading it) failed now and then on macOS 27 ("Failed to
+  generate machO ... expecting 'fragment' stage in pipeline no. N") and emptied it, while the same pipelines saved
+  fine from a fresh archive: each save is a new write-once file.
+- [obs] An archive serves only pipelines built from the same AIR: archives made with precompiled shaders don't serve
+  source-compiled ones (0 hits), and the other way round.
+- The VS and FS libraries compile side by side; entry points are named `v_/f_/c_<hash>` instead of `main0`.
+
+Left: archive files accumulate (26 after many test runs, 1.6 s to load): merge them now and then. iPad numbers still
+to be measured; the `[shader] slow program` and `[compute] program ... built in` log lines show what's left there.
