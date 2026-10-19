@@ -11,6 +11,7 @@
 // Written once, by the mods' shared RomFS overlay (mods/romfs_overlay.h: generator "costumes"), as Pack/M1_Model.pack
 // (the original pack's files plus Model/M1_Player_Chara_<res>{,_2,_3,_4}.Nin_NX_NVN.zs, one data blob under four
 // names), which replaces the game's. The .zs files are zstd frames of raw blocks (no compressor needed).
+#define _XOPEN_SOURCE 700  // (glibc: nftw and FTW_* are X/Open)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
