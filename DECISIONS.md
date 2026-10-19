@@ -1349,7 +1349,7 @@ before.
 **What:** the host-drawn SMM1 screens (`recomp/games/smm2/mods/smm1/`): difficulty select, world map
 and walk, start card, pause / clear / skip / miss overlays, game over, and the ending (rescue scene,
 Thank-you line, staff credits), from the player's SMM1 dump (base v16 + update v208), generated at
-first use into `<data>/mods-generated/smm1-ui-v4/` (layouts, fonts, texts, the ending's models,
+first use into `<data>/mods-generated/smm1-ui-v5/` (layouts, fonts, texts, the ending's models,
 the screens' music and sound banks). Nothing of SMM1 is in the repository.
 
 **Port, not link (coordinator approved):** "reused rather than rewritten" above meant SMCraft's Rust
@@ -1393,8 +1393,13 @@ Course World music with one track per difficulty and the beat bounce timed from 
 - **When the course is fetched.** SMM1 downloads the next course while its map plays and starts it
   after the card. SMM2 starts a course as soon as it has it, so the flow asks the run side for it only
   once the card is up; the card holds until SMM2 reports the start, then plays its Out over the course.
-- **The clear screen and the card after a miss cover the game** (SMM1 draws them over the course):
-  SMM2's own result screen and retry card are underneath.
+- **Between courses the screens are SMM2's** (owner, 2026-10-19, entry below): SMM2's course-in,
+  pause, skip, miss / retry and Endless's clear with its Next / Like / Boo result screen. The flow's
+  SMM1 pause, clear, miss card, hold-to-skip and game over are no longer shown in a run (the code
+  stays in `screens.c`). After a clear, once the player leaves SMM2's result screen with Next
+  (`HUNDRED_NEXT`), the flow shows SMM1's map (Mario to the next dot) and the card, as SMM1 does
+  between courses, or the ending when the run is won. The card stays up until the course is playing,
+  which hides the load and SMM2's course-in.
 - **The fade to the card** is an iris on Mario as SMM1's fader type 7 does; its length is [inf].
 - **Sounds** are SMM1's own, placed by name on the events the binary fires (the SLink trigger table
   that pins each to a frame is not decoded) [inf].

@@ -2,15 +2,16 @@
 //
 // SMM1's screens are drawn by the layout player into one 1280 x 720 RGBA image per frame (lyt_raster, on a worker
 // thread so the present never waits for it); the renderers put it over the game's frame (runtime/ui/menu.mm,
-// game_overlay_image): full screen (the game's frame hidden) for the difficulty select, the map and card, game over
-// and the ending; over the course for pause, clear, skip and the card after a miss. While a screen takes input the
-// game gets none (runtime/hle/input.c, game_overlay_captured).
+// game_overlay_image), full screen (the game's frame hidden): the difficulty select, the map and card at the run's
+// start and after each clear, and the ending. In between, SMM2's own screens show (course-in, pause, skip, miss /
+// retry, the clear and its result screen). While a screen takes input the game gets none (runtime/hle/input.c,
+// game_overlay_captured).
 //
 // The flow ticks once per presented frame (60 Hz). The mod's calls (game threads) are queued and handled at the
 // next tick.
 //
 // Tests: RECOMP_HUNDRED_FLOW_TEST=<screen>[@<frame>] opens a screen with a made-up run when the mod isn't there
-// (select, newgame:<d>, resume:<d>:<cleared>, afterclear:<d>:<cleared>, card, pause, clear[:last], miss, skip,
+// (select, newgame:<d>, resume:<d>:<cleared>, afterclear:<d>:<cleared>, card, clear[:last] (the clear, then Next),
 // gameover, ending:<d>[:<courses>]); tools/test_smm1ui --flow renders the same without the game.
 #include <math.h>
 #include <pthread.h>
@@ -101,7 +102,7 @@ static struct {
     Overlay ov;
     struct hundred_status st;
     unsigned prev;
-    int skip_hold, skip_until, clear_act_at, intro_ticks, peek, last_hb, koopa_next;
+    int intro_ticks, peek, last_hb, koopa_next;
     char test[64];
     long test_at;
 } F;
@@ -118,6 +119,7 @@ static CardInfo card_info(void) {
     memset(&c, 0, sizeof c);
     snprintf(c.name, sizeof c.name, "%s", F.st.current.name);
     snprintf(c.maker, sizeof c.maker, "%s", F.st.current.maker);
+    if (F.st.loading && !c.name[0]) snprintf(c.name, sizeof c.name, "Loading courses...");  // (the server is gathering them)
     snprintf(c.code, sizeof c.code, "%s", F.st.current_code);
     c.lives = shown_lives(), c.number = F.st.cleared + 1, c.total = F.st.total ? F.st.total : RUN_LENGTHS[F.d];
     return c;
@@ -235,35 +237,30 @@ static void beats(void) {
     }
 }
 
+// Between courses the screens are SMM2's own (owner, 2026-10-19: course-in, pause, skip, miss / retry, Endless's clear
+// sequence and its Next / Like / Boo result screen); SMM1's come back after a clear, once the player has left the
+// result screen with Next: the map (Mario to the next dot) and the card, as SMM1 has them between courses, or the
+// ending when the run is won.
 static void on_result(int outcome) {
     status();
     switch (outcome) {
-    case HUNDRED_CLEAR:
+    case HUNDRED_CLEAR:  // SMM2's clear sequence and result screen show: nothing of ours
+    case HUNDRED_SKIP:   // SMM2's skip: it starts the next course by itself
         F.state = S_PLAYING;
-        ov_show_clear(&F.ov, F.st.credits[F.st.ncredits > 0 ? F.st.ncredits - 1 : 0].name,
-                      F.st.credits[F.st.ncredits > 0 ? F.st.ncredits - 1 : 0].maker, F.st.cleared >= F.st.total);
-        F.clear_act_at = -1;
-        {
-            static const int t[] = {150};
-            static const char *w[] = {"clear"};
-            shots_at(1, t, w);
-        }
         break;
-    case HUNDRED_MISS:
-        if (F.st.lives > 0) {
-            CardInfo c = card_info();
-            F.state = S_PLAYING;
-            ov_show_card(&F.ov, &c);  // (SMM2 retries the course by itself)
-        } else {
+    case HUNDRED_NEXT:
+        if (F.st.cleared >= (F.st.total ? F.st.total : RUN_LENGTHS[F.d])) to_ending(F.d, F.st.lives, F.st.ncredits, F.st.credits);
+        else to_intro(ENTRY_AFTER_CLEAR);
+        break;
+    case HUNDRED_MISS:  // SMM2's retry; with no life left, SMM2's game over, then its Endless menu reopens the select
+        if (F.st.lives > 0) F.state = S_PLAYING;
+        else {
             close_scenes();
             ov_hide(&F.ov);
-            F.go = gameover_new();
-            F.state = F.go ? S_GAMEOVER : S_CLOSED;
+            F.state = S_CLOSED;
+            smm1_bgm(NULL, false);
             hundred_run_finish();
         }
-        break;
-    case HUNDRED_SKIP:  // the next course's card; SMM2 starts that course by itself
-        to_intro(ENTRY_DIRECT);
         break;
     case HUNDRED_GIVEUP_SAVE:
     case HUNDRED_ERROR:
@@ -282,15 +279,9 @@ static void handle_queue(void) {
         case Q_OPEN:
             if (F.state == S_CLOSED && open_data()) F.ending_only = false, to_select();
             break;
-        case Q_PAUSE:
-            if (F.state == S_PLAYING && F.ov.mode == OV_NONE) {
-                status();
-                ov_show_pause(&F.ov, F.st.cleared, F.st.total, F.st.current.name, F.st.current.maker);
-            }
-            break;
+        case Q_PAUSE: break;  // (SMM2's own pause)
         case Q_STARTED:
             if (F.state == S_INTRO && F.intro) intro_started(F.intro);  // (the card goes: Out over the course)
-            else if (F.state == S_PLAYING && F.ov.mode == OV_CARD) ov_card_started(&F.ov);  // (the retry: OutMiss)
             break;
         case Q_RESULT:
             if (F.state == S_PLAYING || F.state == S_INTRO) on_result(q[i][1]);
@@ -318,69 +309,10 @@ static void fake_tick(void) {
         fake.playing = 2;
         const char *o = getenv("RECOMP_HUNDRED_FAKE_OUTCOME");
         if (o && !strcmp(o, "miss")) { fake.lives--; post(Q_RESULT, HUNDRED_MISS); fake.playing = 1, fake.play_tick = 0; }
-        else { fake.cleared++; post(Q_RESULT, HUNDRED_CLEAR); }
+        else { fake.cleared++; post(Q_RESULT, HUNDRED_CLEAR); post(Q_RESULT, HUNDRED_NEXT); }
     }
     if (fake.playing == 3 && fake.play_tick == 2) { fake.cleared++; post(Q_RESULT, HUNDRED_SKIP); fake.playing = 1, fake.play_tick = 0; }
     if (fake.playing == 4 && fake.play_tick == 2) post(Q_RESULT, HUNDRED_GIVEUP_SAVE);
-}
-
-static void step_playing(const UiIn *in) {
-    Overlay *o = &F.ov;
-    if (o->mode == OV_PAUSE) {
-        if (in->pressed & BT_UP) ov_pause_select(o, (o->pause_sel + 2) % 3);
-        if (in->pressed & BT_DOWN) ov_pause_select(o, (o->pause_sel + 1) % 3);
-        if (in->pressed & (BT_B | BT_PLUS)) { ov_hide_pause(o); hundred_play_resume(); }
-        else if (in->pressed & BT_A) {
-            int sel = o->pause_sel;
-            ov_hide_pause(o);
-            if (sel == 0) hundred_play_resume();
-            else if (sel == 1) hundred_play_retry();
-            else { hundred_run_save_quit(); to_select(); }  // (SMM1: back to the menu; the run side reports when SMM2 is there)
-        }
-        return;
-    }
-    if (o->mode == OV_CLEAR) {
-        if (F.clear_act_at >= 0) {
-            if (o->tick >= F.clear_act_at) {
-                bool next = o->clear_focus == 1;
-                ov_hide(o);
-                if (!next) { hundred_run_save_quit(); to_select(); }
-                else if (F.st.cleared >= F.st.total) {
-                    to_ending(F.d, F.st.lives, F.st.ncredits, F.st.credits);
-                } else {
-                    to_intro(ENTRY_AFTER_CLEAR);
-                }
-            }
-            return;
-        }
-        if (!ov_clear_ready(o)) return;
-        if (auto_d() >= 0 && o->tick - o->mode_start == 200) { ov_press_clear(o); F.clear_act_at = o->tick + 20; return; }
-        if (in->pressed & BT_LEFT) ov_clear_select(o, 0);
-        if (in->pressed & BT_RIGHT) ov_clear_select(o, 1);
-        if (in->pressed & BT_A) { ov_press_clear(o); F.clear_act_at = o->tick + 20; }
-        return;
-    }
-    if (o->mode == OV_CARD) {
-        if (ov_card_done(o)) ov_hide(o);
-        return;
-    }
-    // SMM1's skip: hold the skip button through In and the three countdown steps (16 + 3 x 32 frames); the skip
-    // fires then and Pass plays
-    if (F.skip_until > 0) {
-        if (o->tick >= F.skip_until) F.skip_until = 0, ov_hide(o);
-        return;
-    }
-    if (in->held & BT_MINUS) {
-        if (F.skip_hold++ == 0) ov_skip_begin(o);
-        if (ov_skip_counted(o)) {
-            F.skip_hold = 0;
-            F.skip_until = o->tick + ov_skip_pass(o);
-            hundred_play_skip();
-        }
-    } else if (F.skip_hold) {
-        F.skip_hold = 0;
-        ov_skip_cancel(o);
-    }
 }
 
 static void flow_test_open(const char *spec);
@@ -471,16 +403,16 @@ static void tick(unsigned buttons) {
         // the run side learns the course (name, maker, code) and the lives as SMM2 fetches them: keep the card current
         char was[66];
         int lives = F.st.lives;
+        bool loading = F.st.loading;
         snprintf(was, sizeof was, "%s", F.st.current.name);
         status();
-        if (strcmp(was, F.st.current.name) || lives != F.st.lives) {
+        if (strcmp(was, F.st.current.name) || lives != F.st.lives || loading != F.st.loading) {
             CardInfo c = card_info();
             c.last = c.number >= c.total;
             intro_card(F.intro, &c);
         }
     }
     switch (F.state) {
-    case S_PLAYING: step_playing(&in); break;
     case S_GAMEOVER:
         if (gameover_step(F.go, &in) == EV_BACK) to_select();
         break;
@@ -492,12 +424,10 @@ static void tick(unsigned buttons) {
         break;
     default: break;
     }
-    // (the clear screen and the card after a miss cover the game: SMM2's own result screen and retry card are under
-    // them)
     F.full = F.state == S_SELECT || (F.state == S_INTRO && F.intro && intro_full(F.intro)) || F.state == S_GAMEOVER ||
-             F.state == S_ENDING || (F.state == S_PLAYING && (F.ov.mode == OV_CLEAR || (F.ov.mode == OV_CARD && !ov_card_out(&F.ov))));
+             F.state == S_ENDING;
     smm1_game_sound(!F.full);  // SMM1's screens have their own sound
-    F.captured = F.full || (F.state == S_PLAYING && (F.ov.mode == OV_PAUSE || F.ov.mode == OV_CLEAR));
+    F.captured = F.full;
 }
 
 // the quads of this frame and the colour under them; false: nothing to draw
@@ -516,7 +446,6 @@ static bool build(LQuads *q, uint8_t bg[4]) {
         break;
     case S_GAMEOVER: gameover_draw(F.go, q); break;
     case S_ENDING: ending_background(F.end, bg), ending_draw(F.end, q); break;
-    case S_PLAYING: ov_draw(&F.ov, q); break;
     default: break;
     }
     return F.full || q->n > 0;
@@ -579,10 +508,12 @@ static void flow_test_open(const char *spec) {
         status();
         close_scenes();
         F.state = S_PLAYING;
-        if (!strcmp(s, "pause")) post(Q_PAUSE, 0);
-        else if (!strcmp(s, "clear")) { if (a && !strcmp(a, "last")) fake.cleared = RUN_LENGTHS[F.d] - 1; fake.cleared++; on_result(HUNDRED_CLEAR); }
-        else if (!strcmp(s, "miss")) { fake.lives--; on_result(HUNDRED_MISS); }
-        else if (!strcmp(s, "skip")) F.skip_hold = 0, F.prev = 0;
+        if (!strcmp(s, "clear")) {
+            if (a && !strcmp(a, "last")) fake.cleared = RUN_LENGTHS[F.d] - 1;
+            fake.cleared++;
+            on_result(HUNDRED_CLEAR);
+            on_result(HUNDRED_NEXT);
+        }
     }
 }
 
@@ -628,8 +559,7 @@ static void *worker(void *arg) {
 extern uint64_t renderer_present_count(void);
 
 bool game_overlay_captured(void) { return F.captured; }
-// in a course, the skip button is SMM1's (held for the countdown), not the game's
-uint64_t game_input_mask(void) { return F.state == S_PLAYING ? ~(uint64_t)BT_MINUS : ~0ull; }
+uint64_t game_input_mask(void) { return ~0ull; }  // (in a course every button is the game's: SMM2's own skip)
 extern uint64_t input_player_buttons(void);  // runtime/hle/input.c: keyboard and controllers only
 
 // RECOMP_HUNDRED_INPUT=<frame>:<BUTTON>[:<frames>],... the flow's own test presses (presented frames)
