@@ -70,6 +70,11 @@ class CheckFileTests(unittest.TestCase):
         self.assertTrue(check_file(self.write("blob.bin", b"\xcf\xfa\xed\xfe" + b"\x00" * 16)))
         self.assertTrue(check_file(self.write("shader.dat", b"\x03\x02\x23\x07" + b"\x00" * 16)))
 
+    def test_metal_shader_cache_blocked(self):
+        self.assertTrue(check_file(self.write("v_0123456789abcdef.metal", b"#include <metal_stdlib>\n")))
+        self.assertTrue(check_file(self.write("shaders.bin", b"MTLB" + b"\x00" * 16)))
+        self.assertTrue(check_file(self.write("0000.bin", b"\xcb\xfe\xba\xbe" + b"\x00" * 16)))
+
     def test_player_trace_records_blocked(self):
         self.assertTrue(check_file(self.write("walk.bin", b"TRC1" + b"\x00" * 32)))
 

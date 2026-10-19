@@ -122,6 +122,7 @@ void smm2_player_hook(Cpu *c) {
         state = 1;
         tracked = self;
         LOG("[trace] first update of player %llx\n", (unsigned long long)self);
+        padscript_origin();  // (the presented-frame clock's origin when RECOMP_PAD_ORIGIN=player)
     }
     if (self != tracked) {
         if (++others == 120) finish("the followed player is no longer updated");

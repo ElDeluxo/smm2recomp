@@ -182,6 +182,10 @@ Added for SMM2:
 | `SMM2_SEED=<n>` | fixed seed for the game's global random generator: every boot shows the same title course and frames repeat exactly (`4`: the course Ryujinx shows) |
 | `LARECOMP_CG_SHOT=<frame>` or `<first>:<last>:<step>` | capture the window through the window server (colour-managed, like the Ryujinx reference grabs); with a range, `LARECOMP_SHOT_PATH` is a printf pattern (`shot_%05d.png`). For comparisons: `LARECOMP_WINDOW=1280x720 LARECOMP_SCALE=1` |
 | `LARECOMP_ASYNC_SHADERS=1` | compile shaders in the background and skip their draws meanwhile (LAS's behaviour, Metal and Vulkan; SMM2 then misses one-shot renders) |
+| `LARECOMP_NO_PIPELINE_CACHE=1` | (Metal) don't use the pipeline cache `cache/pipelines/` in the data folder (compiled pipelines kept across runs and app updates; delete `cache/` to reset) |
+| `LARECOMP_NO_PRECOMPILED=1` | (Metal) don't load precompiled shaders (`cache/metallib/`, made by `tools/precompile_shaders.sh <data>/cache/metallib macos <data>/cache/shaders`; an iOS app's bundled `metallib/`) |
+| `LARECOMP_NO_SHADER_WARM=1` | (Metal) no start-up warm-up of the shaders listed in `cache/shaders/` (compiled on a background thread so that their first use doesn't wait) |
+| `LARECOMP_SHADER_SALT=<text>` | (measurements) tag every shader source so Metal's own shader cache misses: first-use compile costs as on a new install |
 | `LARECOMP_WINDOW_SHOT=<first>:<last>:<step>` | (Vulkan) the window image every step-th frame in that range, `LARECOMP_SHOT_PATH` a printf pattern (`build/win_%05d.png`); raw sRGB, not colour-managed like `LARECOMP_CG_SHOT` |
 | `RECOMP_USER_NAME=<name>` | the account nickname (default "Player") |
 | `LARECOMP_DEBUG_FRAME=<n>` | log every draw of frame n and save each render pass to `build/pass_NNN.png`; `LARECOMP_DEBUG_EACH_DRAW=1` saves the target after every draw (Metal); `LARECOMP_DEBUG_NO_PASSES=1` logs without the images (on Vulkan skipped draws log their reason) |
