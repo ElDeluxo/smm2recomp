@@ -181,7 +181,10 @@ Runs follow the agent GPU budget (one game instance per agent).
 
 ## Out of scope
 
-- Moving Metal's shader translation off the game thread. It stays in `get_program`, as today. Its share of the cold
-  stall is measured first, from the `prefetch` line's scan time.
+- Moving Metal's shader translation off the game thread. It stays in `get_program`, as today. Measured 2026-10-20
+  (M4 Pro, seed-4 title course + Make/Play menu, game-thread time per presented frame): translation is about
+  0.14 ms per shader. The worst frame is the title course's load frame, with 160 translations in 22 ms, next to
+  100 ms of compiles and cache lookups when warm, or 21.2 s of compiles when cold. Menu frames spend 0.1-0.3 ms on
+  translation. Revisit only if, after prefetch, that one 22 ms load frame matters.
 - The record-time speculative scan (approach 2) and the start-up rebuild from archive descriptions (approach 3).
 - Ubershaders and skipping draws for prefetched work.
