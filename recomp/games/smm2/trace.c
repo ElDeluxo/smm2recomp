@@ -78,6 +78,32 @@ static void record(uint64_t self, int32_t idx, uint32_t inp) {
     }
 }
 
+// RECOMP_TRACE_SHOT="k1,k2,...": a frame capture at those updates (record index k, as the trace numbers them): the
+// game waits RECOMP_TRACE_SHOT_SETTLE ms (default 500, so the frame before is presented), then the next presented
+// frame is saved raw, at its own size, to <RECOMP_TRACE_SHOT_DIR>/recomp_frame_<k>.png. The Ryujinx trace build does the same at the same
+// updates (RYU_TRACE_SHOT): the two runtimes' frames then show the same game state, a clean render comparison.
+static void shot_at(int64_t k) {
+    static const char *spec;
+    static int init;
+    if (!init) { init = 1; spec = getenv("RECOMP_TRACE_SHOT"); }
+    if (!spec) return;
+    const char *p = spec;
+    bool hit = false;
+    while (*p && !hit) {
+        char *end;
+        long long v = strtoll(p, &end, 0);
+        if (end == p) break;
+        hit = v == k;
+        p = *end ? end + 1 : end;
+    }
+    if (!hit) return;
+    const char *dir = getenv("RECOMP_TRACE_SHOT_DIR"), *settle = getenv("RECOMP_TRACE_SHOT_SETTLE");
+    usleep((useconds_t)(settle ? atoi(settle) : 500) * 1000);
+    extern char g_frame_shot_request[256];  // (runtime/nvn: the next presented frame, at its own size)
+    snprintf(g_frame_shot_request, sizeof g_frame_shot_request, "%s/recomp_frame_%lld.png", dir ? dir : "build", (long long)k);
+    LOG("[trace] frame capture after update %lld -> %s\n", (long long)k, g_frame_shot_request);
+}
+
 static void finish(const char *why) {
     state = 2;
     if (out) { fclose(out); out = NULL; }
@@ -95,12 +121,14 @@ void smm2_player_hook(Cpu *c) {
         if (hooks++ < start_at) return;
         state = 1;
         tracked = self;
-        LOG("[trace] first update of player %llx\n", (unsigned long long)self);    }
+        LOG("[trace] first update of player %llx\n", (unsigned long long)self);
+    }
     if (self != tracked) {
         if (++others == 120) finish("the followed player is no longer updated");
         return;
     }
     others = 0;
+    shot_at(n);
     bool scripted = padscript_game_clock();
     int64_t pos = scripted ? padscript_pos() : 0;
     if (out) record(self, (int32_t)(scripted ? pos : n), (uint32_t)padscript_buttons());
