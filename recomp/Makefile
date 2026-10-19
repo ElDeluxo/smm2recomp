@@ -212,6 +212,7 @@ GENARCH  ?= $(if $(CROSS_CC),-mcpu=x86_64_v3,-march=x86-64-v3)
 GENFLAGS += -D_FILE_OFFSET_BITS=64 $(GENARCH)
 LDFLAGS  := $(LLD) -Wl,--stack,16777216 $(if $(DEPS),-L$(DEPS)/lib) -lSDL3 $(FFMPEG_LIBS) \
             -lvulkan-1 -lwinmm -lole32 -lshell32 -lcomdlg32 -luuid -lshaderc_shared -lws2_32 -lbcrypt
+RES_OBJ  := $(B)/windows.res  # (the exe's icon: runtime/platform/windows.rc)
 BACKEND_SRC := $(wildcard runtime/nvn/vulkan/*.c) $(wildcard runtime/nvn/vulkan/*.cpp)
 BACKEND_OBJ := $(patsubst runtime/%.cpp,$(B)/rt/%.o,$(patsubst runtime/%.c,$(B)/rt/%.o,$(BACKEND_SRC)))
 IMGUI_OBJ += $(B)/imgui/imgui_impl_vulkan.o
@@ -299,12 +300,17 @@ $(B)/rt/%.o: runtime/%.m $(RT_HDRS)
 	$(CC) $(RTFLAGS) -fobjc-arc -c $< -o $@
 
 # linked to a temp file, then renamed over: a copy still running keeps its (old) file
-$(EXE): $(RT_OBJ) $(MBEDTLS_OBJ) $(BACKEND_OBJ) $(UI_OBJ) $(IMGUI_OBJ) $(EXE_GAME_OBJ)
+$(EXE): $(RT_OBJ) $(MBEDTLS_OBJ) $(BACKEND_OBJ) $(UI_OBJ) $(IMGUI_OBJ) $(EXE_GAME_OBJ) $(RES_OBJ)
 	@mkdir -p $(dir $@)link
 	$(CXX) -o $(dir $@)link/$(notdir $@) $^ $(LDFLAGS)
 	mv -f $(dir $@)link/$(notdir $@) $@
 	$(if $(and $(CROSS_CC),$(filter windows,$(PLATFORM))),(echo LIBRARY $(notdir $@); cat runtime/platform/windows_exports.def) > $(B)/exports.def && \
 	    $(ZIG) dlltool -m i386:x86-64 -d $(B)/exports.def -l $(B)/$(GAME_ID)recomp.dll.a)
+
+# Windows: the app icon as a resource (docs/branding/app-icon.ico, tools/make_icons.sh), compiled by zig's rc
+$(B)/windows.res: runtime/platform/windows.rc ../docs/branding/app-icon.ico
+	@mkdir -p $(dir $@)
+	$(ZIG) rc /fo $@ /i ../docs/branding $<
 
 # its id file (<library>.id) says what it was built from without loading it (runtime/gamelib.c)
 $(GAMELIB): $(GEN_OBJ) | $(EXE)
