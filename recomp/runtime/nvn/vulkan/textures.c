@@ -9,6 +9,7 @@
 
 #include "vk.h"
 #include "../astc.h"
+#include "../bcsoft.h"
 #include "../renderer.h"
 #include "../texpatch.h"
 
@@ -295,10 +296,21 @@ static void create_image(NvnTexture *t, TexBackend *b) {
     VkFormat vf = mf.vf;
     VkFormatFeatureFlags need = VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
     b->astc_bw = b->astc_bh = 0;
-    if (!format_supports(vf, need)) {
+    b->bc_soft = 0;
+    static int force_bc_soft = -1;  // RECOMP_BC_SOFT=1: decode BC on the CPU even where the GPU has it (testing)
+    if (force_bc_soft < 0) force_bc_soft = getenv("RECOMP_BC_SOFT") && atoi(getenv("RECOMP_BC_SOFT"));
+    if (!format_supports(vf, need) || (force_bc_soft && bcsoft_kind(t->format))) {
         bool astc = vf >= VK_FORMAT_ASTC_4x4_UNORM_BLOCK && vf <= VK_FORMAT_ASTC_12x12_SRGB_BLOCK;
         const FormatInfo *fi = t->layout.fmt;
-        if (astc && fi && fi->bpb == 16) {  // desktop GPUs: decoded on the CPU into an RGBA8 image of the same colour space
+        int bck = bcsoft_kind(t->format);
+        if (bck && fi && (fi->bpb == 8 || fi->bpb == 16)) {  // GPUs without BC (most phones): RGBA8 / snorm / RGBA16F
+            uint32_t f = t->format;
+            bool srgb = f == 0x45 || f == 0x46 || f == 0x47 || f == 0x48 || f == 0x4E;
+            b->bc_soft = (uint8_t)bck;
+            vf = bck == BCSOFT_BC6 || bck == BCSOFT_BC6S ? VK_FORMAT_R16G16B16A16_SFLOAT
+               : bck == BCSOFT_BC4S || bck == BCSOFT_BC5S ? VK_FORMAT_R8G8B8A8_SNORM
+               : srgb ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
+        } else if (astc && fi && fi->bpb == 16) {  // desktop GPUs: decoded on the CPU into an RGBA8 image of the same colour space
             b->astc_bw = fi->bw;
             b->astc_bh = fi->bh;
             b->astc_srgb = t->format >= 0x87;
@@ -595,7 +607,7 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
     if (b->tp > 0) b->tp_gen = texpatch_generation();
     b->data_hash = h;
     b->uploaded = true;
-    if (b->format != mf.vf && !b->astc_bw) return;  // unsupported format: nothing sensible to copy
+    if (b->format != mf.vf && !b->astc_bw && !b->bc_soft) return;  // unsupported format: nothing sensible to copy
     VkCommandBuffer cb = vk_upload_cmd();
     uint32_t layers = t->layout.layers ? t->layout.layers : 1;
     if (layers > b->layers && b->depth == 1) layers = b->layers;
@@ -605,6 +617,25 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
     for (uint32_t layer = 0; layer < layers; layer++) {
         for (uint32_t lv = 0; lv < levels; lv++) {
             LevelLayout l = tegra_level(&t->layout, lv);
+            if (b->bc_soft) {  // blocks -> linear block rows -> decoded texels (runtime/nvn/bcsoft.c)
+                const uint8_t *src = (const uint8_t *)(uintptr_t)t->addr + layer * layer_size + l.offset;
+                uint64_t brow = (uint64_t)l.wb * fi->bpb;
+                uint8_t *blocks = malloc(brow * l.hb * l.d);
+                if (linear) for (uint32_t y = 0; y < l.hb; y++) memcpy(blocks + y * brow, src + (uint64_t)y * t->stride, brow);
+                else tegra_deswizzle(src, blocks, l.wb, l.hb, l.d, fi->bpb, l.block_height_log2, l.block_depth_log2);
+                if (b->tp > 0 && layer == 0) texpatch_apply(b->tp - 1, lv, blocks, l.w, l.h, (uint32_t)brow);
+                int ts = bcsoft_texel_size(b->bc_soft);
+                VkSpan s = vk_transient((uint64_t)l.w * l.h * l.d * ts, 16);
+                bcsoft_decode(b->bc_soft, blocks, l.w, l.h, l.d, s.ptr);
+                free(blocks);
+                VkBufferImageCopy rg = {.bufferOffset = s.off, .bufferRowLength = l.w, .bufferImageHeight = l.h,
+                                        .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, lv, b->depth > 1 ? 0 : layer, 1},
+                                        .imageExtent = {l.w < level_w(b, lv) ? l.w : level_w(b, lv), l.h < level_h(b, lv) ? l.h : level_h(b, lv),
+                                                        b->depth > 1 ? l.d : 1}};
+                vk_dl_note_upload((void *)b->image, rg.imageExtent.width, rg.imageExtent.height, rg.imageSubresource.mipLevel);
+                vkCmdCopyBufferToImage(cb, s.buf, b->image, VK_IMAGE_LAYOUT_GENERAL, 1, &rg);
+                continue;
+            }
             if (b->astc_bw) {  // blocks -> linear block rows -> RGBA8 texels
                 const uint8_t *src = (const uint8_t *)(uintptr_t)t->addr + layer * layer_size + l.offset;
                 uint8_t *blocks = malloc((uint64_t)l.wb * l.hb * 16);

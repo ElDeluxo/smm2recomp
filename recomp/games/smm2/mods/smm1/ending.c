@@ -7,10 +7,14 @@
 // 2. NetEndingScene: on black, after its fade-in, the staff credits play once at speed 1 - Nwk_StaffCredit_00 (16
 //    rows, InOut 1420 frames, "END") for Normal and Expert, _01 (8 rows, 1020, "TO BE CONTINUED...") for Easy, _03
 //    (6 rows, 1020, "THE END") for Super Expert - listing each cleared course (name, maker) under "Course Design".
+//    Each row is drawn in SMM2's look instead of SMM1's Mii row (owner, 2026-10-19: the makers' Miis are not there):
+//    SMM2's own course card (Play_CourseIn_00 from the game's romfs: the yellow course-name banner with the maker
+//    underneath, no Mii, no flag), placed where SMM1's row is on each frame, so the roll keeps SMM1's timing.
 //    180 frames after the credits the Mystery Mushroom costume window opens (the costumes mod: hundred_costume_reward).
 // Neither scene reads the controller: nothing skips [obs].
 #include "ending.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,13 +23,22 @@
 #include "smm1_audio.h"
 
 __attribute__((weak)) void hundred_costume_reward(int difficulty) { (void)difficulty; }
+// the costumes mod (mods/costume.c): a costume not owned yet for the won run, NULL without the mod or when none is left
+// (tests without the mod: RECOMP_HUNDRED_TEST_REWARD=<res>)
+__attribute__((weak)) const char *costume_reward_pick(int difficulty) { (void)difficulty; return getenv("RECOMP_HUNDRED_TEST_REWARD"); }
+void costume_name(const char *res, char *name, size_t cap, char *title, size_t tcap);  // costume_gen.c
+int costume_sprite(const char *res);
 __attribute__((weak)) int hundred_ending_costume(void) { return -1; }  // costume id at the goal (-1 none)
 
 #define FADE 25  // the default fader: a 100-frame animation at speed 4 [inf]
 
 struct Ending {
     int d, tick, rescue_len, credits_start, credits_len, end, text_in, text_out, style;
-    bool done;
+    Lay *rows[16];  // SMM2 course cards, one a cleared course
+    int nrows;
+    bool done, reward_asked;
+    Lay *cm;        // the reward: SMM1's costume window (Cmn_CMListWindow_01) with the new costume
+    int reward_tex, reward_at;
     Rescue *rescue;
     Lay *text, *credits;
 };
@@ -71,12 +84,27 @@ Ending *ending_new_style(int d, int n, const struct hundred_credit *c, int style
             char part[32], p[96];
             snprintf(part, sizeof part, "L_MiiInfo_%02d", i);
             if (lyt_pane_index(e->credits->res, part) < 0) continue;
-            if (i >= n) { lay_show(e->credits, part, false); continue; }
-            snprintf(p, sizeof p, "%s/T_CourseName_00", part), lay_text(e->credits, p, c[i].name);
-            snprintf(p, sizeof p, "%s/T_MiiName_00", part), lay_text(e->credits, p, c[i].maker);
-            // no SMM1 country code for our makers: as SMM1 does for codes >= 195, no flag frame and no flag
-            snprintf(p, sizeof p, "%s/P_Frame_00", part), lay_show(e->credits, p, false);
-            snprintf(p, sizeof p, "%s/L_NationalFlag_00", part), lay_show(e->credits, p, false);
+            lay_show(e->credits, part, false);  // (SMM2's card is drawn in its place)
+            if (i >= n) continue;
+            Lay *row = lay_open("nx:Play_CourseIn_00");
+            if (!row) {  // (no SMM2 layout: SMM1's row, without the Mii's flag)
+                lay_show(e->credits, part, true);
+                snprintf(p, sizeof p, "%s/T_CourseName_00", part), lay_text(e->credits, p, c[i].name);
+                snprintf(p, sizeof p, "%s/T_MiiName_00", part), lay_text(e->credits, p, c[i].maker);
+                snprintf(p, sizeof p, "%s/P_Frame_00", part), lay_show(e->credits, p, false);
+                snprintf(p, sizeof p, "%s/L_NationalFlag_00", part), lay_show(e->credits, p, false);
+                continue;
+            }
+            lay_hold_end(row, "AnimDefault");
+            lay_text(row, "T_CourseName_00", c[i].name);
+            lay_text(row, "T_PlayerName_00", c[i].maker);
+            static const char *hide[] = {"N_Align_00", "N_Info_00", "N_EventAlign_00", "N_EventFirst_00",
+                                         "P_GhostVolumenone_00", "L_LoadingGhost_00", "L_MiiIcon_00",
+                                         "L_NationalFlag_00", "T_CourseID_00", "N_Caracter_00", NULL};
+            for (int k = 0; hide[k]; k++) lay_show(row, hide[k], false);
+            lay_show(row, "N_MakerAnim_00", true);
+            e->rows[i] = row;
+            if (i + 1 > e->nrows) e->nrows = i + 1;
         }
     }
     e->end = e->credits_start + e->credits_len + 180;
@@ -85,12 +113,13 @@ Ending *ending_new_style(int d, int n, const struct hundred_credit *c, int style
 void ending_free(Ending *e) {
     if (!e) return;
     rescue_free(e->rescue);
-    lay_free(e->text), lay_free(e->credits);
+    lay_free(e->text), lay_free(e->credits), lay_free(e->cm);
+    for (int i = 0; i < e->nrows; i++) lay_free(e->rows[i]);
     free(e);
 }
 int ending_length(const Ending *e) { return e ? e->end : 0; }
 int ending_step(Ending *e, const UiIn *in) {
-    (void)in;  // nothing skips [obs]
+    // nothing skips [obs]; the reward window closes with A
     e->tick++;
     if (e->done) return EV_NONE;
     if (e->text) {  // the balloon: In when Mario has stopped, then Wait (looping) until Out [obs 0x024e8c84]
@@ -101,16 +130,36 @@ int ending_step(Ending *e, const UiIn *in) {
     if (e->tick == 1) {  // EndingPeachBGM / EndingKinopioBGM by style [obs data: SLink2DB]
         static const char *peach[4] = {"M1_BGM_Ending", "M3_BGM_EndingDemo2", "MW_BGM_Ending2", "WU_STRM_BGM_LAST_BOSS2_HARP"};
         static const char *toad[4] = {"M1_BGM_Ending", "M3_BGM_EndingDemo1", NULL, "WU_STRM_BGM_LAST_BOSS_HARP_Dummy"};
-        const char *s = e->d ? peach[e->style] : toad[e->style];  // (SMW's Toad tune is a sound-bank wave: not yet)
-        smm1_bgm(s, false);
+        const char *s = e->d ? peach[e->style] : toad[e->style];
+        if (s) smm1_bgm(s, false);
+        else {  // SMW's Toad tune is a wave of the scene's sound bank (NetEndingDemoScene.bars) [obs data]
+            smm1_bgm(NULL, false);
+            smm1_se_bank("NetEndingDemoScene");
+            smm1_se("SuperMarioWorld_21_RescueEgg");
+        }
     }
     if (e->tick == e->rescue_len) smm1_bgm_fade(FADE);
     if (e->tick == e->rescue_len + FADE)  // the staff roll: Easy and Super Expert "easy", Normal and Expert "normal"
         smm1_bgm(e->d == 0 || e->d == 3 ? "BGM_100mario_staffroll_easy" : "BGM_100mario_staffroll_normal", false);
     if (e->tick == e->credits_start && e->credits) lay_play(e->credits, "InOut", e->tick);
-    if (e->tick >= e->end) {
-        e->done = true;
+    if (e->tick >= e->end && !e->reward_asked) {  // 180 frames after the credits: the Mystery Mushroom reward
+        e->reward_asked = true;
         hundred_costume_reward(e->d);
+        const char *res = costume_reward_pick(e->d);
+        if (res && (e->cm = lay_open("Cmn_CMListWindow_01"))) {
+            char name[96], title[128];
+            costume_name(res, name, sizeof name, title, sizeof title);
+            lay_text(e->cm, "T_Name_00", name);
+            lay_text(e->cm, "T_Title_00", title);
+            lay_play(e->cm, "In", e->tick);
+            e->reward_tex = costume_sprite(res);
+            e->reward_at = e->tick;
+            e->end = e->tick + 480;  // (closes by itself, or with A after a second)
+        }
+    }
+    if (e->cm && e->tick > e->reward_at + 60 && in && (in->pressed & BT_A)) e->end = e->tick;
+    if (e->tick >= e->end && e->reward_asked) {
+        e->done = true;
         return EV_DONE;
     }
     return EV_NONE;
@@ -142,7 +191,42 @@ void ending_draw(Ending *e, LQuads *out) {
         return;
     }
     g_bg[0] = g_bg[1] = g_bg[2] = 0, g_bg[3] = 255;
+    if (e->cm && t >= e->reward_at) {  // the reward: the costume window with the new costume standing in it, 12x
+        lay_draw(e->cm, t, out);
+        float a = (float)(t - e->reward_at) / 20;
+        if (e->reward_tex >= 0 && a > 0) {
+            LQuad q;
+            memset(&q, 0, sizeof q);
+            float x0 = -144, y0 = 120, sz = 288;
+            float P[4][2] = {{x0, y0 - 72}, {x0 + sz, y0 - 72}, {x0, y0 - 72 - sz}, {x0 + sz, y0 - 72 - sz}};
+            float U[4][2] = {{0, 0}, {1, 0}, {0, 1}, {1, 1}};
+            memcpy(q.pos, P, sizeof P), memcpy(q.uv0, U, sizeof U);
+            for (int k = 0; k < 4; k++) q.col[k][0] = q.col[k][1] = q.col[k][2] = 255, q.col[k][3] = (uint8_t)(a > 1 ? 255 : a * 255);
+            memset(q.white, 255, 4);
+            q.tex0 = e->reward_tex, q.tex1 = -1;
+            q.flags = LQ_BLEND_NORMAL | LQ_COMB_NONE << LQ_COMB_C | LQ_COMB_NONE << LQ_COMB_A;
+            if (out->n == out->cap) out->cap = out->cap ? out->cap * 2 : 256, out->q = realloc(out->q, sizeof(LQuad) * (size_t)out->cap);
+            out->q[out->n++] = q;
+        }
+        return;
+    }
     if (e->credits) lay_draw(e->credits, t, out);
+    // the SMM2 cards where SMM1's rows are: the card's banner (1150 x 162, centred 223 above its root) at 0.6, so the
+    // cards keep gaps between them [inf: a choice, SMM1 had no such cards]
+    for (int i = 0; e->credits && i < e->nrows; i++) {
+        if (!e->rows[i]) continue;
+        char part[32];
+        snprintf(part, sizeof part, "L_MiiInfo_%02d", i);
+        float cr[4][2], a;
+        bool vis;
+        if (!lyt_pane_global(e->credits->in, part, cr, &a, &vis) || a <= 0) continue;
+        float cx = (cr[0][0] + cr[3][0]) / 2, cy = (cr[0][1] + cr[3][1]) / 2;
+        const float k = 0.6f;  // (97 high on SMM1's 120-unit row pitch)
+        float xy[2] = {cx, cy - 223 * k}, sc[2] = {k, k};
+        lyt_set_pane(e->rows[i]->in, "N_All_00", xy, a * 255);
+        lyt_set_pane_scale(e->rows[i]->in, "N_All_00", sc);
+        lay_draw(e->rows[i], t, out);
+    }
     int cf = t - (e->rescue_len + FADE);
     if (cf < FADE) fade_quad(out, 1 - (float)cf / FADE);
 }

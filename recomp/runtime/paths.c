@@ -118,6 +118,11 @@ void rt_paths_init(void) {
         // saves, settings and caches
         const char *home = getenv("HOME");
         snprintf(root, sizeof root, "%s/Documents", home && *home ? home : "/tmp");
+#elif defined(__ANDROID__)
+        // Android: the app's external files folder, /sdcard/Android/data/<package>/files (adb push / a file manager):
+        // extracted/, fonts/, sysdata/, saves, settings, caches and the log
+        const char *ext = SDL_GetAndroidExternalStoragePath();
+        snprintf(root, sizeof root, "%s", ext ? ext : SDL_GetAndroidInternalStoragePath());
 #elif defined(__linux__)
         // (the AppImage is read-only): $XDG_DATA_HOME/lasrecomp, ~/.local/share/lasrecomp by default
         const char *xdg = getenv("XDG_DATA_HOME"), *home = getenv("HOME");
