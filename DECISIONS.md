@@ -1514,8 +1514,8 @@ iPad with the Mods tab.
    Mario courses alike, as SMM1 allowed for downloaded courses. Edit buttons go where SMM1 put its
    edit option for a downloaded course, translated into SMM2's style (course detail page, after a
    clear, …). The work is the entry points plus loading the downloaded course into the editor (a
-   Coursebot slot). **Open, asked of the owner:** what re-uploading an edited copy of someone else's
-   course does.
+   Coursebot slot). **Re-uploading (owner chose):** an edited copy of someone else's course uploads as a new
+   course under the uploader's name, credited "based on <code> by <maker>".
 2. **Nextendo Network** (github.com/NextendoNetwork: community-run Switch online servers with a Go
    NEX/PRUDP server, account/dauth/BAAS servers) **for multiplayer**, and possibly for Course World,
    Endless and 100 Mario too. **TGRCode and our own server stay**: the online backend (Nextendo / our
@@ -1526,3 +1526,11 @@ iPad with the Mods tab.
 3. **Settings live at app level**: one settings page in the recomp app's own UI (grown from the
    overlay menu's Mods tab), not a screen drawn in SMM2's style. It holds the online backend, the
    course source and every SMM1 feature switch.
+
+## 2026-10-19 — 100 Mario's Course World button: try a real sixth button
+
+**Owner (asked directly in session mario-maker-76):** of the options (take Ninji Speedruns' slot,
+take the Super Worlds globe, or try a real sixth button), the owner chose **try a real sixth
+button** built into Course World's top menu page (`Nwk_Title_00`), with its own panes, update, draw
+and cursor navigation. If that proves unworkable, the fallback is Ninji Speedruns' slot, confirmed
+with the owner first.
