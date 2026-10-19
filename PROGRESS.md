@@ -186,9 +186,11 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     (`evidence/reward/006_reward.png`). **Crash ("Pure virtual function called", WorkerMgr, main+0x4d2f50: a
     queued object destroyed while its request was pending)** seen twice with costumes on (entering Course World;
     a course start). The costume pack was 38 MB against the game's 5 MB (stored zstd blocks); it is now
-    compressed (8.4 MB, generator "costumes" v2), and two runs since have not crashed. That suspect is [inf],
-    not proven; the SMM1 audio mix is host-only and touches no guest object. Next: more Course World entries
-    with costumes on, then the hit test on a course with enemies on flat ground.; the SMM1 extras (`mods/smm1_extras.c`, all off by default, `recomp/docs/mods.md` "SMM1 extras"):
+    compressed (8.4 MB, generator "costumes" v2). Since then 5 of 5 runs with costumes on entered Course World
+    and started a course without the crash (before: 2 crashes in about 6 such runs; logs `crash1-3.log`,
+    `cos8.log`, `cos9.log`, private). Likely fixed by the smaller pack [inf: consistent, not proven; the SMM1
+    audio mix is host-only and touches no guest object]. Paused by the owner: the hit test, the reward frame,
+    the sounds; the SMM1 extras (`mods/smm1_extras.c`, all off by default, `recomp/docs/mods.md` "SMM1 extras"):
     ✅ "Overlapping pipes (SMM1)" (one hook in the game's placement check, main+0xfe827c: SMM2 rejects a
     course whose pipes overlap and plays a blank one, and its Course Maker snaps a pipe dragged onto another back;
     with the setting on, both test courses (ours and the pipes of SMM1's sample course 95, read from the SMM1
