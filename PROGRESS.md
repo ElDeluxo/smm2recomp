@@ -142,25 +142,34 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
       award worth several lives found in a test course (the cap is untested in play)
     - 🔄 SMM1 screens and the ending, host-drawn (`games/smm2/mods/smm1/`: SMCraft's SMM1 layout player
       ported to C, a CPU rasterizer drawn through the overlay on Metal and Vulkan; everything from the
-      player's SMM1 dump, generated into `mods-generated/smm1-ui-v4/`):
+      player's SMM1 dump, generated into `mods-generated/smm1-ui-v5/`):
       - ✅ difficulty select (tabs by unlock, Continue only with a record, OutR/OutL slides), world map
         demos as Block.rpx plays them (MapIn, Telop, the Goombas carrying Peach, AnimB, Mario's jump /
         walk / Go, the castle at the end, lives and n/total counters, A skips to Go), the start card (one
-        little Mario per life, AnimA/AnimB by case, held until the course starts, Out over it), pause,
-        clear, hold-to-skip countdown, the card after a miss, game over
+        little Mario per life, AnimA/AnimB by case, held until the course plays, Out over it; "Loading
+        courses..." while the server gathers them); between courses SMM2's own screens (course-in, pause,
+        skip, retry, clear and its Next / Like / Boo result), then SMM1's map and card after each clear
+        (`HUNDRED_NEXT` from the run side)
       - ✅ the ending from the binary: the rescue scene in the cleared course's style (SMB1, SMB3, SMW
         sprites; NSMBU's 3-D Mario posed with its walk), Peach (Toad on Easy), the Thank-you line by
-        difficulty, credits `Nwk_StaffCredit_01/00/03` with each course and maker, TO BE CONTINUED... /
-        END / THE END; nothing skips (as SMM1); a hook for the Mystery Mushroom reward
+        difficulty, the credits roll on SMM1's timing (`Nwk_StaffCredit_01/00/03`) with each cleared course
+        as SMM2's own course card (`Play_CourseIn_00` from the game's romfs: name banner, maker underneath,
+        no Mii), TO BE CONTINUED... / END / THE END; nothing skips (as SMM1); a hook for the Mystery
+        Mushroom reward
+      - ✅ checked against SMM1 itself in Cemu (owner's dump, private captures in
+        `evidence/cemu/`): colours composed in linear light into an sRGB frame as SMM1 does, font border
+        and shadow parameters, the balloon's place and dot pattern, the styles' skies, NSMBU Mario's yaw,
+        skinning, depth and lighting; NSMBU's 3-D sky is an approximation (fixed picture) [inf]
       - ✅ SMM1's music and sounds (Course World stream per difficulty with the beat bounce, the map
-        streams, the ending and staff-roll music, the screens' sound banks), the game's sound faded under
+        streams, the ending and staff-roll music incl. SMW's Toad tune, the screens' sound banks), the game's sound faded under
       - ✅ a whole Super Expert run against the local server, unattended: select → map → card → course →
         clear … (skips, misses) → the ending with the run's courses and makers in the credits → back on
         the select (`RECOMP_HUNDRED_AUTO`, `RECOMP_HUNDRED_SHOTS`; evidence in
         `recomp/private/smm2/evidence/e2e5_sx/`, private); pause, Save & Quit and Continue through the run side
-      - ⬜ a New Game straight after an ending (SMM2 isn't back on its Endless menu after a win: run side),
+      - ⬜ `HUNDRED_NEXT` from the run side (until then SMM1's map and card show only at the run's start),
         per-frame sound triggers (SLink database not decoded: sounds are placed by name [inf]), the
-        NSMBU ending's perspective camera, Cemu side-by-side (no Cemu installed)
+        NSMBU ending's perspective camera; 🔄 Cemu side-by-sides (Cemu runs the owner's SMM1 here, frames
+        captured; reaching the ending scene in progress)
   - 🔄 **Settings, one toggle per SMM1 feature** (overlay menu's Mods tab, kept in `smm2mods.ini`):
     ✅ "100 Mario Challenge (SMM1)" (on screen in the Mods tab: `evidence/mods/mods_tab.png`); ⬜ Mystery Mushroom costumes (model, sounds, physics
     swaps), mid-air shell jumps, overlapping (overlay) pipes, and more from research/specs/smm1-extras*
@@ -176,6 +185,11 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     ✅ courses=tgrcode setting (built-in server, awaiting core/crates/embed);
     ⬜ online multiplayer: plan in `DECISIONS.md` (local play over our relay first, Network Play at
     the enl layer second)
+
+- ⬜ **Releases (melee-pc style, owner-approved)**: per-platform launcher + recompiler, no game code;
+  dump picker with v3.0.3 hash check, the player's prod.keys, extraction, first-launch recompile with
+  bundled zig, optional SMM1 dump, update check. Windows / Linux / macOS first, then Android / iOS
+  build-it-yourself (iOS via a desktop build-sign-install helper). GitHub Actions on release only.
 
 | Platform | Builds | Boots to title | Plays courses | Frames match Ryujinx | Input replays in sync |
 |---|---|---|---|---|---|

@@ -594,6 +594,8 @@ void backend_represent(void) {
 }
 
 void backend_present(NvnTexture *t) {
+    extern void vk_probe_drain(void);
+    vk_probe_drain();  // (exec.c: LARECOMP_DEBUG_PROBE_LAZY)
     g_last_presented = t;
     TexBackend *b = vk_tex(t, true);
     b->presented = true;

@@ -2,7 +2,9 @@
 // result is one RGBA8 image the renderers put over the game. Shading as SMCraft's UI shader did:
 //   t = combine(sample(tex0, uv0), sample(tex1, uv1))   (a missing texture samples as 1)
 //   c = mix(black, white, t) * vertex colour, blended into the target with the quad's blend mode.
-// Composed in gamma space with 8-bit colours as authored (the Wii U frame was not linear-blended) [inf].
+// Composed in linear light into an sRGB target, as SMM1 does: its colour textures are sRGB formats (decoded when
+// sampled), its material and vertex colours are linear values, and its frame is sRGB-encoded [obs: Cemu, a material
+// white of 200 shows as 229; the textures keep their colours].
 // Layout panes are affine images of rectangles, so every quad is a parallelogram: each pixel centre is mapped back
 // to (s, t) in the unit square and the corner attributes interpolate bilinearly there.
 #include "lyt.h"
@@ -17,6 +19,30 @@ typedef struct {
     int w, h, y0, y1;
     float lw, lh;
 } Job;
+
+static float g_dec[256];   // sRGB byte -> linear
+static uint8_t g_enc[4097]; // linear (x 4096) -> sRGB byte
+static pthread_once_t g_lut_once = PTHREAD_ONCE_INIT;
+static void make_luts(void) {
+    for (int i = 0; i < 256; i++) {
+        float c = i / 255.0f;
+        g_dec[i] = c <= 0.04045f ? c / 12.92f : powf((c + 0.055f) / 1.055f, 2.4f);
+    }
+    for (int i = 0; i <= 4096; i++) {
+        float l = i / 4096.0f, c = l <= 0.0031308f ? l * 12.92f : 1.055f * powf(l, 1 / 2.4f) - 0.055f;
+        g_enc[i] = (uint8_t)(c * 255 + 0.5f);
+    }
+}
+static inline uint8_t enc(float l) { return g_enc[l <= 0 ? 0 : l >= 1 ? 4096 : (int)(l * 4096 + 0.5f)]; }
+
+// source over a straight-alpha target (the image may be put over the game: colours stay unpremultiplied)
+static inline void over(uint8_t *row, const float sc[3], float sa) {
+    float da = row[3] * (1.0f / 255), oa = sa + da * (1 - sa);
+    if (oa <= 0) return;
+    float kd = da * (1 - sa) / oa, ks = sa / oa;
+    for (int c = 0; c < 3; c++) row[c] = enc(sc[c] * ks + g_dec[row[c]] * kd);
+    row[3] = (uint8_t)(oa * 255 + 0.5f);
+}
 
 static inline int wrapi(int i, int n, int mode) {
     if (mode == 1) { i %= n; return i < 0 ? i + n : i; }
@@ -37,7 +63,9 @@ static inline void sample(const LTex *t, float u, float v, int ws, int wt, bool 
     if (!linear) {
         int x = wrapi((int)floorf(u * t->w), t->w, ws), y = wrapi((int)floorf(v * t->h), t->h, wt);
         const uint8_t *p = t->px + ((size_t)y * t->w + x) * 4;
-        out[0] = p[0] * k, out[1] = p[1] * k, out[2] = p[2] * k, out[3] = p[3] * k;
+        if (t->srgb) out[0] = g_dec[p[0]], out[1] = g_dec[p[1]], out[2] = g_dec[p[2]];
+        else out[0] = p[0] * k, out[1] = p[1] * k, out[2] = p[2] * k;
+        out[3] = p[3] * k;
         return;
     }
     float fx = u * t->w - 0.5f, fy = v * t->h - 0.5f;
@@ -47,7 +75,30 @@ static inline void sample(const LTex *t, float u, float v, int ws, int wt, bool 
     const uint8_t *p00 = t->px + ((size_t)ya * t->w + xa) * 4, *p10 = t->px + ((size_t)ya * t->w + xb) * 4;
     const uint8_t *p01 = t->px + ((size_t)yb * t->w + xa) * 4, *p11 = t->px + ((size_t)yb * t->w + xb) * 4;
     float w00 = (1 - ax) * (1 - ay), w10 = ax * (1 - ay), w01 = (1 - ax) * ay, w11 = ax * ay;
+    if (t->srgb) {
+        for (int c = 0; c < 3; c++) out[c] = g_dec[p00[c]] * w00 + g_dec[p10[c]] * w10 + g_dec[p01[c]] * w01 + g_dec[p11[c]] * w11;
+        out[3] = (p00[3] * w00 + p10[3] * w10 + p01[3] * w01 + p11[3] * w11) * k;
+        return;
+    }
     for (int c = 0; c < 4; c++) out[c] = (p00[c] * w00 + p10[c] * w10 + p01[c] * w01 + p11[c] * w11) * k;
+}
+
+// a minified texture (several texels a pixel): four bilinear taps spread over the pixel's footprint
+static inline void sample_ss(const LTex *t, float u, float v, int ws, int wt, const float d[4], float out[4]) {
+    float a[4] = {0, 0, 0, 0}, s4[4];
+    static const float o[4][2] = {{-0.25f, -0.25f}, {0.25f, -0.25f}, {-0.25f, 0.25f}, {0.25f, 0.25f}};
+    for (int k = 0; k < 4; k++) {
+        sample(t, u + o[k][0] * d[0] + o[k][1] * d[2], v + o[k][0] * d[1] + o[k][1] * d[3], ws, wt, true, s4);
+        for (int c = 0; c < 4; c++) a[c] += s4[c] * 0.25f;
+    }
+    memcpy(out, a, sizeof a);
+}
+
+static inline void font_texel(float tx[4], uint32_t fl) {
+    float a = tx[3], f = 2 * a - 1;
+    f = f < 0 ? 0 : f;
+    tx[0] = tx[1] = tx[2] = f;
+    tx[3] = (fl & LQ_FONT_NOBORDER) ? f : (2 * a > 1 ? 1 : 2 * a);
 }
 
 static inline float comb(float a, float b, int m) {
@@ -100,7 +151,7 @@ static void raster_quad(const LQuad *q, const Job *j) {
     const LTex *t0 = lyt_tex(q->tex0), *t1 = lyt_tex(q->tex1);
     uint32_t fl = q->flags;
     int ws0 = fl >> LQ_WRAP_S0 & 3, wt0 = fl >> LQ_WRAP_T0 & 3, ws1 = fl >> LQ_WRAP_S1 & 3, wt1 = fl >> LQ_WRAP_T1 & 3;
-    bool lin = fl & LQ_LINEAR;
+    bool lin = fl & LQ_LINEAR, font = fl & LQ_FONT;
     int cc = fl >> LQ_COMB_C & 15, ca = fl >> LQ_COMB_A & 15;
     int op = fl >> LQ_BLEND_OP & 15, bs = fl >> LQ_BLEND_SRC & 15, bd = fl >> LQ_BLEND_DST & 15;
     bool two = q->tex1 >= 0 && cc != (int)LQ_COMB_NONE;
@@ -119,6 +170,14 @@ static void raster_quad(const LQuad *q, const Job *j) {
     bool affine = tri || (fabsf(q->uv0[3][0] - q->uv0[1][0] - q->uv0[2][0] + au) < 1e-5f &&
                           fabsf(q->uv0[3][1] - q->uv0[1][1] - q->uv0[2][1] + av) < 1e-5f);
     bool fast = affine && normal && flat && !two;
+    // the texture's footprint a pixel (affine part): minified more than 1.5 texels -> supersample
+    float dsdy = -e2x * inv, dtdy = e1x * inv;
+    float duv[4] = {bu * dsdx + cu * dtdx, bv * dsdx + cv * dtdx, bu * dsdy + cu * dtdy, bv * dsdy + cv * dtdy};
+    bool minify = false;
+    if (lin && t0 && t0->w > 0) {
+        float fx = fmaxf(fabsf(duv[0]) * t0->w, fabsf(duv[1]) * t0->h), fy = fmaxf(fabsf(duv[2]) * t0->w, fabsf(duv[3]) * t0->h);
+        minify = fmaxf(fx, fy) > 1.5f;
+    }
     for (int y = y0; y < y1; y++) {
         float dy = y + 0.5f - P[0][1], dx = x0 + 0.5f - P[0][0];
         float s = (dx * e2y - dy * e2x) * inv, t = (e1x * dy - e1y * dx) * inv;
@@ -146,18 +205,15 @@ static void raster_quad(const LQuad *q, const Job *j) {
             for (int x = x0 + i0; x < x0 + i1; x++, s += dsdx, t += dtdx, u += dudx, v += dvdx, row += 4) {
                 if (s < 0 || s >= 1 || t < 0 || t >= 1 || (tri && s + t >= 1)) continue;
                 float tx[4];
-                if (t0) sample(t0, u, v, ws0, wt0, lin, tx);
+                if (t0 && minify) sample_ss(t0, u, v, ws0, wt0, duv, tx);
+                else if (t0) sample(t0, u, v, ws0, wt0, lin, tx);
                 else tx[0] = tx[1] = tx[2] = tx[3] = 1;
+                if (font) font_texel(tx, fl);
                 float sa = (blk[3] + dw[3] * tx[3]) * col[0][3];
                 if (sa <= 0.5f / 255) continue;
                 if (sa > 1) sa = 1;
-                float ia = 1 - sa;
-                for (int c = 0; c < 3; c++) {
-                    float vv = (blk[c] + dw[c] * tx[c]) * col[0][c] * sa * 255 + row[c] * ia;
-                    row[c] = (uint8_t)(vv < 0 ? 0 : vv > 255 ? 255 : vv + 0.5f);
-                }
-                float va = sa * sa * 255 + row[3] * ia;
-                row[3] = (uint8_t)(va > 255 ? 255 : va + 0.5f);
+                float sc[3] = {(blk[0] + dw[0] * tx[0]) * col[0][0], (blk[1] + dw[1] * tx[1]) * col[0][1], (blk[2] + dw[2] * tx[2]) * col[0][2]};
+                over(row, sc, sa);
             }
             continue;
         }
@@ -168,7 +224,9 @@ static void raster_quad(const LQuad *q, const Job *j) {
             if (!untextured) {
                 float u = q->uv0[0][0] * a0 + q->uv0[1][0] * a1 + q->uv0[2][0] * a2 + q->uv0[3][0] * a3;
                 float vv = q->uv0[0][1] * a0 + q->uv0[1][1] * a1 + q->uv0[2][1] * a2 + q->uv0[3][1] * a3;
-                if (q->tex0 >= 0) sample(t0, u, vv, ws0, wt0, lin, tx);
+                if (q->tex0 >= 0 && minify) sample_ss(t0, u, vv, ws0, wt0, duv, tx);
+                else if (q->tex0 >= 0) sample(t0, u, vv, ws0, wt0, lin, tx);
+                if (font) font_texel(tx, fl);
                 if (two) {
                     float u1 = q->uv1[0][0] * a0 + q->uv1[1][0] * a1 + q->uv1[2][0] * a2 + q->uv1[3][0] * a3;
                     float v1 = q->uv1[0][1] * a0 + q->uv1[1][1] * a1 + q->uv1[2][1] * a2 + q->uv1[3][1] * a3;
@@ -186,16 +244,10 @@ static void raster_quad(const LQuad *q, const Job *j) {
             if (normal) {  // source over: the common case
                 float sa = src[3] < 0 ? 0 : src[3] > 1 ? 1 : src[3];
                 if (sa <= 0.5f / 255) continue;
-                float ia = 1 - sa;
-                for (int c = 0; c < 3; c++) {
-                    float v = src[c] * sa * 255 + row[c] * ia;
-                    row[c] = (uint8_t)(v < 0 ? 0 : v > 255 ? 255 : v + 0.5f);
-                }
-                float va = sa * sa * 255 + row[3] * ia;
-                row[3] = (uint8_t)(va > 255 ? 255 : va + 0.5f);
+                over(row, src, sa);
                 continue;
             }
-            float dst[4] = {row[0] * k, row[1] * k, row[2] * k, row[3] * k}, o[4];
+            float dst[4] = {g_dec[row[0]], g_dec[row[1]], g_dec[row[2]], row[3] * k}, o[4];
             if (op == 0) {
                 memcpy(o, src, sizeof o);
             } else {
@@ -210,10 +262,8 @@ static void raster_quad(const LQuad *q, const Job *j) {
                     }
                 }
             }
-            for (int c = 0; c < 4; c++) {
-                float v = o[c] < 0 ? 0 : o[c] > 1 ? 1 : o[c];
-                row[c] = (uint8_t)(v * 255 + 0.5f);
-            }
+            for (int c = 0; c < 3; c++) row[c] = enc(o[c]);
+            row[3] = (uint8_t)((o[3] < 0 ? 0 : o[3] > 1 ? 1 : o[3]) * 255 + 0.5f);
         }
     }
 }
@@ -226,6 +276,7 @@ static void *band(void *arg) {
 
 void lyt_raster(const LQuads *q, uint8_t *rgba, int w, int h, float lw, float lh) {
     enum { BANDS = 6 };
+    pthread_once(&g_lut_once, make_luts);
     Job jobs[BANDS];
     pthread_t th[BANDS];
     bool started[BANDS] = {0};

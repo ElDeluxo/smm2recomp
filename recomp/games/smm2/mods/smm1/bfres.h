@@ -18,6 +18,8 @@ typedef struct {
     int mat, bone, nverts, nidx, skin_count;
     float (*pos)[3];
     float (*uv)[2];
+    float (*nrm)[3];     // normals (_n0), when present
+    float (*w0)[4];      // skinning weights (_w0), smooth skins
     uint8_t (*idx0)[4];  // skinning bone indices (first set), when present
     uint32_t *idx;       // triangles
 } BShape;
@@ -106,5 +108,8 @@ void bfres_dump(const Bfres *b);
 const BSkelAnim *bfres_skelanim(const Bfres *b, const char *name);
 // the model's bone matrices (model space, 3x4 each) with a skeletal animation at a frame (NULL: the rest pose)
 void bfres_pose(const BModel *m, const BSkelAnim *a, float frame, float (*world)[3][4]);
+// the same with the bones' own translations kept (an animation made for a larger skeleton: rotations only; the root
+// bone's animated translation scaled by the skeletons' ratio)
+void bfres_pose_retarget(const BModel *m, const BSkelAnim *a, float frame, float (*world)[3][4]);
 // bone of a vertex's skinning index (the skeleton's smooth + rigid matrix table)
 int bfres_skin_bone(const BModel *m, int index);
