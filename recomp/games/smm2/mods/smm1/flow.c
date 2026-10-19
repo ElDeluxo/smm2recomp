@@ -103,6 +103,7 @@ static struct {
     struct hundred_status st;
     unsigned prev;
     int intro_ticks, peek, last_hb, koopa_next;
+    bool fetched;  // the run side was already asked for this intro's course
     char test[64];
     long test_at;
 } F;
@@ -173,6 +174,7 @@ static void to_intro(int entry) {
     ov_hide(&F.ov);
     F.intro = in;
     F.intro_ticks = 0;
+    F.fetched = false;
     F.state = in ? S_INTRO : S_CLOSED;
     if (entry == ENTRY_AFTER_CLEAR) map_music(F.d);
     if (entry == ENTRY_NEW) {
@@ -250,7 +252,13 @@ static void on_result(int outcome) {
         break;
     case HUNDRED_NEXT:
         if (F.st.cleared >= (F.st.total ? F.st.total : RUN_LENGTHS[F.d])) to_ending(F.d, F.st.lives, F.st.ncredits, F.st.credits);
-        else to_intro(ENTRY_AFTER_CLEAR);
+        else {
+            // the next course loads under the map (SMM2 shows nothing of it: the map and card are full screen), so
+            // most of the load is over by the time the card comes; the card stays up until the course plays
+            to_intro(ENTRY_AFTER_CLEAR);
+            F.fetched = true;
+            if (!hundred_play_next()) LOGF("the run side did not take the next course\n");
+        }
         break;
     case HUNDRED_MISS:  // SMM2's retry; with no life left, SMM2's game over, then its Endless menu reopens the select
         if (F.st.lives > 0) F.state = S_PLAYING;
@@ -382,10 +390,12 @@ static void tick(unsigned buttons) {
     }
     case S_INTRO: {
         int iev = intro_step(F.intro, &in);
-        // the card is up: the run side fetches the course and SMM2 starts it under the card (SMM2 starts it as soon
-        // as it can, so not earlier: SMM1's map plays while the course downloads, SMM2's would be playing hidden);
-        // after a skip SMM2 starts the next course by itself
-        if (iev == EV_FETCH && !hundred_play_next()) LOGF("the run side did not take the next course\n");
+        // the card is up: the run side fetches the course and SMM2 starts it under the card (at the run's start; after
+        // a clear it was asked for when the map began, HUNDRED_NEXT); after a skip SMM2 starts the next course itself
+        if (iev == EV_FETCH && !F.fetched) {
+            F.fetched = true;
+            if (!hundred_play_next()) LOGF("the run side did not take the next course\n");
+        }
         if (iev == EV_DONE) {
             intro_free(F.intro), F.intro = NULL;
             F.state = S_PLAYING;
