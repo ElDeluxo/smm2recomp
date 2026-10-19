@@ -13,9 +13,23 @@ import json
 import struct
 from dataclasses import dataclass
 
-PROTOCOLS = {10: "Authentication", 11: "SecureConnection", 0x14: "Friends", 0x15: "MatchMaking", 0x6d: "Utility",
-             0x73: "DataStore", 0x6e: "Ranking", 0x6f: "MatchmakeExtension", 0x7f: "(extended)", 3: "NAT traversal",
-             0x65: "Health", 0x66: "Monitoring", 0x71: "Subscriber"}
+# protocol ids [public: kinnay's NintendoClients, each protocol's PROTOCOL_ID]
+PROTOCOLS = {1: "RemoteLog", 3: "NATTraversal", 10: "Authentication", 11: "SecureConnection", 14: "Notification",
+             0x12: "Health", 0x13: "Monitoring", 0x15: "MatchMaking", 0x17: "Messaging", 0x19: "AccountManagement",
+             0x64: "NintendoNotification", 0x65: "Friends", 0x6D: "MatchmakeExtension", 0x6E: "Utility",
+             0x70: "Ranking", 0x73: "DataStore", 0x74: "Debug", 0x79: "Subscriber", 0x7A: "Ranking2",
+             0x7B: "AAUser", 0x7C: "Screening"}
+UTILITY_METHODS = {1: "AcquireNexUniqueId", 2: "AcquireNexUniqueIdWithPassword", 3: "AssociateNexUniqueIdWithMyPrincipalId",
+                   4: "AssociateNexUniqueIdsWithMyPrincipalId", 5: "GetAssociatedNexUniqueIdWithMyPrincipalId",
+                   6: "GetAssociatedNexUniqueIdsWithMyPrincipalId", 7: "GetIntegerSettings", 8: "GetStringSettings"}
+# SMM2's DataStore methods [public: kinnay's NintendoClients, datastore_smm2.py]
+DATASTORE_SMM2_METHODS = {8: "GetMeta", 9: "GetMetas", 25: "PrepareGetObject", 47: "RegisterUser", 48: "GetUsers",
+                          49: "SyncUserProfile", 50: "SearchUsersUserPoint", 59: "UpdateLastLoginTime",
+                          63: "GetMiiClothes", 64: "PostActivityQuest", 65: "GetUsernameNgType", 70: "GetCourses", 71: "SearchCoursesPointRanking",
+                          73: "SearchCoursesLatest", 74: "SearchCoursesPostedBy", 79: "SearchCoursesEndlessMode",
+                          125: "GetNewNotification", 131: "GetUserOrCourse", 134: "GetReqGetInfoHeadersInfo",
+                          151: "LoginCheck", 152: "UpdateLastLoginInfo", 154: "GetEventCourseStatus"}
+EXTRA_METHODS: dict[int, dict[int, str]] = {0x6E: UTILITY_METHODS, 0x73: DATASTORE_SMM2_METHODS}
 AUTH_METHODS = {1: "ValidateAndRequestTicket", 2: "ValidateAndRequestTicketWithCustomData", 3: "RequestTicket",
                 4: "GetPID", 5: "GetName", 6: "ValidateAndRequestTicketWithParam"}
 SECURE_METHODS = {1: "Register", 2: "RequestConnectionData", 3: "RequestUrls", 4: "RegisterEx", 5: "TestConnectivity",
@@ -31,7 +45,8 @@ class Request:
 
     @property
     def name(self) -> str:
-        methods = AUTH_METHODS if self.protocol == 10 else SECURE_METHODS if self.protocol == 11 else {}
+        methods = AUTH_METHODS if self.protocol == 10 else SECURE_METHODS if self.protocol == 11 else \
+            EXTRA_METHODS.get(self.protocol) or {}
         return f"{PROTOCOLS.get(self.protocol, hex(self.protocol))}.{methods.get(self.method, self.method)}"
 
 
@@ -142,7 +157,10 @@ def mask_token(token: str) -> str:
         except ValueError:
             return p
 
-    return f"JWT header {json.dumps(dec(parts[0]))} claims {json.dumps(dec(parts[1]))} signature <{len(parts[2])} chars, masked>"
+    claims = dec(parts[1])
+    if isinstance(claims, dict) and isinstance(claims.get("nnex"), str):  # (a NEX login token: a secret)
+        claims["nnex"] = f"<{len(claims['nnex'])} chars, masked>"
+    return f"JWT header {json.dumps(dec(parts[0]))} claims {json.dumps(claims)} signature <{len(parts[2])} chars, masked>"
 
 
 def decode_login(req: Request) -> list[str]:
