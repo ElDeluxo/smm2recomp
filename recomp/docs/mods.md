@@ -311,6 +311,24 @@ every difficulty draws from all of them.
   `clear <code> ... clears n`, `... -- 100 Mario Challenge complete!`, `bridge: run finished`.
 - After the run: `curl -s http://127.0.0.1:8650/api/rankings/hundred_super_expert` lists the completion.
 
+### Where this stands (2026-10-19)
+
+- Done [obs on macOS]:
+  - Challenge Modes: the relabel, ZL / ZR / the tap, the remembered mode, B back to Course World, and 5 lives on Endless right after a switch.
+  - Separate run slots per ruleset on the server.
+  - The 100 Mario run side: Next / Quit on SMM2's result screen, a won run back to SMM2's menu, no course twice across a player's runs.
+  - Broken courses: a course the game finds corrupt counts as a skip. The run comes back after the window (Course World → a tap on Challenge Modes → Continue → the next course; `RECOMP_MOD_TEST_BREAK=<n>:<code>` reproduces it).
+  - The result screen's comment and tag buttons are enabled (comment allowances 10/10, the course's comments-on flag course global +0x860).
+- Half done:
+  - Likes and boos: the hearts are enabled. A tap on "I like it!" didn't post a rating before the test was stopped, so whether PostRatingInfo (world.c `post_rating`) reaches the server from the result screen is unverified. Course World's own clear screen is untested too.
+  - Posting a comment is untested.
+  - Test-injected D-pad presses don't move the result screen's focus. Real keys and pads do.
+- Next:
+  - Verify a like / boo from the result screen (a tap, then Next: `rating <code>: 1 (like)` in the log, then the course's likes on the server).
+  - Comment posting.
+  - The 0-lives game-over round trip with the flow.
+  - Local play over the vlan relay (ldn emulation).
+
 ### Limits
 
 - Not online yet: Network Play (plan: `DECISIONS.md` "Online multiplayer"), Super Worlds, Ninji speedruns,

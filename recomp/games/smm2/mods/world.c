@@ -367,7 +367,7 @@ static void can_rate(Cpu *c) {
     }
     netobj_unlock(c);
     uint64_t course = g64(MAIN_ADDR(0x2c4b710));
-    if (course && g64(course + 0x5a8) == id) s8(course + 0x860, 1), s8(course + 0x861, 1);
+    if (course && g64(course + 0x5a8) == id) s8(course + 0x860, 1);
     MLOG("rating / comments allowed for %llu\n", (unsigned long long)id);
     finish(c, no, true, 0);
 }
