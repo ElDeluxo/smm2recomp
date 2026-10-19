@@ -176,9 +176,19 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
   - 🔄 **Settings, one toggle per SMM1 feature** (overlay menu's Mods tab, kept in `smm2mods.ini`):
     ✅ "100 Mario Challenge (SMM1)" (on screen in the Mods tab: `evidence/mods/mods_tab.png`); 🔄 "Mystery Mushroom costumes" (`mods/costume.c`: models generated from both dumps, worn as small
     Mario in SMB1 courses; in game: the costume on from the start (Peach, Samus), the pickup (Super Mushroom
-    → Block costume, its power-up sound), the goal and death sounds, the reward window after the ending;
-    ⬜ a hit taking it off (hook in place, not yet seen in a run), jump / taunt sounds, more than one costume per
-    course); the SMM1 extras (`mods/smm1_extras.c`, all off by default, `recomp/docs/mods.md` "SMM1 extras"):
+    → Block costume, its power-up sound), the goal and death sounds, the reward window after the ending
+    (`evidence/reward/006_reward.png`, private), jump / landing / taunt sounds from the player's motion;
+    ⬜ SMM2's own jump sound muted under the costume's, the taunt pose, more than one costume per course).
+    **Where this stands (WIP, paused 2026-10-19):** in game (cos9, private log): costume worn, Super Mushroom
+    pickup keeps it, jump sounds, goal and death sounds play. ⬜ A hit taking the costume off is still unseen:
+    every test death so far was a pit (the hook at 0x15a50a4 is in place). ⬜ The taunt fired once right after a
+    goal (the Up byte at player +0x560 is [inf]: check it). ⬜ The reward window's lower-right frame looks cut off
+    (`evidence/reward/006_reward.png`). **Crash ("Pure virtual function called", WorkerMgr, main+0x4d2f50: a
+    queued object destroyed while its request was pending)** seen twice with costumes on (entering Course World;
+    a course start). The costume pack was 38 MB against the game's 5 MB (stored zstd blocks); it is now
+    compressed (8.4 MB, generator "costumes" v2), and two runs since have not crashed. That suspect is [inf],
+    not proven; the SMM1 audio mix is host-only and touches no guest object. Next: more Course World entries
+    with costumes on, then the hit test on a course with enemies on flat ground.; the SMM1 extras (`mods/smm1_extras.c`, all off by default, `recomp/docs/mods.md` "SMM1 extras"):
     ✅ "Overlapping pipes (SMM1)" (one hook in the game's placement check, main+0xfe827c: SMM2 rejects a
     course whose pipes overlap and plays a blank one, and its Course Maker snaps a pipe dragged onto another back;
     with the setting on, both test courses (ours and the pipes of SMM1's sample course 95, read from the SMM1

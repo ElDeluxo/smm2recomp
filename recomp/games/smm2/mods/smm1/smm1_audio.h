@@ -21,5 +21,5 @@ void smm1_bgm_track(int track);  // a multi-track stream's track (0-based: Cours
 double smm1_bgm_pos(void);       // the music's position in its own samples (-1: none)
 const char *smm1_bgm_name(void);
 void smm1_se_bank(const char *bank);          // load a sound bank ("NetWorldMapScene", "UI_Play_CourseIn100Mario_00")
-void smm1_se(const char *name);              // a sound effect of a loaded bank, by name
+bool smm1_se(const char *name);              // a sound effect of a loaded bank, by name (false: none)
 void smm1_game_sound(bool on);               // the game's own sound under the screens (faded)

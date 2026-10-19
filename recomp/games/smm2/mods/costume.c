@@ -33,7 +33,7 @@ int costume_rare(const char *res);
 void costume_list(void);
 bool smm1_data_open(void);
 void smm1_se_bank(const char *bank);
-void smm1_se(const char *name);
+bool smm1_se(const char *name);
 
 #define BUILDER MAIN_ADDR(0x155fcd0)      // model holder build (holder, style, character, heap)
 #define SETTER MAIN_ADDR(0x155fcc0)       // visual slot setter (holder, int *slot): holder +0x478
@@ -195,14 +195,17 @@ const char *costume_reward_pick(int difficulty) {
 void hundred_costume_reward(int difficulty) { (void)difficulty; }
 
 // ---------------------------------------------------------------- wearing
-static void sound(const char *event) {
-    if (!g_wear[0] || !smm1_data_open()) return;
+static int g_debug = -1;
+static bool sound(const char *event) {  // false: this costume has no such sound
+    if (!g_wear[0] || !smm1_data_open()) return false;
     char bank[96], name[128];
     snprintf(bank, sizeof bank, "CharaMario_%s", g_wear);
     smm1_se_bank(bank);
     snprintf(name, sizeof name, "%s/%s", bank, event);
-    smm1_se(name);
-    LOG("[costume] %s sound (%s)\n", event, g_wear);
+    bool ok = smm1_se(name);
+    bool often = !strncmp(event, "jump", 4) || !strcmp(event, "ground");  // (every jump: only when debugging)
+    if (!often || g_debug > 0) LOG("[costume] %s sound (%s)%s\n", event, g_wear, ok ? "" : ": none");
+    return ok;
 }
 static void wear(const char *res) {
     snprintf(g_wear, sizeof g_wear, "%s", res ? res : "");
@@ -242,7 +245,35 @@ static void setter(Cpu *c) {
 }
 
 // every frame of each player (games/smm2/trace.c smm2_player_hook): the pickup and losing the costume to a power-up
-static int g_debug = -1;
+// SMM1's costume sounds from the player's motion (SMCraft's events): a jump (jump or jump2, half and half), the
+// landing (ground), and the taunt (Up held 8 frames standing still: appeal). The game's own player sounds still play
+// [inf: SMM2's are data-driven action triggers; muting them needs the sound links' play call].
+#define P_GROUND 0x2308  // bit 0: on the ground
+#define P_VEL_Y 0x240    // float, up positive [inf: the sign from the jump test]
+#define P_SPEED 0x274    // float, forward speed
+#define P_INPUT_UP 0x560 // input block +0x10: Up held [inf]
+static void motion_sounds(uint64_t player) {
+    static uint64_t who;
+    static bool was_ground;
+    static int up;
+    bool ground = g32(player + P_GROUND) & 1;
+    float vy, sp;
+    uint32_t a = g32(player + P_VEL_Y), b = g32(player + P_SPEED);
+    memcpy(&vy, &a, 4), memcpy(&sp, &b, 4);
+    if (who != player) who = player, was_ground = ground, up = 0;
+    if (g_wear[0]) {
+        if (was_ground && !ground && vy > 0.5f) {
+            if (!(rnd() & 1) || !sound("jump2")) sound("jump");
+        } else if (!was_ground && ground)
+            sound("ground");
+        if (ground && g8(player + P_INPUT_UP) && sp > -0.01f && sp < 0.01f) {
+            if (++up == 8) sound("appeal");
+        } else
+            up = 0;
+    }
+    was_ground = ground;
+}
+
 void costume_player_frame(uint64_t player) {
     if (!costumes_on() || !g_course[0] || !smb1_course()) return;
     uint32_t form = g32(player + 0x4a8), pending = g32(player + 0x4b0);
@@ -252,12 +283,7 @@ void costume_player_frame(uint64_t player) {
         LOG("[costume] player %#llx form %u pending %u\n", (unsigned long long)player, form, pending);
     last_form = form, last_pending = pending;
     if (g_wear[0] && form != 0) wear(NULL);  // (another power-up took its place)
-    if (form == 0 && pending == (uint32_t)g_item) {  // the Mystery Mushroom: the costume instead of the growth
-        s32(player + 0x4b0, 0);
-        bool was = g_wear[0];
-        wear(g_course);
-        if (!was) sound("powerup");
-    }
+    motion_sounds(player);
 }
 
 // hook points (games/smm2/mods/hooks.c smm2_mod_after): true when handled
