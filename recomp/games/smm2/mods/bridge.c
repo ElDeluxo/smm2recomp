@@ -584,7 +584,7 @@ static void post_later(const char *what) {
     static const char *const diff[4] = {"easy", "normal", "expert", "super_expert"};
     if (run_d < 0) return;
     char *path = malloc(80);
-    snprintf(path, 80, "/api/endless/%s/%s", diff[run_d], what);
+    snprintf(path, 80, "/api/endless/%s/%s?ruleset=hundred", diff[run_d], what);
     pthread_t th;
     pthread_create(&th, NULL, post_async, path);
     pthread_detach(th);
