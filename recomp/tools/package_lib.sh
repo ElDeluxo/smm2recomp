@@ -106,7 +106,8 @@ EOF
         ;;
         macos-*) cat >> "$f" <<EOF
 
-macOS 15 or newer on Apple silicon. The app isn't notarized: the first time, right-click it and choose Open. If
+macOS 15 or newer on Apple silicon. The app isn't notarized: the first time, right-click it and choose Open (macOS
+then checks the whole app once, which can take a few minutes). If
 macOS still refuses it or the recompiler ("zig", "python3", "hactool") is blocked, run once in Terminal:
     xattr -dr com.apple.quarantine /path/to/SMM2Recomp.app
 EOF
