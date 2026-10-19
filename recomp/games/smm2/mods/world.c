@@ -356,12 +356,18 @@ static void can_rate(Cpu *c) {
     uint64_t no = c->x[0], id = g64(no + 0xe8578);
     const char *cv = getenv("RECOMP_MOD_CANRATE");  // (test: the flag's value)
     uint8_t flag = cv ? (uint8_t)atoi(cv) : 1;
+    // The comment button (main+0x1be7d30) also wants the comment answer's two allowances (+0x10 / +0x11, from a
+    // map in the NEX answer) above the player's comment count on the course (course +0x7896c), and the course's
+    // "comments on" flag (course global main+0x2c4b710 +0x860: the maker's profile setting, copied into the
+    // course list's entries +0x830) [inf, from the code]. Our server takes comments on every course.
     netobj_lock(c);
     for (int i = 0; i < 2; i++) {
         uint64_t r = no + (i ? 0xe8530 : 0xe8580);
-        s64(r, id), s8(r + 8, flag), s32(r + 0xc, 0), s16(r + 0x10, 0), s8(r + 0x12, 1);
+        s64(r, id), s8(r + 8, flag), s32(r + 0xc, 0), s16(r + 0x10, i ? 0x0a0a : 0), s8(r + 0x12, 1);
     }
     netobj_unlock(c);
+    uint64_t course = g64(MAIN_ADDR(0x2c4b710));
+    if (course && g64(course + 0x5a8) == id) s8(course + 0x860, 1), s8(course + 0x861, 1);
     MLOG("rating / comments allowed for %llu\n", (unsigned long long)id);
     finish(c, no, true, 0);
 }

@@ -54,6 +54,8 @@ static struct {
     uint64_t started;        // data id of the course the run is on (StartCourse seen, no result yet)
     bool complete;           // the server said the run reached its goal (100 Mario)
     bool active;             // the server's run: can go on / lives / clears / goal (0: endless)
+    bool hundred;            // ... and it is a 100 Mario run (ruleset hundred); SMM2's Endless shows only smm2 ones
+    bool held;               // the server holds a run for this difficulty (any ruleset, can go on)
     uint32_t lives, clears, goal;
     uint64_t current;        // the course being (or about to be) played
     uint64_t last_done;      // the last course cleared (its play result comes after)
@@ -247,48 +249,69 @@ static uint32_t clears_now(uint64_t no, uint32_t d) { return g32(record(no, d) +
 
 // ---- GetEndlessModeStatus: the four run records
 
+// One run record (NetObj's, or the menu's copy in the UI cache: the same 0x38-byte layout) from what the server
+// holds for difficulty d, as the current Challenge Mode sees it: a run of the other ruleset (100 Mario's on SMM2's
+// Endless menu, or the reverse) shows as none. (Both share the server's per-difficulty slot.)
+// The run state +4 is 1 for a run that can go on: the menu offers Continue only for state 1 or 2 with lives (+0x30)
+// and a history [obs 0x7101a26850]; 0 resets its map to an empty run. +0x11: the start lives New Game reads (the
+// game has no default).
+static void write_record(uint64_t r, uint32_t d) {
+    pthread_mutex_lock(&state_lock);
+    bool cont = runs[d].held && runs[d].hundred == hundred_rules();
+    uint32_t lives = runs[d].lives, clears = runs[d].clears, coins = runs[d].coins, score = runs[d].score;
+    runs[d].active = cont;
+    pthread_mutex_unlock(&state_lock);
+    uint8_t lv = (uint8_t)(lives > 255 ? 255 : lives);
+    s8(r + 0x00, 1);
+    s32(r + 0x04, cont ? 1 : 0);
+    s8(r + 0x08, cont ? (uint8_t)(coins % 100) : 0);
+    s32(r + 0x0c, cont ? score : 0);
+    s8(r + 0x10, cont ? lv : 0);
+    s8(r + 0x11, hundred_rules() ? 100 : 5);
+    s64(r + 0x18, 0);
+    s64(r + 0x20, 0);
+    s8(r + 0x28, cont ? 1 : 0);  // (the play part: a run that can go on has lives; none shows none)
+    s32(r + 0x2c, cont ? clears : 0);
+    s8(r + 0x30, cont ? lv : 0);
+}
+
 WRAPPER(get_status, 0x14ec2d0) {
     Json *st = srv_call("GET", "/api/endless", NULL, NULL);
     if (!st) { finish(c, no, false, 2); return; }
-    uint8_t start_lives = hundred_rules() ? 100 : 5;
-    netobj_lock(c);
     for (uint32_t d = 0; d < 4; d++) {
-        uint64_t r = record(no, d);
         Json *run = json_get(json_get(st, "runs"), DIFF[d]);
         bool active = json_bool(json_get(run, "active"), false);
         bool complete = json_bool(json_get(run, "complete"), false);
         uint32_t lives = (uint32_t)json_num(json_get(run, "lives"), 0);
-        uint32_t clears = (uint32_t)json_num(json_get(run, "clears"), 0);
-        uint32_t coins = (uint32_t)json_num(json_get(run, "coins"), 0);
-        uint32_t score = (uint32_t)json_num(json_get(run, "score"), 0);
-        // Present for every difficulty: New Game reads the start lives from here (the game has no default). The
-        // run state +4 is 1 for a run that can go on: the menu offers Continue only for state 1 or 2 with lives
-        // (+0x30) and a history [obs 0x7101a26850]; 0 resets its map to an empty run.
-        bool cont = active && lives > 0 && !complete;
-        uint8_t lv = (uint8_t)(lives > 255 ? 255 : lives);
-        s8(r + 0x00, 1);
-        s32(r + 0x04, cont ? 1 : 0);
-        s8(r + 0x08, (uint8_t)(coins % 100));
-        s32(r + 0x0c, score);
-        s8(r + 0x10, cont ? lv : 0);
-        s8(r + 0x11, start_lives);
-        s64(r + 0x18, 0);
-        s64(r + 0x20, 0);
-        // The play part: a run that can go on (Continue) has lives; a finished or completed one shows none.
-        s8(r + 0x28, cont ? 1 : 0);
-        s32(r + 0x2c, cont ? clears : 0);
-        s8(r + 0x30, cont ? lv : 0);
         pthread_mutex_lock(&state_lock);
-        runs[d].coins = coins, runs[d].score = score, runs[d].complete = complete;
-        runs[d].active = cont, runs[d].lives = lives, runs[d].clears = clears;
+        runs[d].coins = (uint32_t)json_num(json_get(run, "coins"), 0);
+        runs[d].score = (uint32_t)json_num(json_get(run, "score"), 0);
+        runs[d].complete = complete;
+        runs[d].lives = lives, runs[d].clears = (uint32_t)json_num(json_get(run, "clears"), 0);
         runs[d].goal = (uint32_t)json_num(json_get(run, "goal"), 0);
+        runs[d].held = active && lives > 0 && !complete;
+        runs[d].hundred = !strcmp(json_str(json_get(run, "ruleset"), "smm2"), "hundred");
         pthread_mutex_unlock(&state_lock);
-        MLOG("status %s: %s lives %u clears %u%s\n", DIFF[d], active ? "run" : "no run", lives, clears,
-             complete ? " (complete)" : "");
+        MLOG("status %s: %s lives %u%s%s\n", DIFF[d], active ? "run" : "no run", lives,
+             runs[d].hundred ? " (100 Mario)" : "", complete ? " (complete)" : "");
     }
+    netobj_lock(c);
+    for (uint32_t d = 0; d < 4; d++) write_record(record(no, d), d);
     netobj_unlock(c);
     json_free(st);
     finish(c, no, true, 0);
+}
+
+// (the UI cache: Cache +0x15e598 holds the menu's copy of the records [obs 0x7101520fd0])
+#define UI_CACHE MAIN_ADDR(0x2c115e0)
+// A Challenge Modes switch: the run records again as the other mode sees them (the game's and the menu's copies).
+void endless_apply_mode(void) {
+    uint64_t no = netobj(), cache = g64(UI_CACHE);
+    for (uint32_t d = 0; d < 4; d++) {
+        if (no && g64(no + NO_RECORDS) && d < g32(no + NO_RECORDS_COUNT)) write_record(record(no, d), d);
+        if (cache && g64(cache + 0x15e598) && d < g32(cache + 0x15e590))
+            write_record(g64(cache + 0x15e598) + 0x38ull * d, d);
+    }
 }
 
 // ---- the next course, known before the game asks for it (the flow's start card shows it, as SMM1's does): the
@@ -909,17 +932,6 @@ void endless_forget_run(int d) {
     pthread_mutex_lock(&state_lock);
     memset(&runs[d], 0, sizeof runs[d]);
     pthread_mutex_unlock(&state_lock);
-}
-
-// The start lives New Game reads (run record +0x11) in the network object and the UI cache (Cache +0x15e598, the
-// records' copy [obs 0x7101520fd0]): 5 for SMM2's own Endless, 100 for 100 Mario, when the player switches.
-#define UI_CACHE MAIN_ADDR(0x2c115e0)
-void endless_set_start_lives(uint8_t lives) {
-    uint64_t no = netobj(), cache = g64(UI_CACHE);
-    for (uint32_t d = 0; d < 4; d++) {
-        if (no && g64(no + NO_RECORDS) && d < g32(no + NO_RECORDS_COUNT)) s8(record(no, d) + 0x11, lives);
-        if (cache && g64(cache + 0x15e598) && d < g32(cache + 0x15e590)) s8(g64(cache + 0x15e598) + 0x38ull * d + 0x11, lives);
-    }
 }
 
 bool endless_has_course(uint64_t id) {  // world.c: is this course the one an Endless run is on
