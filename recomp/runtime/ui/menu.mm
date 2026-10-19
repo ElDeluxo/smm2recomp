@@ -166,7 +166,8 @@ bool menu_handle_event(const SDL_Event *e) {
     switch (e->type) {
     case SDL_EVENT_KEY_DOWN:
         if (!e->key.repeat && (e->key.scancode == SDL_SCANCODE_F1 ||
-                               (e->key.scancode == SDL_SCANCODE_ESCAPE && !g_open.load()))) {
+                               ((e->key.scancode == SDL_SCANCODE_ESCAPE || e->key.scancode == SDL_SCANCODE_AC_BACK) &&
+                                !g_open.load()))) {  // (AC_BACK: Android's Back)
             if (!typing) set_open(!g_open.load());  // (Esc with the menu open goes to ImGui below: it cancels a field)
             return true;
         }
@@ -182,7 +183,7 @@ bool menu_handle_event(const SDL_Event *e) {
     case SDL_EVENT_KEY_UP: {
         if (!capturing()) return false;
         bool down = e->type == SDL_EVENT_KEY_DOWN;
-        if (down && e->key.scancode == SDL_SCANCODE_ESCAPE) {  // Esc: back out of popups, else close
+        if (down && (e->key.scancode == SDL_SCANCODE_ESCAPE || e->key.scancode == SDL_SCANCODE_AC_BACK)) {  // Esc: back out of popups, else close
             QEvent q = {};
             q.kind = QEvent::KEY; q.key = ImGuiKey_Escape; q.down = true; push(q);
             q.down = false; push(q);

@@ -1,10 +1,15 @@
-// Linux host layer (runtime/platform.h). x86-64 and aarch64.
+// Linux host layer (runtime/platform.h). x86-64 and aarch64; Android (arm64) too, where noted (__ANDROID__).
 #define _GNU_SOURCE
 #include <SDL3/SDL.h>
 #include "../game.h"
 #include <dlfcn.h>
 #include <errno.h>
+#ifdef __ANDROID__
+#include <android/log.h>
+#include <unwind.h>
+#else
 #include <execinfo.h>
+#endif
 #include <fcntl.h>
 #include <pthread.h>
 #include <sched.h>
@@ -35,6 +40,28 @@ bool plat_reserve_guest(uint64_t lo, uint64_t hi) {
     if (p != (void *)(uintptr_t)lo) { munmap(p, hi - lo); return false; }  // (kernels before 4.17: just a hint)
     return true;
 }
+
+#ifdef __ANDROID__
+// When the window can't be had (runtime/main.c): what is mapped inside it, and the top of the address space (a 39-bit
+// kernel's user space ends at 0x8000000000), into the log.
+void plat_guest_report(uint64_t lo, uint64_t hi) {
+    FILE *f = fopen("/proc/self/maps", "r");
+    if (!f) return;
+    char line[512];
+    unsigned long long top = 0, in_default = 0;
+    int n_default = 0;
+    while (fgets(line, sizeof line, f)) {
+        unsigned long long a, b;
+        if (sscanf(line, "%llx-%llx", &a, &b) != 2) continue;
+        if (b > top && b < 0xffff000000000000ull) top = b;
+        if (a < hi && b > lo) fprintf(stderr, "[guest] in the window: %s", line);
+        if (a < 0x7320000000ull && b > 0x7000000000ull) n_default++, in_default += b - a;  // (the desktop window's place)
+    }
+    fclose(f);
+    fprintf(stderr, "[guest] window %#llx-%#llx; highest mapping ends at %#llx; %d mappings (%llu MB) in 0x7000000000-"
+            "0x7320000000\n", (unsigned long long)lo, (unsigned long long)hi, top, n_default, in_default >> 20);
+}
+#endif
 
 // Fresh zero pages over the whole window (the old ones are released at once).
 bool plat_reset_guest(uint64_t lo, uint64_t hi) {
@@ -81,6 +108,44 @@ void plat_thread_realtime(uint64_t period_ns) {
 // start screen re-executing itself for the game) append to the same log.
 static char g_log_path[1024];
 
+#ifdef __ANDROID__
+// An app's stdout / stderr go nowhere: they go to <external files dir>/smm2recomp.log (written directly, so nothing is
+// lost when the process ends on an error), and a thread copies each new line to logcat (tag smm2recomp).
+static void *logcat_pump(void *arg) {
+    int fd = (int)(intptr_t)arg;
+    char buf[4097];
+    size_t have = 0;
+    for (;;) {
+        ssize_t n = read(fd, buf + have, sizeof buf - 1 - have);
+        if (n <= 0) { SDL_Delay(50); continue; }
+        have += (size_t)n;
+        buf[have] = 0;
+        char *line = buf, *nl;
+        while ((nl = memchr(line, '\n', (size_t)(buf + have - line)))) {
+            *nl = 0;
+            __android_log_write(ANDROID_LOG_INFO, GAME_EXE, line);
+            line = nl + 1;
+        }
+        have -= (size_t)(line - buf);
+        memmove(buf, line, have);
+        if (have == sizeof buf - 1) { buf[have] = 0; __android_log_write(ANDROID_LOG_INFO, GAME_EXE, buf); have = 0; }
+    }
+    return NULL;
+}
+
+static void log_to_file_without_terminal(void) {
+    const char *dir = SDL_GetAndroidExternalStoragePath();
+    if (!dir) dir = SDL_GetAndroidInternalStoragePath();
+    if (!dir) return;
+    mkdir(dir, 0755);
+    snprintf(g_log_path, sizeof g_log_path, "%s/" GAME_EXE ".log", dir);
+    if (!freopen(g_log_path, "w", stderr)) { g_log_path[0] = 0; return; }
+    dup2(STDERR_FILENO, STDOUT_FILENO);
+    int rd = open(g_log_path, O_RDONLY | O_CLOEXEC);
+    pthread_t t;
+    if (rd >= 0 && pthread_create(&t, NULL, logcat_pump, (void *)(intptr_t)rd) == 0) pthread_detach(t);
+}
+#else
 static void log_to_file_without_terminal(void) {
     if (isatty(STDERR_FILENO)) return;
     char dir[900];
@@ -99,6 +164,7 @@ static void log_to_file_without_terminal(void) {
     dup2(STDERR_FILENO, STDOUT_FILENO);
     setenv("LASRECOMP_LOG_APPEND", "1", 1);
 }
+#endif
 
 #if defined(__x86_64__)
 #include "x86_cpu.h"
@@ -120,7 +186,14 @@ void plat_init(void) {
 }
 
 // (inside an AppImage: the binary in its mount, which stays mounted while this process lives - re-exec included)
+// Android: the process is the system's app_process; this is libmain.so in the app's library folder (or in the APK).
 bool plat_exe_path(char *buf, size_t size) {
+#ifdef __ANDROID__
+    Dl_info di = {0};
+    if (!dladdr((void *)plat_exe_path, &di) || !di.dli_fname) return false;
+    snprintf(buf, size, "%s", di.dli_fname);
+    return true;
+#endif
     ssize_t n = readlink("/proc/self/exe", buf, size - 1);
     if (n <= 0) return false;
     buf[n] = 0;
@@ -144,6 +217,10 @@ static char **self_argv(void) {
 }
 
 void plat_exec(char *const argv[]) {
+#ifdef __ANDROID__
+    (void)argv, (void)self_argv;  // (an app can't replace its process)
+    return;
+#endif
     if (argv) { execv(argv[0], argv); return; }
     char path[4096];
     char **av = self_argv();
@@ -171,6 +248,24 @@ void plat_fatal_notice(void) {
 }
 
 const char *rt_host_fn_name(uint64_t pc, uint64_t *offset);  // runtime/dispatch.c
+
+#ifdef __ANDROID__
+// (bionic's backtrace() is API 33+) the same through the unwinder
+typedef struct { void **cur, **end; } BtState;
+static _Unwind_Reason_Code bt_frame(struct _Unwind_Context *ctx, void *arg) {
+    BtState *s = arg;
+    uintptr_t pc = _Unwind_GetIP(ctx);
+    if (!pc) return _URC_NO_REASON;
+    if (s->cur == s->end) return _URC_END_OF_STACK;
+    *s->cur++ = (void *)pc;
+    return _URC_NO_REASON;
+}
+static int backtrace(void **buf, int max) {
+    BtState s = {buf, buf + max};
+    _Unwind_Backtrace(bt_frame, &s);
+    return (int)(s.cur - buf);
+}
+#endif
 
 void plat_print_backtrace(void) {
     void *bt[64];
