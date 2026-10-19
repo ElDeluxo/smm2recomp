@@ -144,6 +144,20 @@ static void log_to_file_without_terminal(void) {
     int rd = open(g_log_path, O_RDONLY | O_CLOEXEC);
     pthread_t t;
     if (rd >= 0 && pthread_create(&t, NULL, logcat_pump, (void *)(intptr_t)rd) == 0) pthread_detach(t);
+    // An app gets no environment from its launcher: <external files dir>/recomp.env, one NAME=value per line ('#'
+    // comments), sets the runtime's environment variables (README "Running": SMM2_SEED, LARECOMP_WINDOW_SHOT, ...)
+    char env_path[1100], line[1024];
+    snprintf(env_path, sizeof env_path, "%s/recomp.env", dir);
+    FILE *f = fopen(env_path, "r");
+    while (f && fgets(line, sizeof line, f)) {
+        line[strcspn(line, "\r\n")] = 0;
+        char *eq = strchr(line, '=');
+        if (line[0] == '#' || !eq) continue;
+        *eq = 0;
+        setenv(line, eq + 1, 1);
+        fprintf(stderr, "[env] %s=%s (recomp.env)\n", line, eq + 1);
+    }
+    if (f) fclose(f);
 }
 #else
 static void log_to_file_without_terminal(void) {

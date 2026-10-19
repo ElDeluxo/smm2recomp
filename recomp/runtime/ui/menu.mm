@@ -258,6 +258,9 @@ void menu_apply_window_requests(void *win) {
     g_pixel_density = SDL_GetWindowPixelDensity(w);
     static bool text_input;
     bool want_text = capturing();
+#ifdef __ANDROID__  // (text input brings up the soft keyboard there: only while a text field / name entry wants it)
+    want_text = g_kbd.load() == 1 || (g_open.load() && g_text_busy.load());
+#endif
     if (want_text != text_input) {
         if (want_text) SDL_StartTextInput(w);
         else SDL_StopTextInput(w);
@@ -266,7 +269,7 @@ void menu_apply_window_requests(void *win) {
     static bool first = true;
     if (first || g_want_fullscreen_apply.exchange(false)) {
         first = false;
-#if !(defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE)  // (iOS: always the whole screen, runtime/nvn/metal.m)
+#if !(defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE) && !defined(__ANDROID__)  // (iOS, Android: always the whole screen)
         SDL_SetWindowFullscreen(w, g_settings.fullscreen);
 #endif
     }

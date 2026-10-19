@@ -23,7 +23,7 @@ NDK=${ANDROID_NDK:-$(ls -d "$SDK"/ndk/* | sort -V | tail -1)}
 STRIP=$(ls "$NDK"/toolchains/llvm/prebuilt/*/bin/llvm-strip | head -1)
 JAVAC=${JAVAC:-$(if [ -n "${JAVA_HOME:-}" ]; then echo "$JAVA_HOME/bin/javac"; else echo javac; fi)}
 VERSION=3.0.3
-CODE=$(git rev-list --count HEAD 2>/dev/null || echo 1)
+CODE=$(( $(date +%s) / 60 ))  # (minutes since 1970: each build installs over the last, whatever the git history)
 for f in "$JAR" "$BT/aapt2" "$BT/d8" "$BT/zipalign" "$BT/apksigner" "$DEPS/lib/libSDL3.so" "$B/libmain.so" "$B/libsmm2game.so"; do
     [ -e "$f" ] || { echo "make_android_apk: missing $f" >&2; exit 1; }
 done

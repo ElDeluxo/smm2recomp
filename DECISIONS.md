@@ -1134,8 +1134,9 @@ The recomp builds for Android arm64 (`make -C recomp TARGET=android-arm64 GAME=s
   It is claimed with `MAP_FIXED_NOREPLACE` from a constructor in `libmain.so` (when the activity loads it, before
   SDL_main); if the claim fails, the app says so and logs what is mapped there. Evidence [obs]: the API 35 arm64
   emulator (kernel 6.6, 4K pages) has a 39-bit space (highest mapping ends at 0x7fd2c01000) and the low window is
-  claimed. [obs] On that boot nothing was mapped in 0x7000000000-0x7320000000 either: the default would have worked
-  there, but nothing guarantees it on other devices / boots [inf].
+  claimed. [obs] Whether the default window would have been free changes from boot to boot: one emulator boot had
+  nothing mapped in 0x7000000000-0x7320000000, the next had 742 mappings (6.4 GB) there, so the desktop base would
+  have failed on it while the low window was claimed both times.
 - **Game code compiled on the Mac, shipped in the APK** (as on iOS: no compiler on the device). It is a separate
   `libsmm2game.so` (143 MB) linked against `libmain.so` (the runtime, SDL3's entry, static libc++ and shaderc), loaded
   by name so it can stay inside the APK (`extractNativeLibs=false`, 16 KB-aligned). The APK carries code made from the

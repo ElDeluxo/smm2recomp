@@ -171,11 +171,26 @@ Android runs on Vulkan, like Windows and Linux. As on iOS, the game code is comp
 runtime (`libmain.so`), SDL3 (`libSDL3.so`) and SDL's Java activity. The APK is made from your dump: it is for your own
 devices only, never to be shared, uploaded or put on a store.
 
+Status (2026-10-19), from the Android evidence:
+
+- **Builds:** cross-built on macOS with the NDK (r29): `libmain.so` 14 MB stripped + `libsmm2game.so` 143 MB + `libSDL3.so` 2 MB,
+  APK 160 MB.
+- **Boots to the title screen** in the Android Emulator (API 35, arm64, Apple Silicon; its Vulkan is gfxstream over
+  MoltenVK): the intro (3D scene with Toad, Yoshi and the Koopa Car) at up to 60 fps, the title screen at about 19 fps.
+  Back opens the overlay menu and a tap closes it.
+- **Not right yet in the emulator:** on the title screen about half the draws are skipped because their pipelines
+  fail to build there (`VK_ERROR_INITIALIZATION_FAILED`), so the background course and parts of the logo are missing.
+  [inf] These are the geometry-shader pipelines: MoltenVK has no geometry shaders, while phone GPUs (Adreno, Mali) do.
+  The emulator's SwiftShader mode is no way round it: it lacks 8- and 16-bit storage, which the backend requires.
+- **Not tested:** a physical device. Neither is a course played, nor the on-screen controller (the emulator reports its
+  keyboard as a gamepad, so the controller hides).
+
 Requirements:
-- **Device:** arm64 (arm64-v8a), Android 13 or newer, a Vulkan 1.3 driver with dynamic rendering, timeline semaphores,
-  8-bit storage and scalar block layout (Adreno 7xx, Mali-G7xx / G6xx-Immortalis, Xclipse and newer). About 4 GB of
-  free RAM for the game (8 GB devices or more) and 4 GB of storage for the game files plus 0.6 GB for the app.
-  GPUs without BC textures (most phones) get them decoded on the CPU at upload (`runtime/nvn/bcsoft.c`).
+- **Device:** arm64 (arm64-v8a), Android 13 or newer (the NDK's Vulkan 1.3 entry points), a Vulkan 1.3 driver with
+  dynamic rendering, timeline semaphores, 8-bit storage and scalar block layout. [inf] Recent Adreno (7xx) and Mali
+  (G7xx / Immortalis) drivers report these; no physical device has been tried yet. The game takes 3.2 GB of guest
+  heap, so an 8 GB device or more; storage: about 3 GB of game files plus the 160 MB APK. GPUs without BC textures
+  (most phones) get them decoded on the CPU at upload (`runtime/nvn/bcsoft.c`).
 - **On the Mac:** the Android SDK command-line tools with `platform-tools` (adb), `build-tools`, a `platforms;android-NN`
   and the NDK (r29 used here), a JDK 17+ (`brew install openjdk@21`), cmake and ninja.
 
@@ -197,7 +212,8 @@ generated for that base (`generated/smm2-0x800000000`, `GUEST_ORIGIN` in the Mak
 (exefs + romfs, laid out by `games/smm2/setup.py` on the Mac), `fonts/` and `sysdata/` (sysdata.py), and optionally
 `save/`. `make ... push-data` (`tools/android_push_data.sh private/smm2 [extracted fonts sysdata save]`) copies them with
 adb, following the RomFS links (about 3 GB: some minutes). The same folder gets the settings, caches and the log
-(`smm2recomp.log`, also in logcat under the tag `smm2recomp`).
+(`smm2recomp.log`, also in logcat under the tag `smm2recomp`). An app gets no environment variables: a `recomp.env`
+there (one `NAME=value` per line, e.g. `SMM2_SEED=4`) sets them (the table under "Running").
 
 Input:
 - Touches are the console's touch screen; the on-screen controller (stick, ABXY, L/R/ZL/ZR, +/-, menu, hide) is drawn

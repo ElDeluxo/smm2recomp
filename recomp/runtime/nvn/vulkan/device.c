@@ -518,6 +518,10 @@ static bool save_png_plain(const char *path, const uint8_t *rgba, uint32_t w, ui
 #endif
 
 void vk_save_png(const char *path, const uint8_t *rgba, uint32_t w, uint32_t h) {
+#ifdef __ANDROID__  // (SDL takes a relative path as one in the app's internal storage: keep it in the data root)
+    char abs[1200];
+    if (path[0] != '/' && getcwd(abs, 1000)) { snprintf(abs + strlen(abs), sizeof abs - strlen(abs), "/%s", path); path = abs; }
+#endif
 #if SDL_VERSION_ATLEAST(3, 4, 0)
     SDL_Surface *s = SDL_CreateSurfaceFrom((int)w, (int)h, SDL_PIXELFORMAT_ABGR8888, (void *)rgba, (int)w * 4);
     if (!s || !SDL_SavePNG(s, path)) LOG("[vk] saving %s failed: %s\n", path, SDL_GetError());
