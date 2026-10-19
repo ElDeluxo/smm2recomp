@@ -160,7 +160,7 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
         and shadow parameters, the balloon's place and dot pattern, the styles' skies, NSMBU Mario's yaw,
         skinning, depth and lighting; NSMBU's 3-D sky is an approximation (fixed picture) [inf]
       - ✅ SMM1's music and sounds (Course World stream per difficulty with the beat bounce, the map
-        streams, the ending and staff-roll music, the screens' sound banks), the game's sound faded under
+        streams, the ending and staff-roll music incl. SMW's Toad tune, the screens' sound banks), the game's sound faded under
       - ✅ a whole Super Expert run against the local server, unattended: select → map → card → course →
         clear … (skips, misses) → the ending with the run's courses and makers in the credits → back on
         the select (`RECOMP_HUNDRED_AUTO`, `RECOMP_HUNDRED_SHOTS`; evidence in

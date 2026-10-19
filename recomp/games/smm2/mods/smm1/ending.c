@@ -123,8 +123,13 @@ int ending_step(Ending *e, const UiIn *in) {
     if (e->tick == 1) {  // EndingPeachBGM / EndingKinopioBGM by style [obs data: SLink2DB]
         static const char *peach[4] = {"M1_BGM_Ending", "M3_BGM_EndingDemo2", "MW_BGM_Ending2", "WU_STRM_BGM_LAST_BOSS2_HARP"};
         static const char *toad[4] = {"M1_BGM_Ending", "M3_BGM_EndingDemo1", NULL, "WU_STRM_BGM_LAST_BOSS_HARP_Dummy"};
-        const char *s = e->d ? peach[e->style] : toad[e->style];  // (SMW's Toad tune is a sound-bank wave: not yet)
-        smm1_bgm(s, false);
+        const char *s = e->d ? peach[e->style] : toad[e->style];
+        if (s) smm1_bgm(s, false);
+        else {  // SMW's Toad tune is a wave of the scene's sound bank (NetEndingDemoScene.bars) [obs data]
+            smm1_bgm(NULL, false);
+            smm1_se_bank("NetEndingDemoScene");
+            smm1_se("SuperMarioWorld_21_RescueEgg");
+        }
     }
     if (e->tick == e->rescue_len) smm1_bgm_fade(FADE);
     if (e->tick == e->rescue_len + FADE)  // the staff roll: Easy and Super Expert "easy", Normal and Expert "normal"
