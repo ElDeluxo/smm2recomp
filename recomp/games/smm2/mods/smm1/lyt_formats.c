@@ -129,6 +129,9 @@ int lyt_tex_add(int w, int h, uint8_t *px) {
     return g_ntex++;
 }
 const LTex *lyt_tex(int id) { return id >= 0 && id < g_ntex ? &g_tex[id] : NULL; }
+void lyt_tex_srgb(int id) {
+    if (id >= 0 && id < g_ntex) g_tex[id].srgb = true;
+}
 
 // ================================================================ GX2 (R7xx AddrLib) untiling, thin modes, mip 0
 // Hardware constants (Wii U "Latte"): 2 pipes, 4 banks, 256-byte pipe interleave.
@@ -295,6 +298,13 @@ static uint8_t *surface_rgba(const uint8_t *d, size_t n, uint32_t w, uint32_t h,
 }
 uint8_t *lyt_surface_raw(const uint8_t *d, size_t n, uint32_t w, uint32_t h, int fmt, uint32_t mode, uint32_t swz) {
     return surface_rgba_x(d, n, w, h, fmt, mode, swz, true);
+}
+
+int lyt_flim_format(const uint8_t *d, size_t n) {
+    if (n < 0x28) return -1;
+    const uint8_t *f = d + n - 0x28;
+    if (memcmp(f, "FLIM", 4) || memcmp(f + 0x14, "imag", 4)) return -1;
+    return f[0x22];
 }
 
 uint8_t *lyt_flim_decode(const uint8_t *d, size_t n, int *w, int *h) {
@@ -526,7 +536,12 @@ static size_t parse_material_with(const R *r, size_t start, size_t gen, LMat *m)
         if (ind) o += 12;
         for (int i = 0; i < nproj; i++, o += 20)
             m->proj[i] = (LProj){{rf(r, o), rf(r, o + 4)}, {rf(r, o + 8), rf(r, o + 12)}, r8(r, o + 16)};
-        if (sh) o += 8;
+        if (sh) {  // black RGB, white RGBA, a pad byte
+            m->has_shadow = true;
+            for (int k = 0; k < 3; k++) m->shadow_black[k] = r8(r, o + (size_t)k);
+            for (int k = 0; k < 4; k++) m->shadow_white[k] = r8(r, o + 3 + (size_t)k);
+            o += 8;
+        }
         m->ntex = ntex, m->nsrt = nmtx, m->ngen = ngen, m->ntev = ntev, m->nproj = nproj;
         return o;
     }
@@ -856,6 +871,8 @@ LRes *lyt_load(const char *name) {
         int w = 0, h = 0;
         uint8_t *px = lyt_flim_decode(s.data + s.e[i].start, s.e[i].end - s.e[i].start, &w, &h);
         res->timg[k] = px ? lyt_tex_add(w, h, px) : -1;
+        if (px && lyt_format_srgb(lyt_flim_format(s.data + s.e[i].start, s.e[i].end - s.e[i].start)))
+            lyt_tex_srgb(res->timg[k]);
         if (!px) fprintf(stderr, "[smm1ui] %s: texture %s not decoded\n", name, s.e[i].name);
         k++;
     }

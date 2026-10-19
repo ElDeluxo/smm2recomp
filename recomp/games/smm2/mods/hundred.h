@@ -35,8 +35,7 @@ enum {
     HUNDRED_SKIP,         // the skip finished (SMM1: free, the next course)
     HUNDRED_GIVEUP_SAVE,  // Save & Quit done
     HUNDRED_ERROR,        // the course could not be fetched or loaded
-    HUNDRED_NEXT,         // the player left SMM2's result screen with Next (after a clear): the map walk and the card
-                          // (or, after the run's last clear, the ending)
+    HUNDRED_NEXT,         // after a clear: the player left SMM2's result screen with Next (the run goes on, or is won)
 };
 
 // ---- the flow's (mods/smm1/flow.c), called by the mod

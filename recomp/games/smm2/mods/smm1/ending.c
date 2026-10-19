@@ -56,6 +56,11 @@ Ending *ending_new_style(int d, int n, const struct hundred_credit *c, int style
         lay_text_from(e->text, "T_ThankYou_00", label);
     }
     e->text_in = rescue_text_in(e->rescue), e->text_out = rescue_text_out(e->rescue);
+    if (e->text && e->rescue) {  // the balloon points at Peach's (Toad's) head [obs: Cemu]
+        float xy[2];
+        rescue_balloon_anchor(e->rescue, xy);
+        lyt_set_pane(e->text->in, "N_All_00", xy, -1);
+    }
     static const char *which[4] = {"Nwk_StaffCredit_01", "Nwk_StaffCredit_00", "Nwk_StaffCredit_00", "Nwk_StaffCredit_03"};
     e->credits = lay_open(which[e->d]);
     e->credits_start = e->rescue_len + FADE + FADE;
