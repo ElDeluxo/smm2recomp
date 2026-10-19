@@ -425,7 +425,14 @@ run-smm2:
 	$(MAKE) GAME=smm2 run
 JOBS ?= $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 
+# Frame generation (runtime/nvn/framegen*): the per-frame decision, and the passes on synthetic images (Metal)
+build/test_framegen_logic: tools/test_framegen_logic.c runtime/nvn/framegen.c runtime/nvn/framegen.h
+	@mkdir -p build
+	clang -O1 -DFG_NO_SDL -I runtime -o $@ tools/test_framegen_logic.c runtime/nvn/framegen.c
+test-framegen: build/test_framegen_logic
+	build/test_framegen_logic
+
 build/test_shaders: tools/test_shaders.m runtime/nvn/maxwell/translate.c runtime/nvn/maxwell/shader.h
 	clang -O1 -fobjc-arc -framework Metal -framework Foundation -o $@ tools/test_shaders.m runtime/nvn/maxwell/translate.c
 
-.PHONY: all venv setup gen clean-gen run gen-objs runtime-objs test-tools smm2 run-smm2 package embed-server app app-macos apk install push-data
+.PHONY: all venv setup gen clean-gen run gen-objs runtime-objs test-tools test-framegen smm2 run-smm2 package embed-server app app-macos apk install push-data
