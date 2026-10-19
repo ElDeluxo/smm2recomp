@@ -63,4 +63,7 @@ uint32_t kernel_new_handle(KObject *o);
 void kernel_signal(KObject *o);  // caller holds g_klock
 KEvent *kernel_create_event_pair(uint32_t *writable, uint32_t *readable);
 KThread *kernel_current_thread(void);
+// Around a host wait inside a service (sockets, TLS): the calling thread's core is free meanwhile
+void kernel_host_wait_begin(void);
+void kernel_host_wait_end(void);
 uint64_t kernel_heap_size(void);  // bytes from HEAP_BASE set by SetHeapSize

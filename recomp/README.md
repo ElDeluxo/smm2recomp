@@ -22,7 +22,7 @@ and `build/`, which git ignores and the repo's proprietary-content check blocks.
 | `tools/` | the recompiler: `gen.py` (a whole NSO module -> C), `lifter.py`, `simd_c.py`, `nso.py`, tests |
 | `runtime/` | the shared runtime: loader, dispatcher, kernel, IPC + services, NVN on Metal / Vulkan, platform layers |
 | `games/smm2/` | the game's glue: `game.mk` (identity, dump paths), `setup.py` (lays out the dump), patches, HLE list |
-| `third_party/` | Dear ImGui (overlay menu), SMAA |
+| `third_party/` | Dear ImGui (overlay menu), SMAA, bcdec, Mbed TLS (the game's ssl service) |
 | `docs/` | findings from the bring-up (names and behaviour only, no game code) |
 | `private/`, `generated/`, `build/` | made from your dump (ignored; may be symlinks to another disk) |
 

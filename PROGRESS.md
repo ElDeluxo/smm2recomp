@@ -185,6 +185,18 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     ✅ courses=tgrcode setting (built-in server, awaiting core/crates/embed);
     ⬜ online multiplayer: plan in `DECISIONS.md` (local play over our relay first, Network Play at
     the enl layer second)
+  - 🔄 **The game's own network stack** (groundwork for Nextendo Network and a local NEX server, offline:
+    `recomp/docs/mods.md` "The game's own network stack"): ✅ real TCP / UDP sockets (`bsd:u`), nsd + sfdnsres
+    from a deny-by-default redirect table, `ssl` on Mbed TLS with the runtime's trust policy, a local account and
+    JWT ID token, `backend=` setting (ours / local-nex / nextendo greyed out), `tools/nex_test_server`;
+    ✅ **Proof 1**: with `backend=local-nex` the game resolves its NEX host to the test server, opens TLS, upgrades
+    the WebSocket and sends its NEX login (`ValidateAndRequestTicketWithParam`, decoded, token checked; evidence
+    in `/Volumes/SSD/smm-work/recomp-net/evidence/proof1/`, private); ✅ default backend unchanged (no sockets,
+    no lookups); ✅ **Proof 2**: `tools/nex_test_server` answers the ticket, the secure connection, Register,
+    GetIntegerSettings and SMM2's DataStore login calls (GetUsers, GetUserNameNgType, SyncUserProfile,
+    GetMiiClothes, GetNewNotification), and Course World's top screen opens through the game's **own** NEX client,
+    no mod override involved (`evidence/proof2/`, private); ✅ UDP port parking for PIA; ⬜ course lists, downloads
+    and the rest of DataStore on the local NEX server; ⬜ Nextendo (owner's go-ahead, app registration, sign-in)
 
 - ⬜ **Releases (melee-pc style, owner-approved)**: per-platform launcher + recompiler, no game code;
   dump picker with v3.0.3 hash check, the player's prod.keys, extraction, first-launch recompile with

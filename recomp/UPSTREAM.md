@@ -12,7 +12,9 @@ reorganised toward a shared runtime plus per-game glue. Ideas (and, where noted,
 Third-party code that came with the LAS fork keeps its own license: `third_party/imgui` (MIT, trimmed to the core and
 the SDL3 / Metal / Vulkan backends) and `third_party/smaa` (MIT-style, `third_party/smaa/LICENSE.txt`). Added here:
 `third_party/bcdec` (bcdec by Sergii Kudlai, MIT or Unlicense, `third_party/bcdec/LICENSE`): BC texture decoding on
-the CPU for GPUs without BC support (the iOS Simulator).
+the CPU for GPUs without BC support (the iOS Simulator). `third_party/mbedtls` (Mbed TLS 3.6.7 LTS, Apache-2.0 OR
+GPL-2.0-or-later, taken under Apache-2.0; `third_party/mbedtls/LICENSE`, `README.recomp`): TLS for the game's own
+ssl service (`runtime/services/ssl.c`), sources unmodified.
 
 ## What was taken from LAS Recomp
 

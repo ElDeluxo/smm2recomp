@@ -211,7 +211,7 @@ OSFLAGS  := -D_FILE_OFFSET_BITS=64 -D_POSIX_THREAD_SAFE_FUNCTIONS -D_CRT_RAND_S 
 GENARCH  ?= $(if $(CROSS_CC),-mcpu=x86_64_v3,-march=x86-64-v3)
 GENFLAGS += -D_FILE_OFFSET_BITS=64 $(GENARCH)
 LDFLAGS  := $(LLD) -Wl,--stack,16777216 $(if $(DEPS),-L$(DEPS)/lib) -lSDL3 $(FFMPEG_LIBS) \
-            -lvulkan-1 -lwinmm -lole32 -lshell32 -lcomdlg32 -luuid -lshaderc_shared
+            -lvulkan-1 -lwinmm -lole32 -lshell32 -lcomdlg32 -luuid -lshaderc_shared -lws2_32 -lbcrypt
 BACKEND_SRC := $(wildcard runtime/nvn/vulkan/*.c) $(wildcard runtime/nvn/vulkan/*.cpp)
 BACKEND_OBJ := $(patsubst runtime/%.cpp,$(B)/rt/%.o,$(patsubst runtime/%.c,$(B)/rt/%.o,$(BACKEND_SRC)))
 IMGUI_OBJ += $(B)/imgui/imgui_impl_vulkan.o
@@ -230,6 +230,11 @@ GAMELIB_SRCS := tools/gen.py tools/lifter.py tools/analyze.py tools/nso.py tools
 GAMELIB_ID := $(shell (cat $(GAMELIB_SRCS); echo '$(GENFLAGS)') | (shasum -a 256 2>/dev/null || sha256sum) | cut -c1-16)
 
 RT_OBJ   := $(patsubst %.c,$(B)/rt/%.o,$(patsubst runtime/%,%,$(RT_SRC)))
+# TLS for the game's own ssl service (runtime/services/ssl.c): Mbed TLS 3.6 LTS, third_party/mbedtls (Apache-2.0),
+# built with runtime/net/mbedtls_user_config.h (a TLS 1.2 client)
+MBEDTLS  := third_party/mbedtls
+MBEDTLS_FLAGS := -I$(MBEDTLS)/include -Iruntime/net -DMBEDTLS_USER_CONFIG_FILE='"mbedtls_user_config.h"'
+MBEDTLS_OBJ := $(patsubst $(MBEDTLS)/library/%.c,$(B)/mbedtls/%.o,$(wildcard $(MBEDTLS)/library/*.c))
 # The course server inside the app (core/crates/embed, runtime/net/embed_server.h): linked when its library is built
 # (`make embed-server`: cargo) or EMBED_SERVER=1, Apple builds for now; a build never needs Rust otherwise.
 EMBED_TRIPLE := $(if $(filter ios,$(PLATFORM)),aarch64-apple-ios,$(if $(filter iossim,$(PLATFORM)),aarch64-apple-ios-sim,$(if $(filter macos,$(PLATFORM)),aarch64-apple-darwin)))
@@ -266,6 +271,13 @@ $(B)/rt/%.o: runtime/%.c $(RT_HDRS)
 	@mkdir -p $(dir $@)
 	$(CC) $(RTFLAGS) -c $< -o $@
 
+$(B)/mbedtls/%.o: $(MBEDTLS)/library/%.c runtime/net/mbedtls_user_config.h
+	@mkdir -p $(dir $@)
+	@$(CC) -O2 -g $(MBEDTLS_FLAGS) $(filter -D%,$(OSFLAGS)) -c $< -o $@
+$(B)/rt/services/ssl.o: RTFLAGS += $(MBEDTLS_FLAGS)
+$(B)/rt/services/ssl.o: runtime/net/mbedtls_user_config.h
+$(B)/rt/net/token.o: RTFLAGS += $(MBEDTLS_FLAGS)
+
 # a game's own glue (games/<game>/*.c), compiled like the runtime
 $(B)/rt/games/%.o: games/%.c $(RT_HDRS)
 	@mkdir -p $(dir $@)
@@ -287,7 +299,7 @@ $(B)/rt/%.o: runtime/%.m $(RT_HDRS)
 	$(CC) $(RTFLAGS) -fobjc-arc -c $< -o $@
 
 # linked to a temp file, then renamed over: a copy still running keeps its (old) file
-$(EXE): $(RT_OBJ) $(BACKEND_OBJ) $(UI_OBJ) $(IMGUI_OBJ) $(EXE_GAME_OBJ)
+$(EXE): $(RT_OBJ) $(MBEDTLS_OBJ) $(BACKEND_OBJ) $(UI_OBJ) $(IMGUI_OBJ) $(EXE_GAME_OBJ)
 	@mkdir -p $(dir $@)link
 	$(CXX) -o $(dir $@)link/$(notdir $@) $^ $(LDFLAGS)
 	mv -f $(dir $@)link/$(notdir $@) $@
@@ -374,7 +386,7 @@ run: all
 gen-objs: $(GEN_OBJ)
 
 # Runtime objects only (no generated code, no link): quick compile check, needs no game files
-runtime-objs: $(RT_OBJ) $(BACKEND_OBJ) $(UI_OBJ)
+runtime-objs: $(RT_OBJ) $(MBEDTLS_OBJ) $(BACKEND_OBJ) $(UI_OBJ)
 
 # Recompiler unit tests (no game files)
 test-tools:

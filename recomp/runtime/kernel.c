@@ -326,6 +326,22 @@ uint32_t kernel_current_thread_handle(void) { return t_cur ? t_cur->handle : 0; 
 Cpu *kernel_current_cpu(void) { return t_cur ? &t_cur->cpu : NULL; }
 KThread *kernel_current_thread(void) { return t_cur; }
 
+// A service about to wait in the host (a socket or TLS wait in runtime/services/bsd.c, ssl.c): the calling guest
+// thread gives its core up meanwhile, as a wait in the kernel does, so the other threads of that core run.
+void kernel_host_wait_begin(void) {
+    if (!t_cur) return;
+    pthread_mutex_lock(&g_klock);
+    core_release(t_cur);
+    pthread_mutex_unlock(&g_klock);
+}
+
+void kernel_host_wait_end(void) {
+    if (!t_cur) return;
+    pthread_mutex_lock(&g_klock);
+    core_acquire(t_cur);
+    pthread_mutex_unlock(&g_klock);
+}
+
 // ------------------------------------------------------------------ mutex / condvar (Horizon semantics)
 // Mutex word: owner handle | WAITERS_BIT. Waiting threads sleep on the global cond and are handed ownership.
 

@@ -7,3 +7,6 @@
 #include <stdbool.h>
 
 bool net_pretend_online(void);
+// The services report a connection: pretend online, or the game's own network stack is on (backend local-nex,
+// runtime/net/netcfg.h)
+bool net_online(void);

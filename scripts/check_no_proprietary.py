@@ -5,7 +5,8 @@ Checks these things for every file git knows about:
   1. extension   - container/asset/executable/key formats used by the Wii U and Switch, and
                    native binaries / translated shaders (the recomp builds those locally)
   2. magic bytes - catches renamed files (e.g. a SARC saved as .dat, an AArch64 ELF, a Mach-O)
-  3. key lines   - lines shaped like Switch prod.keys / title.keys entries
+  3. key lines   - lines shaped like Switch prod.keys / title.keys entries, and PEM private keys or certificates
+                   (from any console, or the recomp's local test CA: those are made locally into private/)
   4. recomp      - nothing under recomp/private/ or recomp/generated/ (derived from the dump),
                    and no text that looks like AArch64 disassembly or recompiled game code
 
@@ -43,6 +44,8 @@ BLOCKED_EXTENSIONS = {
     ".bcd",
     # keys
     ".keys",
+    # private keys and certificates (the local NEX test CA lives in recomp/private/, never in git)
+    ".pem", ".key", ".crt", ".der", ".p12", ".pfx", ".csr",
     # opaque archives (could hold anything)
     ".7z", ".rar",
     # native binaries and translated shaders: the recomp generates these locally from the dump
@@ -110,6 +113,11 @@ KEY_LINE = re.compile(
 BARE_KEY_LINE = re.compile(
     r"^(?:[\w .:-]{0,40}[:=\s])?\s*(?:[0-9a-f]{32}|[0-9a-f]{64})\s*(?:[#;]?[\w .:-]{0,40})?$", re.IGNORECASE
 )
+# a PEM block with its base64 body: a private key or a certificate (the bare header text alone, as in TLS library
+# sources that parse PEM, is fine)
+PEM_BLOCK = re.compile(
+    r"-----BEGIN (?:[A-Z0-9]+ )*(?:PRIVATE KEY|CERTIFICATE|CERTIFICATE REQUEST)-----\s*\n\s*[A-Za-z0-9+/=]{40,}"
+)
 KEY_FILENAME = re.compile(r"keys?\b|otp|seeprom", re.IGNORECASE)
 MAX_BYTES = 5 * 1024 * 1024
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tga", ".dds", ".tif", ".tiff", ".ktx", ".astc"}
@@ -168,6 +176,8 @@ def check_file(path: Path) -> list[str]:
             text = ""
         if KEY_LINE.search(text):
             problems.append("contains lines shaped like console key entries")
+        if PEM_BLOCK.search(text):
+            problems.append("contains a PEM private key or certificate")
         if len(ASM_LINE.findall(text)) > ASM_LIMIT:
             problems.append("content looks like AArch64 disassembly")
         if len(RECOMP_LINE.findall(text)) > RECOMP_LIMIT:
