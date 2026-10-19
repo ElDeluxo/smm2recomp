@@ -35,6 +35,14 @@ class CheckFileTests(unittest.TestCase):
         tex.write_bytes(b"\x00" * 16)
         self.assertTrue(check_file(tex))
 
+    def test_branding_icon_allowed(self):
+        b = self.dir / "docs" / "branding"
+        b.mkdir(parents=True)
+        icon = b / "app-icon.png"
+        icon.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 2_100_000)
+        self.assertEqual(check_file(icon), [])
+        self.assertTrue(check_file(self.write("icon.icns", b"icns" + b"\x00" * 16)))
+
     def test_clean_source_file_passes(self):
         self.assertEqual(check_file(self.write("main.rs", b"fn main() {}\n")), [])
 

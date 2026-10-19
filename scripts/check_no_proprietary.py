@@ -15,9 +15,10 @@ Usage:
   check_no_proprietary.py --staged   # check files staged for commit (pre-commit hook)
   check_no_proprietary.py FILE...    # check specific files
 
-Images (game art, captures) are blocked everywhere except two places: assets/placeholder/
-(original placeholder art) and docs/screenshots/ (a few captures of our own builds for the
-README, owner's call 2026-10-19: PNG or JPEG, at most 1 MiB each and 12 files).
+Images (game art, captures) are blocked everywhere except three places: assets/placeholder/
+(original placeholder art), docs/screenshots/ (a few captures of our own builds for the
+README, owner's call 2026-10-19: PNG or JPEG, at most 1 MiB each and 12 files) and docs/branding/
+(the owner's own app icon and the sizes made from it: PNG / ICNS / ICO, at most 3 MiB each).
 """
 
 from __future__ import annotations
@@ -125,11 +126,14 @@ PEM_BLOCK = re.compile(
 )
 KEY_FILENAME = re.compile(r"keys?\b|otp|seeprom", re.IGNORECASE)
 MAX_BYTES = 5 * 1024 * 1024
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tga", ".dds", ".tif", ".tiff", ".ktx", ".astc"}
+IMAGE_EXTENSIONS = {".icns", ".ico", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tga", ".dds", ".tif", ".tiff", ".ktx", ".astc"}
 SCREENSHOT_DIR = "/docs/screenshots/"
 SCREENSHOT_TYPES = {".png", ".jpg", ".jpeg"}
 SCREENSHOT_MAX_BYTES = 1024 * 1024
 SCREENSHOT_MAX_FILES = 12
+BRANDING_DIR = "/docs/branding/"
+BRANDING_TYPES = {".png", ".icns", ".ico"}
+BRANDING_MAX_BYTES = 3 * 1024 * 1024
 ALLOW_LARGE_PREFIXES = ()  # nothing in the repo should be this large
 
 
@@ -158,8 +162,13 @@ def check_file(path: Path) -> list[str]:
                 problems.append(f"screenshots must be PNG or JPEG, not '{suffix}'")
             elif path.is_file() and path.stat().st_size > SCREENSHOT_MAX_BYTES:
                 problems.append(f"screenshot is over {SCREENSHOT_MAX_BYTES // 1024} KiB")
+        elif BRANDING_DIR in posix:
+            if suffix not in BRANDING_TYPES:
+                problems.append(f"branding files must be PNG, ICNS or ICO, not '{suffix}'")
+            elif path.is_file() and path.stat().st_size > BRANDING_MAX_BYTES:
+                problems.append(f"branding file is over {BRANDING_MAX_BYTES // 1024} KiB")
         elif "/assets/placeholder/" not in posix:
-            problems.append("images are only allowed in docs/screenshots/ (captures) and assets/placeholder/")
+            problems.append("images are only allowed in docs/screenshots/, docs/branding/ and assets/placeholder/")
     if not path.is_file():
         return problems
     size = path.stat().st_size
