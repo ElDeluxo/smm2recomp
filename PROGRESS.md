@@ -74,6 +74,17 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
   (not exactly alignable: Ryujinx grabs are wall-clock timed). Ryujinx against itself: 0.3-1.8 %.
   Evidence: `recomp/private/smm2/evidence/r1/final_*` (`_side_by_side.png`, `_diff.png`, `_recomp.png`; private,
   not in git)
+- 🔄 In-course frames vs Ryujinx, lockstep (2026-10-19): 90 reference courses (5 styles x 10 themes, night for the four
+  2D styles), the same game state in both runtimes (both freeze at the same player update, every `sead::Random`
+  seeded alike) and the presented frame captured raw at 1080p. **71 of 90 bit-identical** at update 900 (70 at 1200):
+  every SMB1, SMB3 and SMW course, day and night; NSMBU and 3D World within 20 pixels of +-1-4 levels, except NSMBU
+  underwater (3,706 px, <= 17 levels; 0.00 % > 24) and the 3D World liquid surfaces (castle lava 2.28 % > 24 /
+  0.03 % > 48; forest poison 0.20 % / 0.05 %; deterministic in both runtimes, so a real difference: the lava surface
+  draw, not yet found). Table and how: `recomp/docs/smm2-bringup.md` ("In-course frames"); evidence
+  `recomp/private/smm2/evidence/frames-r3/` (side-by-sides, diff maps, tables; private)
+- 🔄 Audio vs Ryujinx (rough, 2026-10-19): each runtime's mixed output dumped and aligned: boot / logo audio matches
+  (levels within ~0.5 dB, the same silences); in a course the recomp is ~5 dB quieter and 8-12 dB quieter above
+  500 Hz. Suspect [inf]: the audio renderer ignores the game's splitters (96 of them), which route voices to mixes
 - ✅ Windows / Linux ports (2026-10-19): `make -C recomp TARGET=windows-x86_64 | linux-x86_64 | linux-aarch64 GAME=smm2
   DEPS=<deps> all package`, cross-built from macOS with zig; the SMM2 fixes ported to the Vulkan backend and the GLSL
   translator (conditional rendering, report values, buffer clears, cull-both skip, 3D target slices, first-render
@@ -165,7 +176,7 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
 
 | Platform | Builds | Boots to title | Plays courses | Frames match Ryujinx | Input replays in sync |
 |---|---|---|---|---|---|
-| macOS (Apple Silicon, Metal) | ✅ | ✅ title rendered, 60 fps | ✅ title course to the goal, Course Maker test play | 🔄 title, 5 courses / 4 styles: 2.5-4.8 % px >24, 0.13-1.15 % >96 | ✅ 221,189 / 221,189 updates identical (31 sessions) |
+| macOS (Apple Silicon, Metal) | ✅ | ✅ title rendered, 60 fps | ✅ title course to the goal, Course Maker test play | 🔄 in course: 71 / 90 courses bit-identical (all SMB1/SMB3/SMW), the rest within 20 px except 3D World lava 2.28 % px >24 (title: 2.5-4.8 %) | ✅ 221,189 / 221,189 updates identical (31 sessions) |
 | Windows (x64, Vulkan) | ✅ cross-built with zig: exe 2.4 MB + game DLL 186 MB, needs SDL3.dll, libiconv-2.dll, libshaderc_shared.dll, vulkan-1.dll (driver); player zip 85 MB | ⬜ not run (no Windows machine) | ⬜ | ⬜ | ⬜ |
 | Linux arm64 (Vulkan) | ✅ cross-built with zig: exe 11.9 MB + game .so 688 MB, needs libSDL3.so.0, libvulkan.so.1, libshaderc.so.1, glibc 2.36; player zip 71 MB | ✅ title rendered (Debian 13 VM, Mesa lavapipe, ~7 fps); package first launch recompiled the game code from the dump (29 min) and booted | ⬜ | 🔄 seed 4 frame 2386 vs macOS same frame: 0.6 % px >24, 0.17 % >96 (Mario model missing on Vulkan); colour-managed vs Ryujinx 2.99 % >24, 0.24 % >96 (macOS 2.35 / 0.11) | ⬜ |
 | Linux x64 (Vulkan) | ✅ cross-built with zig: exe 11.3 MB + game .so 856 MB (generated/smm2-c, x86-64-v3), same libraries; player zip 74 MB | ⬜ not run | ⬜ | ⬜ | ⬜ |
