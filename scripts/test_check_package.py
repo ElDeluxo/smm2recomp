@@ -88,6 +88,22 @@ class PackageCheckTests(unittest.TestCase):
         rc, out = self.run_check(z)
         self.assertEqual(rc, 1, out)
 
+    def test_macos_zip_bundled_tools(self):
+        # the .app one level deeper than the other packages' folders: zig's test certificates are still its own,
+        # a certificate elsewhere in the app is not
+        z = Path(self.tmp.name) / 'mac.zip'
+        res = 'SMM2Recomp.app/Contents/Resources'
+        with zipfile.ZipFile(z, 'w') as f:
+            f.writestr(f'{res}/zig/lib/std/crypto/codecs/asn1/der/testdata/all_types.der', b'0\x00')
+            f.writestr(f'{res}/python/lib/python3.12/test/certdata/keycert.pem', 'x')
+        rc, out = self.run_check(z)
+        self.assertEqual(rc, 0, out)
+        with zipfile.ZipFile(z, 'a') as f:
+            f.writestr(f'{res}/extra/server.der', b'0\x00')
+        rc, out = self.run_check(z)
+        self.assertEqual(rc, 1, out)
+        self.assertIn('extra/server.der', out)
+
 
 class SetupTests(unittest.TestCase):
     def setUp(self):
