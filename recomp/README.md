@@ -164,6 +164,71 @@ The Simulator's Metal is more limited than the devices':
   lighting.
 - iPads with M-series chips have neither limit.
 
+## Building (Android)
+
+Android runs on Vulkan, like Windows and Linux. As on iOS, the game code is compiled **on the Mac** from your own dump
+(there is no compiler on the device) and packaged into the APK as a native library, `libsmm2game.so`, next to the
+runtime (`libmain.so`), SDL3 (`libSDL3.so`) and SDL's Java activity. The APK is made from your dump: it is for your own
+devices only, never to be shared, uploaded or put on a store.
+
+Status (2026-10-19), from the Android evidence. **Only the Android Emulator has been tried; installing on a phone or
+tablet is untested** (no device was available), so expect problems there.
+
+- **Builds:** cross-built on macOS with the NDK (r29): `libmain.so` 14 MB stripped + `libsmm2game.so` 143 MB + `libSDL3.so`
+  2 MB, APK 160 MB.
+- **Runs in the Android Emulator** (API 35 arm64 image on Apple Silicon; its Vulkan is gfxstream over MoltenVK): the
+  intro (3D scene with Toad, Yoshi and the Koopa Car), then the full title screen with its course. The title course
+  plays with the on-screen controller: the stick walks Mario up the slope and into the Koopa Car, A jumps. Speed there:
+  the intro at 13-60 fps, the title screen and its course at 5-9 fps, on a Mac shared with other jobs (the emulator's
+  GPU path is slow: about 2,000 draws a frame through gfxstream).
+- **Also seen working there:** Back opens the overlay menu and taps work it; the app survives going to the home screen
+  and back (the Vulkan surface is recreated); the guest window at 0x800000000 is claimed on every boot.
+- **Not tested:** a physical device (install, its GPU driver, BC-less GPUs, memory limits); a course from the Course
+  World / Story / Make menus; a Bluetooth controller.
+- [?] The title screen's button bar shows no text in the emulator.
+
+Requirements:
+- **Device:** arm64 (arm64-v8a), Android 13 or newer (the NDK's Vulkan 1.3 entry points), a Vulkan 1.3 driver with
+  dynamic rendering, timeline semaphores, 8-bit storage and scalar block layout. [inf] Recent Adreno (7xx) and Mali
+  (G7xx / Immortalis) drivers report these; no physical device has been tried yet. The game takes 3.2 GB of guest
+  heap, so an 8 GB device or more; storage: about 3 GB of game files plus the 160 MB APK. GPUs without BC textures
+  (most phones) get them decoded on the CPU at upload (`runtime/nvn/bcsoft.c`).
+- **On the Mac:** the Android SDK command-line tools with `platform-tools` (adb), `build-tools`, a `platforms;android-NN`
+  and the NDK (r29 used here), a JDK 17+ (`brew install openjdk@21`), cmake and ninja.
+
+      sdkmanager "platform-tools" "build-tools;36.1.0" "platforms;android-36" "ndk;29.0.14206865"
+      ANDROID_HOME=<sdk> recomp/tools/android_deps.sh <deps>    # once: SDL3, shaderc (the NDK's), VMA for arm64-v8a
+      make -C recomp TARGET=android-arm64 GAME=smm2 gen          # the game code for Android's guest window (below)
+      make -C recomp TARGET=android-arm64 GAME=smm2 ANDROID_HOME=<sdk> DEPS=<deps> -j apk   # build/smm2-android-arm64-0x800000000/SMM2Recomp.apk
+      make -C recomp TARGET=android-arm64 GAME=smm2 ANDROID_HOME=<sdk> DEPS=<deps> install push-data
+
+`JAVA_HOME` must point at the JDK (`/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home`); `ADB_SERIAL=<serial>`
+picks a device when more than one is attached. The APK is signed with a local debug key (`build/android-debug.keystore`,
+made on first use). `install` goes to whatever adb sees: the emulator (tested), or a phone over USB or Wi-Fi debugging
+(`adb pair` / `adb connect`; **untested**).
+
+For the emulator: `sdkmanager "emulator" "system-images;android-35;google_apis;arm64-v8a"`, an AVD with 8 GB of RAM and
+a 16 GB data partition (`avdmanager create avd -n smm2 -k "system-images;android-35;google_apis;arm64-v8a" -d pixel_7`,
+then `hw.ramSize=8192`, `disk.dataPartition.size=16G` in its `config.ini`), started with `emulator -avd smm2 -gpu host`.
+Its SwiftShader mode (`-gpu swiftshader_indirect`) doesn't work: it lacks the 8- and 16-bit storage the backend needs.
+
+The guest's memory window sits at **0x800000000-0xB20000000** on Android, not at 0x7000000000: Android arm64 kernels often
+give apps a 39-bit address space whose libraries are mapped from its top down, over 0x7000000000. Its game code is
+generated for that base (`generated/smm2-0x800000000`, `GUEST_ORIGIN` in the Makefile; `../DECISIONS.md`, "Android").
+
+**Game files** go in the app's folder on the device, `/sdcard/Android/data/org.smcraft.smm2recomp/files/`: `extracted/`
+(exefs + romfs, laid out by `games/smm2/setup.py` on the Mac), `fonts/` and `sysdata/` (sysdata.py), and optionally
+`save/`. `make ... push-data` (`tools/android_push_data.sh private/smm2 [extracted fonts sysdata save]`) copies them with
+adb, following the RomFS links (about 3 GB: some minutes). The same folder gets the settings, caches and the log
+(`smm2recomp.log`, also in logcat under the tag `smm2recomp`). An app gets no environment variables: a `recomp.env`
+there (one `NAME=value` per line, e.g. `SMM2_SEED=4`) sets them (the table under "Running").
+
+Input:
+- Touches are the console's touch screen; the on-screen controller (stick, ABXY, L/R/ZL/ZR, +/-, menu, hide) is drawn
+  over the game and hides while a controller is connected (`runtime/ui/touchpad.mm`, shared with iOS).
+- Game controllers (Bluetooth or USB) go through SDL, and a keyboard as on the desktop.
+- Back (button or gesture) opens and closes the overlay menu, like Esc.
+
 ## Running
 
 Keyboard (LAS Recomp's defaults, remappable in the overlay's Controls tab): WASD left stick, arrows d-pad,

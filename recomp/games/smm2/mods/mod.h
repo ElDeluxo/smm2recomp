@@ -24,6 +24,7 @@ typedef struct {
                          // game, fed from TGRCode's course archive; iOS default)
     int timeout_ms;      // RECOMP_MOD_TIMEOUT_MS / timeout_ms=: per HTTP request (default 8000)
     bool log;            // RECOMP_MOD_LOG / log=1: log every request and override
+    bool mode_endless;   // challenge_mode=endless: Challenge Modes opens on SMM2's Endless Challenge (the last one used)
 } ModSettings;
 extern ModSettings g_mod;
 void mod_settings_load(void);   // once (idempotent)
@@ -31,8 +32,9 @@ void mod_server_ready(void);    // before the first request: with courses=tgrcod
 bool mod_hundred(void);         // the 100 Mario mod is on
 bool mod_hundred_offered(void); // ... and 100 Mario is offered (ruleset "hundred": the Endless button opens it)
 bool mod_hundred_rules(void);   // ... and the player is in the 100 Mario part now: SMM1's rules
-bool mod_smm2_session(void);    // the player went on to SMM2's own Endless Challenge (B on the 100 Mario select)
+bool mod_smm2_session(void);    // Challenge Modes is on SMM2's own Endless Challenge (SMM2's rules)
 void mod_set_smm2_session(bool on);
+void mod_remember_mode(bool endless);  // Challenge Modes' mode, kept in smm2mods.ini (challenge_mode=)
 #define MLOG(...) do { if (g_mod.log) LOG("[mod] " __VA_ARGS__); } while (0)
 
 // ---- server calls (server.c): JSON over HTTP; NULL on any failure (logged)

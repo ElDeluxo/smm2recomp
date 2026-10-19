@@ -76,6 +76,16 @@ static void touch_event(SDL_FingerID id, float fx, float fy, int kind) {  // kin
 
 // (tests: LARECOMP_HOST_INPUT "frame:tap:x/y:frames", runtime/hle/input.c) a touch at game pixels
 #define TEST_FINGER ((SDL_FingerID)0x54455354ull)
+// The first finger down now (game pixels), for a mod's own touch areas over the game's screens; false: none.
+bool touch_first(int32_t *x, int32_t *y) {
+    bool any = false;
+    pthread_mutex_lock(&lock);
+    for (int i = 0; i < MAX_TOUCH && !any; i++)
+        if (touches[i].id && !touches[i].ended) *x = touches[i].x, *y = touches[i].y, any = true;
+    pthread_mutex_unlock(&lock);
+    return any;
+}
+
 void touch_test(int32_t x, int32_t y, bool down) {
     pthread_mutex_lock(&lock);
     Touch *t = NULL;
@@ -87,16 +97,6 @@ void touch_test(int32_t x, int32_t y, bool down) {
     if (t) { t->x = x, t->y = y; if (!down) t->ended = 1; }
     pthread_mutex_unlock(&lock);
     LOG("[touch] test %s at %d,%d\n", down ? "down" : "up", x, y);
-}
-
-// For host screens (mods): the first touch in game screen pixels; 0 none, 1 down, 2 lifted (not yet read by the game)
-int touch_peek(int32_t *x, int32_t *y) {
-    int r = 0;
-    pthread_mutex_lock(&lock);
-    for (int i = 0; i < MAX_TOUCH && !r; i++)
-        if (touches[i].id) *x = touches[i].x, *y = touches[i].y, r = touches[i].ended ? 2 : 1;
-    pthread_mutex_unlock(&lock);
-    return r;
 }
 
 #define MOUSE_FINGER MOUSE_FINGER_ID

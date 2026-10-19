@@ -23,7 +23,7 @@ use std::path::Path;
 
 use mmk_modes::endless::{
     Applied, BATCH, Candidate, Difficulty, EndlessSave, Finished, HistoryEntry, Outcome, Report,
-    Ruleset, RunError, RunStatus, pick, pick_hundred,
+    Ruleset, RunError, RunStatus, pick, pick_fresh, pick_hundred,
 };
 use serde_json::{Map, Value, json};
 
@@ -189,12 +189,14 @@ impl Store {
         } = &mut *g;
         let save = endless_runs.get_mut(who).ok_or(StoreError::NotFound)?;
         save.last = Some(d);
+        let recent = save.recent.clone();
         let rec = save.run_mut(d).ok_or(StoreError::NotFound)?;
         if !rec.status.can_continue() {
             return Err(run_err(RunError::NotActive));
         }
         rec.queue.retain(|c| by_code.contains_key(c));
         let mut widened = false;
+        let mut dealt: Vec<String> = Vec::new();
         if rec.queue.is_empty() {
             let banned: HashSet<u32> = accounts
                 .list
@@ -217,20 +219,24 @@ impl Store {
                     broken: m.owner != 0 && banned.contains(&m.owner),
                 })
                 .collect();
-            let pick = match rec.status.ruleset {
+            let rule: mmk_modes::endless::PickRule = match rec.status.ruleset {
                 Ruleset::Smm2 => pick,
                 Ruleset::Hundred => pick_hundred,
             };
-            let p = pick(
+            // (courses the player was dealt in earlier runs come back only when no fresh one is left)
+            let p = pick_fresh(
+                rule,
                 &cands,
                 d,
                 &rec.excluded(),
+                &recent,
                 who,
                 BATCH,
                 &mut mmk_modes::Rng::new(seed),
             );
             widened = p.widened;
-            rec.enqueue(p.indices.iter().map(|&i| cands[i].id.clone()), p.widened);
+            dealt = p.indices.iter().map(|&i| cands[i].id.clone()).collect();
+            rec.enqueue(dealt.iter().cloned(), p.widened);
         }
         let list: Vec<Meta> = rec
             .queue
@@ -239,6 +245,7 @@ impl Store {
             .filter_map(|c| by_code.get(c).map(|&i| courses[i].clone()))
             .collect();
         let run = rec.status;
+        save.note_recent(dealt.iter().map(String::as_str));
         self.save_endless(&g)?;
         drop(g);
         if widened {
@@ -545,6 +552,60 @@ mod tests {
 
     fn report(code: &str, result: &str, extra: &str) -> String {
         format!(r#"{{"code":"{code}","result":"{result}"{extra}}}"#)
+    }
+
+    #[test]
+    fn two_runs_on_a_30_course_pool_share_no_courses() {
+        let dir = tmp("fresh");
+        let store = Store::open(&dir).unwrap();
+        let (me, _) = account(&store, "Pia");
+        let (maker, _) = account(&store, "Mo");
+        for _ in 0..30 {
+            course(&store, &maker, 80, 100);
+        }
+        let me = Some(me.as_str());
+        let mut dealt: Vec<Vec<String>> = Vec::new();
+        for _ in 0..2 {
+            let (st, _) = call(
+                &store,
+                "POST",
+                "/api/endless/easy/start",
+                me,
+                r#"{"ruleset":"hundred"}"#,
+            );
+            assert_eq!(st, 201);
+            let mut run = Vec::new();
+            while run.len() < 8 {
+                let (_, b) = call(&store, "GET", "/api/endless/easy/next?count=10", me, "");
+                let batch = codes(&b);
+                run.extend(
+                    batch
+                        .iter()
+                        .filter(|c| !run.contains(*c))
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                );
+                let (st, _) = call(
+                    &store,
+                    "POST",
+                    "/api/endless/easy/result",
+                    me,
+                    &report(&batch[0], "clear", ""),
+                );
+                assert_eq!(st, 200);
+            }
+            call(&store, "POST", "/api/endless/easy/finish", me, "");
+            dealt.push(run);
+        }
+        assert!(dealt[1].iter().all(|c| !dealt[0].contains(c)), "{dealt:?}");
+        // the recent list is the player's, kept in endless.json
+        drop(store);
+        let store = Store::open(&dir).unwrap();
+        let g = store.inner.lock().unwrap();
+        let recent = &g.endless_runs.values().next().unwrap().recent;
+        assert!(dealt[0].iter().chain(&dealt[1]).all(|c| recent.contains(c)));
+        drop(g);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

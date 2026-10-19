@@ -634,13 +634,13 @@ const uint8_t *game_overlay_image(int *w, int *h, int *full, uint64_t *seq) {
         return NULL;
     }
     unsigned b = (unsigned)input_player_buttons() | test_input(renderer_present_count());
-    {  // taps (the select's mode header): a touch that lifts, seen down or lifted since the last frame
-        extern int touch_peek(int32_t *x, int32_t *y);
+    {  // taps (the select's mode header): a touch that lifts, at its last place
+        extern bool touch_first(int32_t *x, int32_t *y);  // runtime/hle/touch.c
         int32_t x = F.tap_x, y = F.tap_y;
-        int k = touch_peek(&x, &y);
-        F.tap = k == 2 || (k == 0 && F.touching);
-        F.touching = k == 1;
-        if (k) F.tap_x = x, F.tap_y = y;
+        bool down = touch_first(&x, &y);
+        F.tap = !down && F.touching;
+        F.touching = down;
+        if (down) F.tap_x = x, F.tap_y = y;
     }
     tick(b);
     LQuads *q = &g_last;

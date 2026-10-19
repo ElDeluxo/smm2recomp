@@ -14,6 +14,8 @@
 #   make TARGET=linux-aarch64 | linux-x86_64 | windows-x86_64 GAME=smm2 all   (DEPS=<headers + link libraries>)
 # iOS / iPadOS (Xcode's clang; the game code is linked into the app - nothing compiles on the device):
 #   make TARGET=ios-arm64 | iossim-arm64 GAME=smm2 DEPS=<SDL3 for iOS> app   (tools/make_ios_app.sh signs it)
+# Android (the NDK's clang; the game code is built here and packaged into the APK as libsmm2game.so):
+#   make TARGET=android-arm64 GAME=smm2 DEPS=<SDL3 + shaderc for Android> apk install   (tools/make_android_apk.sh)
 UNAME := $(shell uname -s)
 comma := ,
 TARGET ?=
@@ -41,6 +43,11 @@ B        ?= build/$(GAME)
 
 # The guest window's base (runtime/rt.h GUEST_ORIGIN): the game code is generated for it. Another base gets its own
 # generated/ and build/ folders.
+ifeq ($(PLATFORM),android)
+# Android arm64 kernels often give apps a 39-bit address space with libraries mapped (randomly) from its top down,
+# over 0x7000000000; the window sits low instead, where nothing maps by default (DECISIONS.md, "Android").
+GUEST_ORIGIN ?= 0x800000000
+endif
 GUEST_ORIGIN ?= 0x7000000000
 
 IOS := $(filter ios iossim,$(PLATFORM))
@@ -53,6 +60,18 @@ IOS_TRIPLE := arm64-apple-ios$(IOS_MIN)$(if $(filter iossim,$(PLATFORM)),-simula
 CROSS_CC := xcrun --sdk $(IOS_SDK) clang -target $(IOS_TRIPLE)
 CROSS_CXX := xcrun --sdk $(IOS_SDK) clang++ -target $(IOS_TRIPLE)
 B        := build/$(GAME)-$(TARGET)
+else ifeq ($(PLATFORM),android)
+# Android: the NDK's clang (ANDROID_NDK, or the newest in $(ANDROID_HOME)/ndk). The runtime is libmain.so (SDL's
+# activity loads it and calls SDL_main), the game code libsmm2game.so next to it; both go into the APK. aarch64 only
+# (arm64-v8a): the generated code is the arm64 one (FP/SIMD as inline asm), at the Android GUEST_ORIGIN.
+ANDROID_HOME ?= $(or $(ANDROID_SDK_ROOT),$(HOME)/Library/Android/sdk)
+ANDROID_NDK ?= $(lastword $(sort $(wildcard $(ANDROID_HOME)/ndk/*)))
+ANDROID_API ?= 33  # (Android 13: the first with Vulkan 1.3 in its loader, which the backend needs)
+NDK_BIN  := $(firstword $(wildcard $(ANDROID_NDK)/toolchains/llvm/prebuilt/*/bin))
+CROSS_CC := $(NDK_BIN)/clang --target=aarch64-linux-android$(ANDROID_API)
+CROSS_CXX := $(NDK_BIN)/clang++ --target=aarch64-linux-android$(ANDROID_API)
+B        := build/$(GAME)-$(TARGET)
+GENSIMD  := --simd asm
 else ifneq ($(TARGET),)
 # zig cc / c++ for the target; the generated code depends only on the CPU's FP/SIMD lowering (asm on aarch64, C on
 # x86-64), so targets share it: generated/<game> (aarch64, as macOS) or generated/<game>-c (x86-64)
@@ -82,7 +101,7 @@ MINFLAG  := $(if $(MACOS_MIN),-mmacosx-version-min=$(MACOS_MIN))
 CC       := $(or $(CROSS_CC),clang $(MINFLAG) $(CROSS))
 CXX      := $(or $(CROSS_CXX),clang++ $(MINFLAG) $(CROSS))
 LLD      := $(if $(CROSS_CC),,-fuse-ld=lld)  # (zig links with its own lld)
-PLATFORM_SRC := runtime/platform/$(if $(IOS),macos,$(PLATFORM)).c  # (iOS: the macOS layer, TARGET_OS_IPHONE inside)
+PLATFORM_SRC := runtime/platform/$(if $(IOS),macos,$(patsubst android,linux,$(PLATFORM))).c  # (iOS: the macOS layer, TARGET_OS_IPHONE inside; Android: the Linux one, __ANDROID__ inside)
 IMGUI    := third_party/imgui
 GENFLAGS := -O1 -fno-strict-aliasing -Wno-return-type -Wno-unused-label -fvisibility=hidden -Iruntime
 GAMEDEFS := -DGAME_TITLE_ID=$(GAME_TITLE_ID)ull -DGAME_ID='"$(GAME_ID)"' -DGAME_TITLE='"$(GAME_TITLE)"' -DGAME_BUNDLE_ID='"$(GAME_BUNDLE_ID)"' \
@@ -148,6 +167,25 @@ UIFLAGS  := -fobjc-arc
 GAMELIB  := $(B)/$(GAME_ID)game.dylib
 GAMELIB_LDFLAGS := -dynamiclib -undefined dynamic_lookup  # (the runtime functions it calls: the app's own)
 GAMELIB_SHARED := -shared -Wl,-undefined,dynamic_lookup
+else ifeq ($(PLATFORM),android)
+# libmain.so: the runtime with SDL's entry (SDL_main), Vulkan, shaderc (static), libc++ static. The game code library
+# links against it (its runtime calls resolve there) and is loaded by its soname from the APK (runtime/gamelib.c).
+SDL      := $(or $(DEPS),/Volumes/SSD/smm-work/deps/android-arm64)
+EXE      := $(B)/libmain.so
+DEPINC   := -I$(SDL)/include
+OSFLAGS  := -Wno-format -Wno-nullability-completeness -fPIC
+RT_SRC   := $(filter-out runtime/gamebuild.c,$(RT_SRC))
+GENFLAGS += -fPIC
+LDFLAGS  := -shared -Wl,-soname,libmain.so -Wl,--no-undefined -Wl,-z,max-page-size=16384 -L$(SDL)/lib -lSDL3 -lshaderc_combined -lvulkan \
+            -landroid -llog -lm -ldl -static-libstdc++
+BACKEND_SRC := $(wildcard runtime/nvn/vulkan/*.c) $(wildcard runtime/nvn/vulkan/*.cpp)
+BACKEND_OBJ := $(patsubst runtime/%.cpp,$(B)/rt/%.o,$(patsubst runtime/%.c,$(B)/rt/%.o,$(BACKEND_SRC)))
+IMGUI_OBJ += $(B)/imgui/imgui_impl_vulkan.o
+UIFLAGS  := -x c++
+GAMELIB  := $(B)/lib$(GAME_ID)game.so
+GAMELIB_LDFLAGS := -shared -Wl,-soname,lib$(GAME_ID)game.so -Wl,-z,max-page-size=16384 $(EXE)
+GAMELIB_SHARED := -shared
+APK      := $(B)/SMM2Recomp.apk
 else ifeq ($(PLATFORM),linux)
 EXE      := $(B)/$(GAME_ID)recomp
 DEPINC   := $(if $(DEPS),-I$(DEPS)/include)
@@ -204,6 +242,7 @@ endif
 
 RTFLAGS  := -O2 -g -fno-strict-aliasing -Wall -Wno-unused-function -Iruntime -Iruntime/nvn $(DEPINC) $(OSFLAGS) $(GAMEDEFS)
 CXXFLAGS := -O2 -g -std=c++17 -I$(IMGUI) -I$(IMGUI)/backends -Iruntime -Iruntime/nvn $(DEPINC) $(GAMEDEFS)
+CXXFLAGS += $(if $(filter android,$(PLATFORM)),-fPIC)  # (Android: everything goes into shared libraries)
 
 all: $(EXE) $(if $(GEN_SRC),$(GAMELIB))
 
@@ -306,6 +345,17 @@ app: $(EXE)
 	$(if $(IOS),,$(error app: pass TARGET=ios-arm64 | iossim-arm64))
 	tools/make_ios_app.sh $(PLATFORM) $(EXE) $(APP)
 
+# Android: the APK around libmain.so + the game code library (SDL's Java activity, manifest, debug-signed:
+# tools/make_android_apk.sh); `install` puts it on the device adb sees (ADB_SERIAL=<serial> to pick one), `push-data`
+# copies the game files there (tools/android_push_data.sh)
+apk: all
+	$(if $(filter android,$(PLATFORM)),,$(error apk: pass TARGET=android-arm64))
+	tools/make_android_apk.sh $(B) $(APK) $(SDL) $(ANDROID_HOME) $(ANDROID_API)
+install: apk
+	tools/make_android_apk.sh --install $(APK)
+push-data:
+	tools/android_push_data.sh $(DATA)
+
 # A player package of a cross build (runtime, compiler, generator; nothing from the game): dist/SMM2Recomp-<target>.zip
 #   make TARGET=windows-x86_64 GAME=smm2 DEPS=<deps> all package
 package: all
@@ -342,4 +392,4 @@ JOBS ?= $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 build/test_shaders: tools/test_shaders.m runtime/nvn/maxwell/translate.c runtime/nvn/maxwell/shader.h
 	clang -O1 -fobjc-arc -framework Metal -framework Foundation -o $@ tools/test_shaders.m runtime/nvn/maxwell/translate.c
 
-.PHONY: all venv setup gen clean-gen run gen-objs runtime-objs test-tools smm2 run-smm2 package embed-server app
+.PHONY: all venv setup gen clean-gen run gen-objs runtime-objs test-tools smm2 run-smm2 package embed-server app apk install push-data

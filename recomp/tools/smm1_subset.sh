@@ -3,7 +3,7 @@
 # each a folder with meta/ and content/) that the SMM2 recomp's SMM1 screens, music, ending and costumes read
 # (games/smm2/mods/smm1/smm1_data.c, costume_gen.c), keeping each title's layout. For devices that can't hold the
 # whole dump (iOS, Android): copy <out folder> to the data folder as smm1/ (or point RECOMP_SMM1_DUMP at it).
-# Alternatively copy mods-generated/smm1-ui-v6/ and mods-generated/costume-romfs/ from a desktop that has generated
+# Alternatively copy mods-generated/smm1-ui-v6/ and mods-generated/romfs/ (+ romfs.id) from a desktop that has generated
 # them: the device then needs no dump at all.
 set -e
 OUT=$1; shift

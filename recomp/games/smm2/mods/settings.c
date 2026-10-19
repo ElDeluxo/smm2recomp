@@ -22,6 +22,7 @@
 #include "../../../runtime/net/online.h"
 
 ModSettings g_mod;
+static volatile bool smm2_session;  // Challenge Modes is on SMM2's Endless Challenge (bridge.c)
 
 static void set(const char *key, const char *val) {
     if (!strcmp(key, "hundred")) g_mod.hundred = atoi(val) != 0;
@@ -31,6 +32,7 @@ static void set(const char *key, const char *val) {
     else if (!strcmp(key, "ruleset")) snprintf(g_mod.ruleset, sizeof g_mod.ruleset, "%s", val);
     else if (!strcmp(key, "timeout_ms")) g_mod.timeout_ms = atoi(val);
     else if (!strcmp(key, "log")) g_mod.log = atoi(val) != 0;
+    else if (!strcmp(key, "challenge_mode")) g_mod.mode_endless = !strcmp(val, "endless");
 }
 
 void mod_settings_load(void) {
@@ -69,6 +71,7 @@ void mod_settings_load(void) {
     if (strcmp(g_mod.ruleset, "smm2") && strcmp(g_mod.ruleset, "hundred")) snprintf(g_mod.ruleset, sizeof g_mod.ruleset, "hundred");
     if (g_mod.timeout_ms <= 0) g_mod.timeout_ms = 8000;
     if (strcmp(g_mod.courses, "tgrcode")) snprintf(g_mod.courses, sizeof g_mod.courses, "server");
+    smm2_session = g_mod.mode_endless;  // (the mode used last: its rules from the first menu request on)
     if (g_mod.hundred && !strcmp(g_mod.courses, "tgrcode"))
         LOG("[mod] 100 Mario Challenge on: courses from TGRCode (built-in server), ruleset %s\n", g_mod.ruleset);
     else if (g_mod.hundred)
@@ -102,13 +105,12 @@ void mod_server_ready(void) {
 }
 
 bool mod_hundred(void) { mod_settings_load(); return g_mod.hundred; }
-// Both challenges in one build: with 100 Mario offered (ruleset=hundred) Course World's Endless Challenge button opens
-// SMM1's 100 Mario Challenge; B on its difficulty select leads to SMM2's own Endless Challenge (its menu is underneath)
-// until the player leaves that menu. SMM1's rules apply only in the 100 Mario part.
-static volatile bool smm2_session;
+// Challenge Modes: with 100 Mario offered (ruleset=hundred) Course World's Endless Challenge button (relabelled,
+// relabel.c) opens the mode used last: SMM1's 100 Mario Challenge or SMM2's own Endless Challenge; ZL / ZR switch
+// (bridge.c). SMM1's rules apply only in the 100 Mario part; the session flag says the player is in SMM2's.
 bool mod_hundred_offered(void) { return mod_hundred() && !strcmp(g_mod.ruleset, "hundred"); }
-bool mod_hundred_rules(void) { return mod_hundred_offered() && !smm2_session; }
-bool mod_smm2_session(void) { return smm2_session; }
+bool mod_hundred_rules(void) { return mod_hundred_offered() && !mod_smm2_session(); }
+bool mod_smm2_session(void) { mod_settings_load(); return smm2_session; }
 void mod_set_smm2_session(bool on) {
     if (on == smm2_session) return;
     smm2_session = on;
@@ -149,6 +151,13 @@ static void ini_set(const char *key, const char *val) {  // replace or add one k
         for (int i = 0; i < n; i++) fputs(lines[i], f);
         fclose(f);
     }
+}
+
+void mod_remember_mode(bool endless) {
+    mod_settings_load();
+    if (g_mod.mode_endless == endless) return;
+    g_mod.mode_endless = endless;
+    ini_set("challenge_mode", endless ? "endless" : "hundred");
 }
 
 int game_mod_toggles(const GameModToggle **out) {

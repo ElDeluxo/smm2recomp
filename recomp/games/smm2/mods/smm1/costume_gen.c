@@ -8,9 +8,9 @@
 // frames (walk.0-2 -> walk.0-2, CourseIn / dead / held -> wait.0, ...) [inf: the costume frames SMM2 has no slot for -
 // b_dash, jump_fall, pole, appeal - are not used yet].
 //
-// Written once into <data folder>/mods-generated/costume-romfs/Pack/M1_Model.pack (the original pack's files plus
-// Model/M1_Player_Chara_<res>{,_2,_3,_4}.Nin_NX_NVN.zs, one data blob under four names), which the runtime lays over
-// the game's romfs (game_romfs_overlay). The .zs files are zstd frames of raw blocks (no compressor needed).
+// Written once, by the mods' shared RomFS overlay (mods/romfs_overlay.h: generator "costumes"), as Pack/M1_Model.pack
+// (the original pack's files plus Model/M1_Player_Chara_<res>{,_2,_3,_4}.Nin_NX_NVN.zs, one data blob under four
+// names), which replaces the game's. The .zs files are zstd frames of raw blocks (no compressor needed).
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -242,9 +242,19 @@ static uint8_t *bfres_patch(const uint8_t *f, size_t n, const Bfres *c, size_t *
 }
 
 // ---------------------------------------------------------------- generation
-#define OUT_DIR "mods-generated/costume-romfs"
-#define OUT_PACK OUT_DIR "/Pack/M1_Model.pack"
-#define DONE_FILE OUT_DIR "/done-v1"
+#define PACK "Pack/M1_Model.pack"
+#ifdef SMM1UI_STANDALONE  // (tools/test_smm1ui --costumes: the files of the data folder)
+#define OUT_PACK "mods-generated/costume-test/" PACK
+static uint8_t *read_pack(size_t *n) { return smm1_read_file("extracted/romfs/" PACK, n); }
+#else  // (the game: the shared overlay)
+#include "../romfs_overlay.h"
+static uint8_t *read_pack(size_t *n) {
+    RovBuf b = {0};
+    if (!rov_read(PACK, &b)) return NULL;
+    *n = b.n;
+    return b.d;
+}
+#endif
 
 static bool mkdirs(const char *path) {
     char p[1024];
@@ -257,7 +267,18 @@ static bool mkdirs(const char *path) {
         }
     return true;
 }
-static bool write_file(const char *path, const uint8_t *d, size_t n) {
+#ifndef SMM1UI_STANDALONE
+#include <ftw.h>
+static int rm_entry(const char *p, const struct stat *sb, int flag, struct FTW *ftw) {
+    (void)sb, (void)flag, (void)ftw;
+    return remove(p);
+}
+static void remove_old(void) {  // (the folder of the first version, before the shared overlay)
+    struct stat st;
+    if (!stat("mods-generated/costume-romfs", &st)) nftw("mods-generated/costume-romfs", rm_entry, 8, FTW_DEPTH | FTW_PHYS);
+}
+#endif
+static __attribute__((unused)) bool write_file(const char *path, const uint8_t *d, size_t n) {
     mkdirs(path);
     FILE *f = fopen(path, "wb");
     if (!f) return false;
@@ -309,15 +330,13 @@ static Bfres *costume_bfres(const char *res) {
 }
 
 bool costume_generate(void) {
-    struct stat st;
     list_costumes();
-    if (!stat(DONE_FILE, &st)) return true;
     if (!g_ncostumes) {
         fprintf(stderr, LOGC "no SMM1 costumes found (the SMM1 dump: RECOMP_SMM1_DUMP)\n");
         return false;
     }
     size_t pn;
-    uint8_t *pack = smm1_read_file("extracted/romfs/Pack/M1_Model.pack", &pn);
+    uint8_t *pack = read_pack(&pn);
     if (!pack) { fprintf(stderr, LOGC "SMM2's Pack/M1_Model.pack not found\n"); return false; }
     Entry *orig = NULL;
     int norig = sarc_read(pack, pn, &orig);
@@ -377,16 +396,28 @@ bool costume_generate(void) {
     }
     size_t on;
     uint8_t *out = sarc_write(nn, names, blob_of, nblob, blob, blob_n, 0x80, &on);
+#ifdef SMM1UI_STANDALONE
     bool ok = made > 0 && write_file(OUT_PACK, out, on);
-    if (ok) write_file(DONE_FILE, (const uint8_t *)"1\n", 2);
-    fprintf(stderr, LOGC "%d costumes generated into " OUT_PACK " (%.1f MB)\n", made, on / 1e6);
+#else
+    bool ok = made > 0 && rov_write(PACK, out, on);
+#endif
+    fprintf(stderr, LOGC "%d costumes generated into " PACK " (%.1f MB)\n", made, on / 1e6);
     for (int b = norig; b < nblob; b++) free((void *)blob[b]);
     free(out), free(names), free(blob_of), free(blob), free(blob_n), free(cnames);
     free(pack), free(orig), free(tarc), free(inner);
     return ok;
 }
 
-const char *costume_overlay_dir(void) { return OUT_DIR; }
+#ifndef SMM1UI_STANDALONE
+// (the costumes mod on: the models; off: nothing. mods/costume.c)
+bool costumes_on(void);
+static bool costume_overlay(void) {
+    if (!costumes_on()) return true;
+    remove_old();
+    return costume_generate();
+}
+ROV_GENERATOR("costumes", 1, costume_overlay)
+#endif
 
 // ---------------------------------------------------------------- the costume table (SMM1's Mush/CharaMarioTable.byaml)
 // BYML v1, big-endian: root array of dictionaries with ResName (string) and Rare (int: the category: 0 always owned,

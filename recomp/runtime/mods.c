@@ -14,9 +14,12 @@ const char *mods_dir(void) {
 
 bool mods_romfs_override(const char *path, char *out, size_t cap) {
     const char *d = mods_dir();
-    if (!d) return false;
+    extern const char *game_romfs_overlay(void);  // a game's own generated files (runtime/game_hooks.c: none)
+    const char *g = d ? NULL : game_romfs_overlay();
+    if (!d && !g) return false;
     struct stat st;
-    if ((size_t)snprintf(out, cap, "%s/romfs/%s", d, path) >= cap) return false;
+    if ((size_t)(d ? snprintf(out, cap, "%s/romfs/%s", d, path) : snprintf(out, cap, "%s/%s", g, path)) >= cap)
+        return false;
     return stat(out, &st) == 0 && S_ISREG(st.st_mode);
 }
 

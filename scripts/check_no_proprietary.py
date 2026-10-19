@@ -47,6 +47,8 @@ BLOCKED_EXTENSIONS = {
     ".7z", ".rar",
     # native binaries and translated shaders: the recomp generates these locally from the dump
     ".elf", ".o", ".obj", ".a", ".lib", ".so", ".dylib", ".dll", ".exe", ".spv", ".nss", ".kip",
+    # app packages built from the dump (they carry its recompiled code) and their signing keys
+    ".apk", ".aab", ".dex", ".ipa", ".keystore", ".jks",
 }
 BLOCKED_NAMES = {"prod.keys", "title.keys", "dev.keys", "otp.bin", "seeprom.bin", "common.key", "game.key"}
 

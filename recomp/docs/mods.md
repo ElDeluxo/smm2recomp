@@ -129,8 +129,19 @@ confirm window's Yes, the map's Play, skip, back) through the test-input hook wh
 flow. The course's outcome comes back through the game's own requests (course start,
 miss, clear, skip). After a skip SMM2's Endless starts the next course at once; after a miss it retries by itself.
 
-The win: the Nth clear's answer has `run_complete`; the flow plays SMM1's ending (`hundred_ending_show`) and calls
-`hundred_run_finish()`, which finishes the run on the server (the completion is on its `hundred_<d>` board already).
+**The clear is SMM2's own:** goal, fanfare and the result screen (Boo / I like it! / Quit / Next) belong to the
+player; the run side presses nothing there. `HUNDRED_CLEAR` comes at the goal (the flow shows nothing for it);
+`HUNDRED_NEXT` when the player leaves the result screen with Next, `HUNDRED_GIVEUP_SAVE` with Quit (the run is kept,
+SMM2 goes back to its menu). The course-end machine (registered at main+0x1bed050) tells them apart: its
+cPostRatingCheckCan exec (main+0x1bef440) reads the screen's choice (+0x2a0: 5 Next, 6 / 7 the ratings, 8 Quit,
+9 comment, 10 tags) and goes to cNextScene (0x4b, enter main+0x1bf6430) for Next and, in the Endless Challenge, to
+cEndlessMode_GetStatus (0x4d, enter main+0x1bf6630) for Quit; the run side hooks the two enters. A miss, the skip
+and SMM2's pause are SMM2's own too (the flow draws nothing for them); at 0 lives the flow calls
+`hundred_run_finish()`, SMM2's game over shows, and its return to the Endless menu opens the flow's select again.
+
+The win: the Nth clear's answer has `run_complete`; on its Next the flow plays SMM1's ending (`hundred_ending_show`)
+and calls `hundred_run_finish()`, which finishes the run on the server (the completion is on its `hundred_<d>` board
+already).
 
 The flow is `games/smm2/mods/smm1/` (strong `hundred_flow_*`, `hundred_course_result`, the ending); it keeps weak
 stand-ins of the run side's functions, which `bridge.c` / `endless.c` replace. `hundred_run_status()` returns a
@@ -143,19 +154,35 @@ the run. `RECOMP_MOD_AUTOPLAY=1` (or `=jump`) plays the courses (right + run [+ 
 scripts the way to the Endless menu. `RECOMP_MOD_UNLOCK_ALL=1` opens every difficulty; `RECOMP_MOD_TRACE=1` logs
 Course World's states and every request the mod doesn't answer.
 
-**Both challenges.** With 100 Mario offered, B on SMM1's difficulty select (`hundred_flow_exit()`) leaves the player
-on SMM2's own Endless menu, which was underneath: runs there use SMM2's rules (5 lives, the start lives are switched
-in the game's run records) until the menu closes towards Course World (its Disappear state, main+0x1a24d30); the
-next visit opens 100 Mario again. **After a win** the run side presses Quit on SMM2's last result screen and answers
-the suspend locally, so SMM2 is back on its Endless menu for the next run; `hundred_run_start()` waits until it is.
+**Challenge Modes** (owner, 2026-10-19). With 100 Mario offered, Course World's Endless Challenge button reads
+"Challenge Modes" and opens the mode used last (`challenge_mode=` in smm2mods.ini): SMM1's 100 Mario Challenge or
+SMM2's own Endless Challenge, which runs under SMM2's rules (5 lives: the start lives are switched in the game's run
+records) and SMM2's screens. ZL / ZR or a tap on the header switch: on SMM2's menu its header reads
+"ZL < Endless Challenge > ZR" and the run side opens the flow; on the flow's select the flow draws
+"ZL ◀ 100 Mario Challenge ▶ ZR" and calls `hundred_mode_switch()`. L / R stay the difficulty, B stays back
+(`hundred_flow_exit()`: the run side presses B on SMM2's menu underneath, back to Course World). **After a win**
+the last result screen's Next is turned into its Quit (cPostRatingCheckCan exec, the screen's choice 5 -> 8) while the
+flow plays the ending, so SMM2 goes back to its Endless menu for the next run; `hundred_run_start()` waits until it
+is. **Course start:** a course SMM2 loads underneath the flow's map waits at its first play frame until
+`hundred_flow_ready_to_start()` (the card is up).
+
+**The RomFS overlay** (`romfs_overlay.{h,c}`): the mods' generated game files (the Challenge Modes texts,
+`relabel.c`; costumes; layout edits) come from the player's own dump at the first launch that needs them, into
+`<data>/mods-generated/romfs/` (private), and replace the game's files (`game_romfs_overlay()`). A feature registers
+`ROV_GENERATOR(name, version, fn)`; the folder is generated again when the set of names and versions changes.
+Helpers: files (`rov_read`, `rov_write`), SARC with or without Yaz0 (`rov_sarc_*`), MSBT texts (`rov_msbt_set`),
+BFLYT sections (`rov_flyt_*`).
 **Loading:** a course list may take long (TGRCode upstream: about a minute for a difficulty's first batch); the
 request waits up to 3 minutes and `hundred_run_status().loading` is set meanwhile.
 
-**Pause.** During a run course SMM2's pause state (`cPausePlay`, state 3 of the Endless play scene's machine; its exec
-is the scene's virtual at vtable+0x390, main+0x1bba050) is held without opening its menu: the play stays frozen and
-the flow gets `hundred_flow_pause()`. `hundred_play_resume()` leaves it as the menu's close does (state 1),
-`hundred_play_retry()` as Start Over (state 0x13, a life, posted as `start_over`), `hundred_run_save_quit()` as the
-confirm window's Yes (state 0x12, the suspend). **Continue:** the run record's state byte (+4 = 1) makes the menu
+**Pause.** SMM2's own pause opens in a run course (Start Over costs a life, posted as `start_over`; its Save & Quit
+suspends the run and the menu's return sends `HUNDRED_GIVEUP_SAVE`). `RECOMP_MOD_SMM1_PAUSE=1` brings back the
+earlier interception for the flow's own pause: SMM2's pause state (`cPausePlay`, state 3 of the Endless play scene's
+machine; its exec is the scene's virtual at vtable+0x390, main+0x1bba050) is held without opening its menu and the
+flow gets `hundred_flow_pause()`; `hundred_play_resume()` leaves it as the menu's close does (state 1),
+`hundred_play_retry()` as Start Over (state 0x13), `hundred_run_save_quit()` as the confirm window's Yes (state
+0x12, the suspend). **Next course data:** when a course starts, the one after it is downloaded in the background
+(`/next?count=2`, its `/data`), so the next course-in doesn't wait on the server. **Continue:** the run record's state byte (+4 = 1) makes the menu
 offer Continue (and show the run on its map); `hundred_run_start(d, true)` presses it. **Course on screen:**
 `hundred_flow_course_started()` comes on the first frame of the play scene's play state (state 1, vtable+0x350,
 main+0x1bb9440) after a course start or a retry. **Next course:** the head of the server's queue is read after New
@@ -163,8 +190,12 @@ Game, each clear / skip and on Continue, so `hundred_run_status().current` names
 asks. `form` is player 0's form at the goal (+0x4a8, small / big from the size class table main+0x23d5e0c).
 
 Flow test extras: `RECOMP_MOD_FLOW_TEST_CONTINUE=1` (Continue instead of New Game), `RECOMP_MOD_FLOW_TEST_PAUSE=<letters>`
-(pause 8 s into a course and answer r resume, o Start Over, q Save & Quit), `RECOMP_MOD_SHOTS=<name>` (window shots
-at the run's moments into `build/<name>_<n>_<what>.png`).
+(pause 8 s into a course and answer r resume, o Start Over, q Save & Quit; with `RECOMP_MOD_SMM1_PAUSE=1`),
+`RECOMP_MOD_FLOW_TEST_QUIT_AFTER_CLEAR=<n>` (Quit, tapped, on the first n result screens),
+`RECOMP_MOD_FLOW_TEST_RESULT_KEYS=<letters>` (keys, stick moves or a tap on the result screen first; see
+`result_keys` in `bridge.c`), `RECOMP_MOD_SHOTS=<name>` (window shots at the run's moments into
+`build/<name>_<n>_<what>.png`). On the result screen the D-pad and the stick don't move the focus off Next in the
+port yet [obs]; touch reaches every button.
 
 ### Test recipe (end to end, unattended)
 
@@ -211,7 +242,8 @@ every difficulty draws from all of them.
   (it calls `hundred_run_start()`, `hundred_play_next()` ...). `RECOMP_MOD_FLOW_TEST=<0..3>` instead plays the run
   without the flow (the stand-in in `bridge.c`).
 - `RECOMP_MOD_AUTOPLAY=jump` plays each course (right + run + jump) and skips it with the test input after
-  `RECOMP_MOD_AUTOPLAY_SKIP` seconds; the result screen's Next is pressed by the run side after a clear.
+  `RECOMP_MOD_AUTOPLAY_SKIP` seconds; under `RECOMP_MOD_FLOW_TEST` the test presses the result screen's Next
+  after a clear (a real player's run side presses nothing there).
   `RECOMP_MOD_UNLOCK_ALL=1` opens Expert and Super Expert without winning the runs before.
 - A Super Expert run (6 clears) takes about 6-12 minutes of game time; Easy (8) about 10. Expected log lines
   (`grep '\[mod\]' run.log`): `New Game: super_expert, hundred rules, 100 lives`, `course start <code>`,

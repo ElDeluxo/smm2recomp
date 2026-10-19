@@ -18,7 +18,8 @@ WEAK void romfs_file_read_hook(const char *path) { (void)path; }
 // a folder of files a game's mods generate, laid over the RomFS when no RECOMP_MOD_DIR is set (runtime/services/fs.c)
 WEAK const char *game_romfs_overlay(void) { return NULL; }
 
-// ---- a game's mod settings (the overlay menu's Mods tab, runtime/ui/menu.mm): on/off toggles; none by default
+// ---- a game's mod settings (the overlay menu's Mods tab, runtime/ui/menu.mm): on/off toggles; none by default. An
+// entry with value NULL starts a section titled by its label ({"Online", NULL, NULL, false}); the rest are switches.
 typedef struct { const char *label, *desc; bool *value; bool def; } GameModToggle;
 WEAK int game_mod_toggles(const GameModToggle **out) { *out = NULL; return 0; }
 WEAK void game_mod_toggles_changed(void) {}

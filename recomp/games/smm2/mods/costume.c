@@ -27,7 +27,6 @@
 
 #include "mod.h"
 
-bool costume_generate(void);  // smm1/costume_gen.c
 int costume_count(void);
 const char *costume_res(int i);
 int costume_rare(const char *res);
@@ -124,13 +123,7 @@ void costumes_set_setting(bool on) {
     LOG("[costume] Mystery Mushroom costumes %s (at the next start)\n", on ? "on" : "off");
 }
 
-// the runtime lays this folder over the game's romfs (runtime/services/fs.c): the rebuilt Pack/M1_Model.pack
-// [until the shared overlay (mods/romfs_overlay.c) takes the costume generator over]
-const char *costume_overlay_dir(void);
-const char *game_romfs_overlay(void) {
-    if (!costumes_on() || !costume_generate()) return NULL;
-    return costume_overlay_dir();
-}
+// (the models: the shared RomFS overlay's "costumes" generator, smm1/costume_gen.c)
 
 // ---------------------------------------------------------------- owned costumes
 static char (*g_owned)[48];
