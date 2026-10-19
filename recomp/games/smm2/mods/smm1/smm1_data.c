@@ -5,7 +5,7 @@
 // meta/meta.xml whose title id is Super Mario Maker's (US 1018DC00, EU 1018DD00, JP 1014B700) next to a content/
 // folder. The disc's base game (v16) and the update (v208, which has Super Expert) are overlaid, newer over older.
 //
-// At the first launch that needs them, the files are generated into <data folder>/mods-generated/smm1-ui-v5/:
+// At the first launch that needs them, the files are generated into <data folder>/mods-generated/smm1-ui-v6/:
 //   layout/<Name>.arc   every layout archive of Pack/{Layout,Nwk,NormalPlay,Lcl}.pack and the loose Layout/*.szs
 //                       (Yaz0 removed: SARC of blyt/ anim/ timg/)
 //   font/<Name>.bffnt   the bitmap fonts of Font/BmpFont_<region>.szs
@@ -27,7 +27,7 @@
 
 #include "lyt.h"
 
-#define CACHE "mods-generated/smm1-ui-v5"
+#define CACHE "mods-generated/smm1-ui-v6"
 #define LOGP "[smm1ui] "
 
 #ifdef _WIN32
@@ -167,6 +167,38 @@ static uint8_t *dump_file(const char *rel, size_t *n) {
     return NULL;
 }
 
+static bool g_found;
+static void ensure_dump(void) {
+    if (!g_found) find_dump(), g_found = true;
+}
+uint8_t *smm1_dump_read(const char *rel, size_t *n) {
+    ensure_dump();
+    return dump_file(rel, n);
+}
+int smm1_dump_list(const char *reldir, const char *prefix, char (**names)[96]) {
+    ensure_dump();
+    int count = 0, cap = 0;
+    *names = NULL;
+    size_t pl = strlen(prefix);
+    for (int t = 0; t < g_ntitles; t++) {
+        char dir[1200];
+        snprintf(dir, sizeof dir, "%s/%s", g_titles[t].content, reldir);
+        DIR *d = opendir(dir);
+        if (!d) continue;
+        struct dirent *e;
+        while ((e = readdir(d))) {
+            if (strncmp(e->d_name, prefix, pl)) continue;
+            bool dup = false;
+            for (int i = 0; i < count && !dup; i++) dup = !strcmp((*names)[i], e->d_name);
+            if (dup) continue;
+            if (count == cap) cap = cap ? cap * 2 : 64, *names = realloc(*names, sizeof **names * (size_t)cap);
+            snprintf((*names)[count++], 96, "%s", e->d_name);
+        }
+        closedir(d);
+    }
+    return count;
+}
+
 // ---------------------------------------------------------------- generating the cache
 static int g_written;
 static void put(const char *rel, const uint8_t *d, size_t n) {
@@ -241,7 +273,7 @@ static const char *first_existing(const char *const *rels) {
 }
 
 static bool generate(void) {
-    find_dump();
+    find_dump(), g_found = true;
     if (!g_ntitles) {
         fprintf(stderr, LOGP "no SMM1 dump found (set RECOMP_SMM1_DUMP to the folder of your extracted Super Mario Maker "
                         "base game and update): the SMM1 screens are off\n");
@@ -350,6 +382,18 @@ static bool generate(void) {
             lyt_sarc_close(&ps);
         }
         free(pack);
+        // the costumes' sounds (Sound/CharaMario/CharaMario_<res>{,Static}.bars: jump, powerup, goal, down, appeal...)
+        char (*cm)[96] = NULL;
+        int ncm = smm1_dump_list("Sound/CharaMario", "CharaMario_", &cm);
+        for (int i = 0; i < ncm; i++) {
+            char rel[200], out[200];
+            snprintf(rel, sizeof rel, "Sound/CharaMario/%s", cm[i]);
+            snprintf(out, sizeof out, "sound/%s", cm[i]);
+            size_t bn;
+            uint8_t *b = dump_file(rel, &bn);
+            if (b) put(out, b, bn), free(b);
+        }
+        free(cm);
     }
     static const char *fonts[] = {"Font/BmpFont_US.szs", "Font/BmpFont_EU.szs", "Font/BmpFont_JP.szs", NULL};
     static const char *lmsg[] = {"Message/LayoutMsg_USen.szs", "Message/LayoutMsg_EUen.szs", NULL};

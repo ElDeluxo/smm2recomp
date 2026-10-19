@@ -10,6 +10,7 @@
 //! to any course. One request at a time, `interval` apart; a difficulty is searched at most once per
 //! `cooldown`. When the source fails, it's logged and the runs play the courses the server holds.
 
+use std::collections::HashSet;
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
@@ -150,6 +151,9 @@ pub struct Options {
     pub batch: usize,
     /// Search every difficulty once at the start (an empty server has something to play).
     pub prime: bool,
+    /// Courses a search for a difficulty gathers before it stops (more searches while the source keeps
+    /// answering full batches): about three runs' worth, so a player's next runs find fresh courses.
+    pub pool: [usize; 4],
 }
 
 impl Default for Options {
@@ -161,6 +165,7 @@ impl Default for Options {
             cooldown: Duration::from_secs(60),
             batch: 10,
             prime: true,
+            pool: [24, 48, 48, 18], // (3 x the 100 Mario run lengths 8 / 16 / 16 / 6)
         }
     }
 }
@@ -248,16 +253,34 @@ impl Fetcher {
         }
         self.searched[d.index()] = Some(Instant::now());
         let batch = self.opts.batch;
-        let records = match self.call(|s| s.endless(d, batch)) {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!(
-                    "[upstream] {}: {e} (the runs play the courses held)",
-                    d.name()
-                );
-                return 0;
+        // searches until the difficulty's pool target is seen, while the source answers full batches with
+        // courses not seen yet
+        let mut records: Vec<Value> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
+        while seen.len() < self.opts.pool[d.index()] {
+            let round = match self.call(|s| s.endless(d, batch)) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!(
+                        "[upstream] {}: {e} (the runs play the courses held)",
+                        d.name()
+                    );
+                    break;
+                }
+            };
+            let full = round.len() >= batch;
+            let before = seen.len();
+            for r in round {
+                if let Some(m) = meta_of(&r)
+                    && seen.insert(m.code)
+                {
+                    records.push(r);
+                }
             }
-        };
+            if !full || seen.len() == before {
+                break;
+            }
+        }
         let mut added = 0;
         for r in &records {
             let Some(meta) = meta_of(r) else { continue };
@@ -458,6 +481,7 @@ mod tests {
             cooldown: Duration::from_secs(3600),
             batch: 10,
             prime: false,
+            pool: [24, 48, 48, 18],
         }
     }
 

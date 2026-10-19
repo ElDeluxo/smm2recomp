@@ -293,6 +293,7 @@ void vk_full_barrier(VkCommandBuffer cb) {
     vkCmdPipelineBarrier2(cb, &di);
 }
 
+static const void *g_pass_last_prog;  // the program of the current pass's last draw (lavapipe_mrt_split)
 static void ring_retire(void);
 void vc_flush(void);
 
@@ -890,8 +891,24 @@ static inline bool ss_need(uint32_t bit, bool same) {
 
 static NvnTexture *g_pass_color[8];  // the current pass's colour targets (debug pass images)
 static int g_pass_ncolor;
+static NvnTexture *g_pass_depth;  // (its depth target, for the probe)
 static void vk_end_pass_at(int line);
 void vk_end_pass(void) { vk_end_pass_at(0); }
+// LARECOMP_DEBUG_PROBE_LAZY=1 (with the probe): the texels are copied without a flush at each pass end and logged
+// when the frame is presented, so the probe doesn't change how the work is submitted
+static struct { int pass, target, fmt; void *tex; } lazy_probe[2048];
+static int nlazy;
+void vk_probe_drain(void) {
+    if (!nlazy) return;
+    renderer_flush();
+    const uint8_t *base = (const uint8_t *)vk_readback(16 << 20).ptr + (8 << 20);
+    for (int k = 0; k < nlazy; k++) {
+        const uint8_t *q = base + k * 16;
+        LOG("[probe] (lazy #%d) pass %d target %d (%p fmt %d): %02x%02x%02x%02x\n", k, lazy_probe[k].pass, lazy_probe[k].target,
+            lazy_probe[k].tex, lazy_probe[k].fmt, q[0], q[1], q[2], q[3]);
+    }
+    nlazy = 0;
+}
 #define vk_end_pass() vk_end_pass_at(__LINE__)
 static void vk_end_pass_at(int line) {
     if (!in_pass) return;
@@ -905,6 +922,24 @@ static void vk_end_pass_at(int line) {
             for (int i = 0; i < g_pass_ncolor; i++) {
                 TexBackend *b = g_pass_color[i] ? (TexBackend *)g_pass_color[i]->backend : NULL;
                 if (!b || !b->image || (uint32_t)px >= b->width || (uint32_t)py >= b->height) continue;
+                static int lazy = -1;
+                if (lazy < 0) lazy = getenv("LARECOMP_DEBUG_PROBE_LAZY") != NULL;
+                if (lazy) {
+                    if (nlazy == 2048) continue;
+                    VkSpan out = vk_readback(16 << 20);
+                    VkBufferImageCopy c = {.bufferOffset = (8 << 20) + (VkDeviceSize)nlazy * 16,
+                                           .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .imageOffset = {px, py, 0},
+                                           .imageExtent = {1, 1, 1}};
+                    VkCommandBuffer cb = vk_cmd();
+                    vk_full_barrier(cb);
+                    vkCmdCopyImageToBuffer(cb, b->image, VK_IMAGE_LAYOUT_GENERAL, out.buf, 1, &c);
+                    vk_full_barrier(cb);
+                    lazy_probe[nlazy].pass = debug_pass_no; lazy_probe[nlazy].target = i; lazy_probe[nlazy].fmt = b->format;
+                    lazy_probe[nlazy].tex = g_pass_color[i];
+                    LOG("[probe] (lazy #%d) target %d (%p)\n", nlazy, i, (void *)g_pass_color[i]);
+                    nlazy++;
+                    continue;
+                }
                 VkSpan out = vk_readback(64);
                 VkBufferImageCopy c = {.bufferOffset = out.off, .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
                                        .imageOffset = {px, py, 0}, .imageExtent = {1, 1, 1}};
@@ -916,6 +951,53 @@ static void vk_end_pass_at(int line) {
                 LOG("[probe] pass %d target %d (%p fmt %d) at %d,%d: %02x%02x%02x%02x %02x%02x%02x%02x\n", debug_pass_no, i,
                     (void *)g_pass_color[i], b->format, px, py, q[0], q[1], q[2], q[3], q[4], q[5], q[6], q[7]);
             }
+        TexBackend *db = g_debug_frame && px >= 0 && g_pass_depth && !getenv("LARECOMP_DEBUG_PROBE_LAZY") ? (TexBackend *)g_pass_depth->backend : NULL;
+        if (db && db->image && (db->aspect & VK_IMAGE_ASPECT_DEPTH_BIT) && (uint32_t)px < db->width && (uint32_t)py < db->height &&
+            (db->format == VK_FORMAT_D32_SFLOAT || db->format == VK_FORMAT_D32_SFLOAT_S8_UINT)) {
+            VkSpan out = vk_readback(64);
+            VkBufferImageCopy c = {.bufferOffset = out.off, .imageSubresource = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1},
+                                   .imageOffset = {px, py, 0}, .imageExtent = {1, 1, 1}};
+            VkCommandBuffer cb = vk_cmd();
+            vk_full_barrier(cb);
+            vkCmdCopyImageToBuffer(cb, db->image, VK_IMAGE_LAYOUT_GENERAL, out.buf, 1, &c);
+            renderer_flush();
+            float dv;
+            memcpy(&dv, (const uint8_t *)out.ptr + out.off, 4);
+            LOG("[probe] pass %d depth (%p) at %d,%d: %.9f\n", debug_pass_no, (void *)g_pass_depth, px, py, dv);
+        }
+    }
+    {   // LARECOMP_DEBUG_NAN_SCAN=1: the debug frame's B10G11R11 targets are scanned at each pass end for Inf / NaN texels
+        static int scan = -1;
+        if (scan < 0) scan = getenv("LARECOMP_DEBUG_NAN_SCAN") != NULL;
+        for (int i = 0; scan && g_debug_frame && i < g_pass_ncolor; i++) {
+            TexBackend *b = g_pass_color[i] ? (TexBackend *)g_pass_color[i]->backend : NULL;
+            if (!b || !b->image || b->format != VK_FORMAT_B10G11R11_UFLOAT_PACK32 || b->samples > 1) continue;
+            for (uint32_t lv = 0; lv < b->levels; lv++)
+                for (uint32_t ly = 0; ly < b->layers; ly++) {  // (every level and layer: cube faces, mips)
+                    uint32_t w = b->width >> lv ? b->width >> lv : 1, h = b->height >> lv ? b->height >> lv : 1;
+                    uint64_t n = (uint64_t)w * h;
+                    VkSpan out = vk_readback(n * 4);
+                    VkBufferImageCopy c = {.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, lv, ly, 1}, .imageExtent = {w, h, 1}};
+                    VkCommandBuffer cb = vk_cmd();
+                    vk_full_barrier(cb);
+                    vkCmdCopyImageToBuffer(cb, b->image, VK_IMAGE_LAYOUT_GENERAL, out.buf, 1, &c);
+                    renderer_flush();
+                    const uint32_t *px = out.ptr;
+                    uint64_t bad = 0;
+                    char first[256] = "";
+                    size_t fl = 0;
+                    for (uint64_t k = 0; k < n; k++) {
+                        uint32_t v = px[k];
+                        if (((v >> 6) & 31) == 31 || ((v >> 17) & 31) == 31 || ((v >> 27) & 31) == 31) {
+                            if (bad < 6) fl += (size_t)snprintf(first + fl, sizeof first - fl, " (%llu,%llu)=%08x", (unsigned long long)(k % w),
+                                                                (unsigned long long)(k / w), v);
+                            bad++;
+                        }
+                    }
+                    if (bad) LOG("[nan] target %d (%p %ux%u level %u layer %u): %llu non-finite texels:%s\n", i, (void *)g_pass_color[i],
+                                 w, h, lv, ly, (unsigned long long)bad, first);
+                }
+        }
     }
     static int no_pass_png = -1;  // LARECOMP_DEBUG_NO_PASSES=1: the debug frame's log without its pass images
     if (no_pass_png < 0) no_pass_png = getenv("LARECOMP_DEBUG_NO_PASSES") != NULL;
@@ -951,6 +1033,7 @@ static void begin_pass(void) {
     st.rt_dirty = false;
     VkCommandBuffer cb = vk_cmd();
     vk_full_barrier(cb);  // passes, copies and dispatches see each other's results
+    g_pass_last_prog = NULL;
     {
         NvnTexture *t0n = st.rt.ncolor ? st.rt.color[0] : NULL;
         dl_note("pass %d color %ux%u fmt %#x depth %p", st.rt.ncolor, t0n ? t0n->width : 0, t0n ? t0n->height : 0, t0n ? t0n->format : 0,
@@ -967,6 +1050,7 @@ static void begin_pass(void) {
     pass_samples = 1;
     g_pass_ncolor = st.rt.ncolor;
     memcpy(g_pass_color, st.rt.color, sizeof g_pass_color);
+    g_pass_depth = st.rt.depth;
     for (int i = 0; i < st.rt.ncolor; i++) {
         NvnTexture *t = st.rt.color[i];
         ca[i] = (VkRenderingAttachmentInfo){.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
@@ -1019,6 +1103,11 @@ static void begin_pass(void) {
     VkRenderingInfo ri = {.sType = VK_STRUCTURE_TYPE_RENDERING_INFO, .renderArea = {{0, 0}, {minw, minh}}, .layerCount = 1,
                           .colorAttachmentCount = pass_ncolor, .pColorAttachments = ca,
                           .pDepthAttachment = has_d ? &da : NULL, .pStencilAttachment = has_s ? &sa : NULL};
+    if (g_debug_frame) {
+        LOG("[pass] begin %ux%u:", minw, minh);
+        for (uint32_t i = 0; i < pass_ncolor; i++) LOG(" c%u(view %p fmt %d load %d tex %p)", i, (void *)ca[i].imageView, pass_color[i], ca[i].loadOp, (void *)st.rt.color[i]);
+        LOG(" depth %d\n", has_d);
+    }
     vkCmdBeginRendering(cb, &ri);
     ss_forget();  // (whatever ran between the passes may have set its own state)
     in_pass = true;
@@ -1193,6 +1282,9 @@ static void clear(int index, int kind, const void *color, uint32_t mask, bool de
         if (dsa) a[n++] = (VkClearAttachment){.aspectMask = dsa, .clearValue.depthStencil = {dval, sval}};
         VkClearRect cr = {rect, 0, 1};
         if (n) vkCmdClearAttachments(cb, n, a, 1, &cr);
+        static int ends = -1;  // (debug) LARECOMP_VK_CLEAR_ENDS_PASS=1: each clear ends its pass
+        if (ends < 0) ends = getenv("LARECOMP_VK_CLEAR_ENDS_PASS") != NULL;
+        if (ends) { vk_end_pass(); st.rt_dirty = true; }
         return;
     }
     VkPipeline p = clear_pipeline(index, kind, mask, depth, stencil);
@@ -1311,6 +1403,41 @@ static void translate_program(void *arg) {
         LOG("[shader] FS translate failed: %s\n", p->fi->error);
         atomic_store(&p->state, 2);
         return;
+    }
+    {   // (debug) LARECOMP_DEBUG_FS_OUT=<fs code address hex>:<target>:<value>: that fragment shader writes a constant to
+        // colour target <target> (x, y) instead of what it computes - is it the value or the write that's missing?
+        const char *e = getenv("LARECOMP_DEBUG_FS_OUT");
+        unsigned long long a = 0;
+        int tgt = 0;
+        float v = 0;
+        bool any = e && e[0] == '*';
+        if (e && (any ? sscanf(e + 1, ":%d:%f", &tgt, &v) == 2 : sscanf(e, "%llx:%d:%f", &a, &tgt, &v) == 3) && (any || a == p->code[1]) &&
+            (p->fi->out_mask >> (tgt * 4)) & 0xF) {
+            a = p->code[1];
+            char old0[32], old1[32], old3[32];
+            snprintf(old0, sizeof old0, "  c%d[0] = ", tgt);
+            snprintf(old1, sizeof old1, "  c%d[1] = ", tgt);
+            snprintf(old3, sizeof old3, "  c%d[3] = ", tgt);  // (alpha 1: blending, if any, keeps the value)
+            size_t cap = strlen(p->fi->msl) + 4096, len = 0;
+            char *out = malloc(cap);
+            for (const char *q = p->fi->msl; *q;) {
+                const char *nl = strchr(q, '\n');
+                size_t n = nl ? (size_t)(nl - q + 1) : strlen(q);
+                if (!strncmp(q, old0, strlen(old0)) || !strncmp(q, old1, strlen(old1)))
+                    len += (size_t)snprintf(out + len, cap - len, "%.*s%ff;\n", (int)strlen(old0), q, v);
+                else if (getenv("LARECOMP_DEBUG_FS_OUT_ALPHA") && !strncmp(q, old3, strlen(old3)))
+                    len += (size_t)snprintf(out + len, cap - len, "%.*s1.0f;\n", (int)strlen(old3), q);
+                else { memcpy(out + len, q, n); len += n; out[len] = 0; }
+                q += n;
+            }
+            free(p->fi->msl);
+            p->fi->msl = out;
+            LOG("[debug] fs %llx: colour target %d x, y = %g\n", a, tgt, v);
+        }
+        // (debug) LARECOMP_DEBUG_FS_NODISCARD=<fs code address hex>: that fragment shader never discards (its coverage)
+        const char *nd = getenv("LARECOMP_DEBUG_FS_NODISCARD");
+        if (nd && strtoull(nd, NULL, 16) == p->code[1])
+            for (char *q = strstr(p->fi->msl, "discard;"); q; q = strstr(q, "discard;")) memcpy(q, "/*-*/   ", 8);
     }
     p->vs_uses_vid = strstr(p->vi->msl, "gl_VertexIndex") != NULL;
     save_glsl(p->vi->msl, p->code[0], "vs");
@@ -1684,7 +1811,7 @@ static TexBackend *snapshot_image(NvnTexture *t, TexBackend *src) {
 
 // (debug frames) a depth image's depth values as a greyscale PGM, stretched over its own min..max
 static void debug_save_depth(TexBackend *b, const char *path) {
-    if (!b || !b->image || !(b->aspect & VK_IMAGE_ASPECT_DEPTH_BIT) || b->format != VK_FORMAT_D32_SFLOAT_S8_UINT) return;
+    if (!b || !b->image || !(b->aspect & VK_IMAGE_ASPECT_DEPTH_BIT) || (b->format != VK_FORMAT_D32_SFLOAT_S8_UINT && b->format != VK_FORMAT_D32_SFLOAT)) return;
     uint64_t n = (uint64_t)b->width * b->height;
     VkSpan out = vk_readback(n * 4);
     VkCommandBuffer cb = vk_cmd();
@@ -1929,10 +2056,8 @@ static void resolve_feedback(Prog *pr) {
             if (g_debug_frame && (src->aspect & VK_IMAGE_ASPECT_DEPTH_BIT)) {
                 static int nd;
                 char path[128];
-                snprintf(path, sizeof path, "build/fbdepth_%03d_src.pgm", nd);
-                debug_save_depth(src, path);
-                snprintf(path, sizeof path, "build/fbdepth_%03d_snap.pgm", nd++);
-                debug_save_depth(dst, path);
+                snprintf(path, sizeof path, "build/fbdepth_%03d_src.pgm", nd++);  // (the snapshot can't be read back: no
+                debug_save_depth(src, path);                                    //  transfer-source usage)
                 cb = vk_cmd();
             }
             feedback_tex[nfeedback] = t;
@@ -2037,6 +2162,27 @@ static bool gmem_import(uint64_t size) {
 }
 
 static uint64_t gmem_tried;  // heap size the import was last attempted for (gmem_info imports / re-imports)
+
+// How far into the import vertex and index data may be read in place: within one allocation of at most
+// maxMemoryAllocationSize and one buffer of at most maxBufferSize. SMM2's heap is 3.2 GB. Mesa's lavapipe allows 2 GB
+// allocations; the whole heap still imports there and shader global memory reads it, but vertex / index fetches from
+// offsets past 2 GB read other memory: the 3D World title's character composite (a box whose vertices sit 2.6 GB into
+// the heap) drew nothing, so Mario was missing from the title. Data past the limit is copied (guest_direct).
+static uint64_t gmem_direct_limit(void) {
+    static uint64_t lim;
+    if (lim) return lim;
+    VkPhysicalDeviceVulkan13Properties p13 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_PROPERTIES};
+    VkPhysicalDeviceVulkan11Properties p11 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES, .pNext = &p13};
+    VkPhysicalDeviceProperties2 p = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, .pNext = &p11};
+    vkGetPhysicalDeviceProperties2(g_vk.phys, &p);
+    lim = HEAP_MAX;
+    if (p11.maxMemoryAllocationSize && p11.maxMemoryAllocationSize < lim) lim = p11.maxMemoryAllocationSize;
+    if (p13.maxBufferSize && p13.maxBufferSize < lim) lim = p13.maxBufferSize;
+    lim &= ~0xFFFFFull;  // (1 MB steps: a multiple of the host pointer import alignment)
+    LOG("[vk] vertex / index data read in place up to %llu MB into the heap (allocation %llu MB, buffer %llu MB)\n", (unsigned long long)(lim >> 20),
+        (unsigned long long)(p11.maxMemoryAllocationSize >> 20), (unsigned long long)(p13.maxBufferSize >> 20));
+    return lim;
+}
 
 static VkDescriptorBufferInfo gmem_info(void) {
     static int off = -1;
@@ -2359,6 +2505,7 @@ static bool guest_direct(uint64_t addr, uint64_t size, VkBuffer *buf, VkDeviceSi
     if (copy || addr < HEAP_BASE) return false;
     if (addr + size > HEAP_BASE + gmem_size && kernel_heap_size() != gmem_tried) { gmem_tried = kernel_heap_size(); gmem_info(); }
     if (!gmem_buf || addr + size > HEAP_BASE + gmem_size) return false;
+    if (addr - HEAP_BASE + size > gmem_direct_limit()) return false;
     gpu_read_mark(addr, size);  // (read when the submission runs: see gpu_read_mark)
     if (vcache_lookup(addr, size, buf, off)) return true;
     *buf = gmem_buf;
@@ -2423,6 +2570,10 @@ static void texture_info(int stage, ShaderInfo *si, int i, VkDescriptorImageInfo
                 view = vk_view(naliases ? alias_read(e->tex) : e->tex, &e->view, e->has_view, false, st_->type);
                 memo[ms].tex = e->tex; memo[ms].vh = vh; memo[ms].frame = frame; memo[ms].gen = vk_view_gen;
                 memo[ms].type = (uint8_t)st_->type; memo[ms].has_view = e->has_view; memo[ms].view = view;
+            }
+            if (st_->shadow && st_->type == TEXTYPE_2D) {  // (a colour texture compared: through a depth copy, textures.c)
+                VkImageView sv = vk_shadow_view(naliases ? alias_read(e->tex) : e->tex);
+                if (sv) view = sv;
             }
             renderer_texture_scale(e->tex, &sc[0], &sc[1]);
             wh[0] = e->tex->width; wh[1] = e->tex->height;
@@ -2653,6 +2804,32 @@ static bool topology(uint32_t mode, VkPrimitiveTopology *t, uint8_t *cls) {
     }
 }
 
+// Mesa's lavapipe (llvmpipe, Mesa 25.0): in a pass with several colour targets, some blended and some not, a draw that
+// follows another program's draws in the same command buffer can leave its unblended targets unwritten. SMM2's
+// character layer pass (3D World title): Mario's draw kept target 0 (blended colour) but not target 1 (the RG16F depth
+// mask, not blended), so the composite discarded him. Nothing is invalid there (validation layers: silent), the barrier
+// before each pass is a full one in GENERAL layout, and the target is written when that draw starts a new command
+// buffer. So, on lavapipe only, such a draw goes into a new submission. LARECOMP_VK_MRT_SPLIT=0 / 1: never / any driver.
+static void lavapipe_mrt_split(Prog *pr) {
+    static int on = -1;
+    if (on < 0) {
+        const char *e = getenv("LARECOMP_VK_MRT_SPLIT");
+        on = e ? atoi(e) : strstr(g_vk.props.deviceName, "llvmpipe") != NULL;
+        if (on) LOG("[vk] draws into mixed-blend multi-target passes start a new submission (lavapipe)\n");
+    }
+    if (!on || !in_pass || st.rt_dirty || st.rt.ncolor < 2 || !g_pass_last_prog || g_pass_last_prog == pr) return;
+    uint32_t used = 0, blended = 0;
+    for (int i = 0; i < st.rt.ncolor && i < 8; i++) {
+        if (!st.rt.color[i] || !((st.channel_mask >> (i * 4)) & 0xF)) continue;
+        used |= 1u << i;
+        if ((st.color_state[0] >> i) & 1) blended |= 1u << i;
+    }
+    if (!blended || blended == used) return;
+    vk_end_pass();
+    renderer_submit();
+    st.rt_dirty = true;
+}
+
 static void draw_(CmdRec *r, bool indexed);
 static void draw(CmdRec *r, bool indexed) {
     PROF_T0();
@@ -2727,7 +2904,9 @@ static void draw_(CmdRec *r, bool indexed) {
     snap_reason = "draw-colorwrite";
     for (int i = 0; i < st.rt.ncolor; i++)
         if (st.rt.color[i] && ((st.channel_mask >> (i * 4)) & 0xF)) snapshots_invalidate(st.rt.color[i]);
+    lavapipe_mrt_split(pr);
     begin_pass();
+    if (in_pass) g_pass_last_prog = pr;
     VkCommandBuffer cb = vk_cmd();
 
     uint32_t mode = (uint32_t)r->x[0];
@@ -2781,6 +2960,8 @@ static void draw_(CmdRec *r, bool indexed) {
         }
     }
     k.a2c = st.ms[0xC] != 0;
+    if (getenv("LARECOMP_VK_NO_BLEND")) k.blend_on = 0;  // (debug: no blending at all)
+    if (g_debug_frame) LOG("[draw]   pipeline: %u targets, fs out %#x, write masks %x %x %x %x, blend %#x (rt0 %02x %02x %02x %02x %02x %02x %02x %02x), formats %d %d, a2c %d\n", k.ncolor, pr->fi->out_mask, k.write_mask[0], k.write_mask[1], k.write_mask[2], k.write_mask[3], k.blend_on, k.blend[0][0], k.blend[0][1], k.blend[0][2], k.blend[0][3], k.blend[0][4], k.blend[0][5], k.blend[0][6], k.blend[0][7], k.color[0], k.color[1], k.a2c);
     k.topo_class = cls;
     k.poly_fill = st.poly[2] != 1;
     uint64_t ph = hash_words(0xcbf29ce484222325ull, &k, sizeof k);
@@ -2842,6 +3023,9 @@ static void draw_(CmdRec *r, bool indexed) {
     // ---- rasterizer
     uint8_t cull = st.poly[0];
     if (vkey.flip_x) cull = 0;  // (mirror mode's composite: one full-screen quad, either winding)
+    static int nocull = -1;  // (debug) LARECOMP_VK_NO_CULL=1: no face culling
+    if (nocull < 0) nocull = getenv("LARECOMP_VK_NO_CULL") != NULL;
+    if (nocull) cull = 0;
     VkCullModeFlags cm = cull == 1 ? VK_CULL_MODE_FRONT_BIT : cull == 2 ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE;
     if (ss_need(SS_CULL, ss.cull == cm)) { ss.cull = cm; vkCmdSetCullMode(cb, cm); }
     bool ccw = st.poly[1] == 1;
@@ -3109,6 +3293,18 @@ static void draw_(CmdRec *r, bool indexed) {
     }
     stat_draws++;
     cum_draws++;
+    // LARECOMP_DEBUG_PROBE_DRAWS=1 | <fs hex>: with the probe, the debug frame's draws into several targets (or with that
+    // fragment shader) end their pass, so each one's result is probed
+    static int probe_draws = -1;
+    static uint64_t probe_fs;
+    if (probe_draws < 0) {
+        const char *e = getenv("LARECOMP_DEBUG_PROBE_DRAWS");
+        probe_draws = e != NULL;
+        probe_fs = e ? strtoull(e, NULL, 16) : 0;
+        if (probe_fs == 1) probe_fs = 0;
+    }
+    if (probe_draws && g_debug_frame &&
+        (probe_fs ? st.program->stages[1].code_addr == probe_fs : st.rt.ncolor > 1)) { vk_end_pass(); st.rt_dirty = true; }
     if (g_gpuprof_frame && gp_n) {
         if (!gp_draws[gp_n - 1]) {  // first draw of the row: its fragment shader hash
             size_t l = strlen(gp_label[gp_n - 1]);
@@ -3136,11 +3332,27 @@ static void debug_draw(Prog *pr, CmdRec *r, bool indexed) {
             for (int k = 0; k < 16; k++) LOG(" %.4g", v[k]);
             LOG("\n");
         }
-        for (int c = 0; c < 18; c++) {
-            if (!((pr->fi->cbuf_mask >> c) & 1) || !st.ubuf[1][c].addr) continue;
-            const float *u = (const float *)(uintptr_t)st.ubuf[1][c].addr;
-            LOG("[draw]   fcb%d %llx size %u:", c, (unsigned long long)st.ubuf[1][c].addr, (unsigned)st.ubuf[1][c].size);
-            for (int k = 0; k < 160 && k * 4 < (int)st.ubuf[1][c].size; k++) LOG(" %.6g", u[k]);
+        for (int c = 3; c < 21; c++) {  // vertex cbufs
+            Range ub = st.ubuf[0][c - 3];
+            if (!((pr->vi->cbuf_mask >> c) & 1) || !ub.addr) continue;
+            const float *u = (const float *)(uintptr_t)ub.addr;
+            LOG("[draw]   vcb%d %llx size %u:", c, (unsigned long long)ub.addr, (unsigned)ub.size);
+            for (int k = 0; k < 64 && k * 4 < (int)ub.size; k++) LOG(" %.6g", u[k]);
+            LOG("\n");
+        }
+        if (indexed && r->x[3]) {  // the first indices
+            LOG("[draw]   indices (type %llu at %llx):", (unsigned long long)r->x[1], (unsigned long long)r->x[3]);
+            for (uint32_t k = 0; k < 36 && k < (uint32_t)r->x[2]; k++)
+                LOG(" %u", r->x[1] == 1 ? ((const uint16_t *)(uintptr_t)r->x[3])[k] : r->x[1] == 2 ? ((const uint32_t *)(uintptr_t)r->x[3])[k]
+                                                                                   : ((const uint8_t *)(uintptr_t)r->x[3])[k]);
+            LOG("\n");
+        }
+        for (int c = 3; c < 21; c++) {  // (shader cbuf c = bound uniform buffer c - 3, as cbuf_info)
+            Range ub = st.ubuf[1][c - 3];
+            if (!((pr->fi->cbuf_mask >> c) & 1) || !ub.addr) continue;
+            const float *u = (const float *)(uintptr_t)ub.addr;
+            LOG("[draw]   fcb%d %llx size %u:", c, (unsigned long long)ub.addr, (unsigned)ub.size);
+            for (int k = 0; k < 160 && k * 4 < (int)ub.size; k++) LOG(" %.6g", u[k]);
             LOG("\n");
         }
     }
@@ -3192,7 +3404,7 @@ static void copy_buffer_to_texture(uint64_t src, const TexRefRec *dst) {
     TexBackend *b = vk_tex(t, false);  // prior CPU contents uploaded first
     renderer_mark_gpu_owned(t);
     if (b->aspect == (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) return;
-    if (b->astc_bw) {  // (blocks would need the CPU decode: not seen in the game yet)
+    if (b->astc_bw || b->bc_soft) {  // (blocks would need the CPU decode: not seen in the game yet)
         static int nlog;
         if (nlog++ < 5) LOG("[vk] buffer -> ASTC texture copy skipped (%ux%u)\n", t->width, t->height);
         return;
@@ -3772,6 +3984,8 @@ static void exec_list(uint64_t handle, int depth) {
             } else {
                 st.render_off = !r->x[0];
             }
+            if (g_debug_frame) LOG("[cond] render %s (%s mode %llu counters %llx)\n", st.render_off ? "off" : "on",
+                                   r->x[2] ? "conditional" : "plain", (unsigned long long)r->x[0], (unsigned long long)r->x[1]);
             break;
         case CMD_REPORT_VALUE: {  // {value, timestamp}, written in order with the conditional checks that read it
             uint64_t *out = (uint64_t *)(uintptr_t)r->x[1];
@@ -3788,6 +4002,12 @@ static void exec_list(uint64_t handle, int depth) {
             break;
         }
         case CMD_CLEAR_COLOR: {
+            if (g_debug_frame) {
+                const float *cf = x;
+                int ix = (int)r->x[0];
+                LOG("[clear] colour %d (%p) mask %#llx %g %g %g %g%s\n", ix, ix < st.rt.ncolor ? (void *)st.rt.color[ix] : NULL,
+                    (unsigned long long)r->x[2], cf[0], cf[1], cf[2], cf[3], st.render_off ? " (render off: skipped)" : "");
+            }
             if (st.render_off) break;
             snap_reason = "clear-color"; snapshots_invalidate(NULL);
             int index = (int)r->x[0];

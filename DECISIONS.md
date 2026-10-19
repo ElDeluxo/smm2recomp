@@ -1128,6 +1128,47 @@ renderers upload a texture when a sprite first uses it. Measured on the same cou
   Basics sets its own flag (which also grows the title-course rotation from 8 to 10), power-up
   lessons set nothing; Nina's introduction is one flag for every lesson kind (save +0x100 bit 10).
 
+## 2026-10-19 — Android: guest window at 0x800000000, game code built on the Mac, APK without Gradle
+The recomp builds for Android arm64 (`make -C recomp TARGET=android-arm64 GAME=smm2 apk install push-data`; how-to in
+`recomp/README.md`, "Building (Android)"). The choices:
+- **The guest window moves to 0x800000000-0xB20000000 on Android** (`GUEST_ORIGIN`, the mechanism the iOS work added:
+  the game code is generated for that base into `generated/smm2-0x800000000`). Android's arm64 kernels commonly give
+  apps a 39-bit address space (user space ends at 0x8000000000) and map libraries top-down from its end, with up to
+  ~64 GB of randomisation, so 0x7000000000-0x7320000000 falls where libraries and the zygote's mappings can already
+  sit, the same for every app forked from it, and an app can't re-exec for a fresh layout. Nothing maps low by default
+  (ART's heaps are under 4 GB, executables at ~0x55_5555_5555), and the window still fits the guest's 39-bit pointers.
+  It is claimed with `MAP_FIXED_NOREPLACE` from a constructor in `libmain.so` (when the activity loads it, before
+  SDL_main); if the claim fails, the app says so and logs what is mapped there. Evidence [obs]: the API 35 arm64
+  emulator (kernel 6.6, 4K pages) has a 39-bit space (highest mapping ends at 0x7fd2c01000) and the low window is
+  claimed. [obs] Whether the default window would have been free changes from boot to boot: one emulator boot had
+  nothing mapped in 0x7000000000-0x7320000000, the next had 742 mappings (6.4 GB) there, so the desktop base would
+  have failed on it while the low window was claimed both times.
+- **Game code compiled on the Mac, shipped in the APK** (as on iOS: no compiler on the device). It is a separate
+  `libsmm2game.so` (143 MB) linked against `libmain.so` (the runtime, SDL3's entry, static libc++ and shaderc), loaded
+  by name so it can stay inside the APK (`extractNativeLibs=false`, 16 KB-aligned). The APK carries code made from the
+  player's dump: their own devices only; `scripts/check_no_proprietary.py` blocks `.apk`, `.aab`, `.dex`, `.ipa` and
+  keystores.
+- **Android 13 (API 33) minimum:** the Vulkan backend needs 1.3 (dynamic rendering, synchronization2, timeline
+  semaphores), and the NDK's `libvulkan.so` exports the 1.3 entry points from API 33.
+- **No Gradle:** `tools/make_android_apk.sh` runs javac, d8, aapt2, zipalign and apksigner on SDL's own Java activity
+  (`org.libsdl.app.SDLActivity`) and a generated manifest, signed with a local debug key. Fewer moving parts than an
+  Android Studio project, and the same make-driven pipeline as the other targets.
+- **shaderc built from Google's sources** (`tools/android_deps.sh`, v2026.1 with its pinned glslang / SPIRV-Tools): the
+  NDK's bundled copy (2022) rejects `GL_EXT_texture_shadow_lod`, which the shader translator emits.
+- **Game files in the app's external files folder** (`/sdcard/Android/data/org.smcraft.smm2recomp/files`), pushed with
+  adb (`tools/android_push_data.sh`, links followed, then opened to the app: adb's files belong to the shell user).
+  Not bundled in the APK: 3 GB, and the APK should hold as little of the game as possible.
+- **Tested in the emulator only** (the owner has no Android device): the arm64 API 35 image with `-gpu host`, whose
+  Vulkan is gfxstream over MoltenVK. Two things that only showed there were fixed for all Vulkan targets rather than
+  worked around: GLSL helpers named like Metal built-ins (`fmin` / `fmax`, ambiguous once MoltenVK turns SPIR-V into
+  MSL), and the emulator keyboard counted as a gamepad (it hid the on-screen controller; Android only). The
+  SwiftShader mode is not an option (no 8- / 16-bit storage).
+- **BC textures decoded on the CPU** where the GPU lacks them (most phone GPUs), in the Vulkan backend as on iOS
+  (`runtime/nvn/bcsoft.c`); `RECOMP_BC_SOFT=1` forces it for testing.
+Would change: a device whose low window is taken (move `GUEST_ORIGIN`, or probe several bases at run time, which
+would need base-independent game code); a store build (then the game code would have to be built on the device or
+by the player, as the desktop packages do).
+
 ## 2026-10-19 — Recomp R2: replays keyed to the player's update, compared record for record with Ryujinx
 Input replays run in the recompiled game and in Ryujinx and stay identical (findings: `recomp/docs/smm2-bringup.md`,
 "Input replays"). The choices:
@@ -1355,7 +1396,7 @@ before.
 **What:** the host-drawn SMM1 screens (`recomp/games/smm2/mods/smm1/`): difficulty select, world map
 and walk, start card, pause / clear / skip / miss overlays, game over, and the ending (rescue scene,
 Thank-you line, staff credits), from the player's SMM1 dump (base v16 + update v208), generated at
-first use into `<data>/mods-generated/smm1-ui-v5/` (layouts, fonts, texts, the ending's models,
+first use into `<data>/mods-generated/smm1-ui-v6/` (layouts, fonts, texts, the ending's models,
 the screens' music and sound banks). Nothing of SMM1 is in the repository.
 
 **Port, not link (coordinator approved):** "reused rather than rewritten" above meant SMCraft's Rust
@@ -1496,6 +1537,35 @@ yellow course-name banner with the maker underneath, like the course card, and n
 SMM1 rescue scene and Peach's thank-you stay SMM1; the roll ends on THE END / TO BE CONTINUED as
 before.
 
+## 2026-10-19 — Mystery Mushroom costumes: worn as small Mario, the model through a spare slot
+
+**What:** mod 2 (`recomp/games/smm2/mods/costume.c`, `mods/smm1/costume_gen.c`), per
+research/specs/recomp-mods.md §3. At the first start with the switch on, the costume models are built
+from the player's own dumps: SMM2's small SMB1 Mario model with each SMM1 costume's 24x24 frames
+(`Model/M1_Player_Chara_<res>.szs` of the SMM1 dump), written into a rebuilt `Pack/M1_Model.pack`
+(a zstd frame of stored blocks) by the mods' shared RomFS overlay (generator "costumes",
+`<data>/mods-generated/romfs/`), which lays it over the game's.
+Nothing of either game is in the repository.
+
+**How it plays:**
+- The player in costume stays form 0 (small Mario) for the game's logic, so size, physics, hit boxes
+  and block rules are SMM2's own small Mario (SMM1's costume Mario is small too).
+- The look: the model builder loads the course's costume into form slot 12 (Balloon, unused in SMB1,
+  same size class as small Mario) by pointing that slot's model name at `Player_Chara_<res>` for the
+  call; the visual slot setter shows slot 12 where the game asks for slot 0 while the costume is on.
+  One costume per course (a model loads with the player; the pickup can't load one mid-course) [inf].
+- The pickup: SMM1's Mystery Mushroom is the SMB1 skin of the style power-up, so the Big Mushroom from
+  small Mario puts the costume on instead of growing (`costume_item=super`: the Super Mushroom, as
+  SMCraft did). Another power-up replaces it.
+- A hit takes the costume off through the Super → small power-down (hook point 0x15a50a4 reads the
+  form as 1), as a costume absorbs one hit in SMM1.
+- Sound: the costume's power-up, goal and death sounds from SMM1's `Sound/CharaMario` banks on the
+  host mixer; SMM2's goal and death fanfares give way to them.
+- Reward: after a won 100 Mario run the ending shows SMM1's costume window (`Cmn_CMListWindow_01`)
+  with one random costume not owned yet, from SMM1's pools by difficulty (smm1-100mario-code.md §7);
+  owned costumes are kept in `costumes-owned.txt` (category 0 always owned).
+- The switch: "Mystery Mushroom costumes" in the Mods tab (`costumes=1` in `smm2mods.ini`).
+
 ## 2026-10-19 — 100 Mario gets its own Course World button; Endless stays exactly SMM2's
 
 **Owner:** separate menu entries. The **100 Mario Challenge** gets its own button in Course World,
@@ -1514,8 +1584,8 @@ iPad with the Mods tab.
    Mario courses alike, as SMM1 allowed for downloaded courses. Edit buttons go where SMM1 put its
    edit option for a downloaded course, translated into SMM2's style (course detail page, after a
    clear, …). The work is the entry points plus loading the downloaded course into the editor (a
-   Coursebot slot). **Open, asked of the owner:** what re-uploading an edited copy of someone else's
-   course does.
+   Coursebot slot). **Re-uploading (owner chose):** an edited copy of someone else's course uploads as a new
+   course under the uploader's name, credited "based on <code> by <maker>".
 2. **Nextendo Network** (github.com/NextendoNetwork: community-run Switch online servers with a Go
    NEX/PRUDP server, account/dauth/BAAS servers) **for multiplayer**, and possibly for Course World,
    Endless and 100 Mario too. **TGRCode and our own server stay**: the online backend (Nextendo / our
@@ -1526,3 +1596,73 @@ iPad with the Mods tab.
 3. **Settings live at app level**: one settings page in the recomp app's own UI (grown from the
    overlay menu's Mods tab), not a screen drawn in SMM2's style. It holds the online backend, the
    course source and every SMM1 feature switch.
+
+## 2026-10-19 — 100 Mario's Course World button: try a real sixth button
+
+**Owner (asked directly in session mario-maker-76):** of the options (take Ninji Speedruns' slot,
+take the Super Worlds globe, or try a real sixth button), the owner chose **try a real sixth
+button** built into Course World's top menu page (`Nwk_Title_00`), with its own panes, update, draw
+and cursor navigation. If that proves unworkable, the fallback is Ninji Speedruns' slot, confirmed
+with the owner first.
+
+## 2026-10-19 — "Challenge Modes" replaces the sixth button; Nextendo groundwork offline
+
+**Owner:**
+- **Challenge Modes** (replaces both the sixth-button plan and "separate menu entries"): Course
+  World's Endless Challenge button is relabelled **"Challenge Modes"**. Inside, **ZL / ZR** (or a tap
+  on the "ZL ◀ mode ▶ ZR" header) switch between **100 Mario Challenge** (SMM1's select / map / card
+  flow) and **Endless Challenge** (SMM2's own, exactly as SMM2); **L / R** still switch difficulty;
+  **B** stays "back"; the last mode used is remembered.
+- **Nextendo Network:** research done (research/specs/recomp-nextendo.md): SMM2 v3.0.3 is supported
+  ("experimental"); a recomp client needs no console identity, but Nextendo must register the app
+  (their developer portal is closed) and their SMM2 server is private; their code is PolyForm
+  Shield, so we write our own client and copy none of it. **Start the offline groundwork now**
+  (real sockets, DNS redirect table, TLS, account token, app sign-in) against a **local test
+  server only**; nothing connects to Nextendo's servers until the owner has their permission and an
+  app registration (the owner is contacting them on Discord). The same pieces give us our own
+  local NEX server route later.
+
+## 2026-10-19 — Releases: a launcher plus recompiler per platform, bring your own game
+
+**Owner-approved plan (relayed by mario-maker-c4), modelled on melee-pc** (github.com/999sian/melee-pc):
+per-platform releases that ship **no game code**. The generated C is Nintendo's code, so a release is
+a **launcher plus the recompiler**: the launcher takes the player's dump, checks its hash against the
+known v3.0.3 versions, uses the player's own prod.keys, extracts the dump, recompiles the game on
+first launch with the bundled zig, then runs it; it also takes an optional SMM1 dump (100 Mario,
+costumes) and checks for updates.
+
+- **Windows, Linux and macOS first** (builds on the existing first-launch recompile of the Windows
+  package). **Android and iOS later**, as build-it-yourself paths; iOS can't compile on the device,
+  so it needs a desktop helper that builds, signs and installs the app.
+- Release builds come from GitHub Actions, run only for releases (CI minutes budget).
+- The repository still has no top-level licence for the project's own code; the owner hasn't chosen
+  one (MIT like LAS Recomp, or GPL-3.0 like melee-pc). Until then none is added.
+
+## 2026-10-19 — The game's own network stack: Mbed TLS, the runtime's trust policy, deny-by-default names
+
+**Decision** (the Nextendo groundwork above, offline):
+- **TLS library: Mbed TLS 3.6.7 LTS**, vendored unmodified in `recomp/third_party/mbedtls` and taken under its
+  **Apache-2.0** licence (it is dual Apache-2.0 / GPL-2.0-or-later; notice in `LICENSE` and `README.recomp`). It
+  builds from C on every target (macOS, iOS, Windows with zig, Linux, Android) with no system TLS. Configured as a
+  TLS 1.2 client only (`runtime/net/mbedtls_user_config.h`): the console's ssl service speaks TLS 1.2 to the game's
+  servers, and it keeps PSA crypto / threading out of the picture.
+- **Trust is the runtime's, never the game's.** The CAs and client certificates the game imports or names are
+  ignored (no console certificate or PRODINFO is used anywhere). `tls_trust=local-ca` (default): the server must
+  present a certificate from the local test CA (made by `tools/nex_test_server` into `recomp/private/`, never
+  committed; the proprietary guard now blocks PEM keys / certificates and `.pem` / `.key` / `.crt` files).
+  `tls_trust=any`: accept any certificate, and only towards local addresses. A pinned CA for a community server
+  is a third mode, added with the registration.
+- **Names and addresses are deny-by-default.** The game's names never reach the host's DNS: nsd and sfdnsres answer
+  from a redirect table; with the default backend every name fails, with `backend=local-nex` the game's domains go
+  to the local test server. Every redirect target must be a local address (loopback, private, link-local,
+  100.64/10), and a game socket may reach only loopback and those targets; anything else is refused and logged.
+- **Backend setting** in smm2mods.ini: `ours` (default, the mod path, unchanged), `local-nex` (the mod's online
+  overrides off, the game's own NEX client against the test server), `nextendo` (listed, refused: awaiting
+  registration).
+- **Account:** a local network service account ID and a local JWT ID token (HS256 with a local key in
+  `net/account.txt`); a backend's real token plugs in through `id_token_file=`.
+**Why:** the owner's "start the groundwork offline, against a local test server only"; our own client code (none
+of Nextendo's PolyForm-Shield or citron's GPL code), written from public protocol documentation and the game's
+behaviour. The same pieces are the "local NEX server" route.
+**Would change:** the owner's go-ahead with Nextendo's permission and registration (public redirect targets and a
+pinned CA behind an explicit setting); a game server that needs TLS 1.3.

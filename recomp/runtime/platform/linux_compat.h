@@ -1,11 +1,17 @@
 // What glibc before 2.38 lacks (included via runtime/platform.h on Linux only): the AppImage is built against
-// Ubuntu 22.04's glibc 2.35 (no strlcpy / strlcat until 2.38, no arc4random until 2.36).
+// Ubuntu 22.04's glibc 2.35 (no strlcpy / strlcat until 2.38, no arc4random until 2.36). Android's bionic has both.
 #pragma once
 #include <stdint.h>
 #include <string.h>
 #include <sys/random.h>
 
-#if !__GLIBC_PREREQ(2, 38)
+#ifdef __GLIBC__
+#define RT_GLIBC_BEFORE(maj, min) (!__GLIBC_PREREQ(maj, min))
+#else
+#define RT_GLIBC_BEFORE(maj, min) 0  // (Android's bionic: has them all)
+#endif
+
+#if RT_GLIBC_BEFORE(2, 38)
 static inline size_t strlcpy(char *d, const char *s, size_t n) {
     size_t len = strlen(s);
     if (n) {
@@ -22,7 +28,7 @@ static inline size_t strlcat(char *d, const char *s, size_t n) {
 }
 #endif
 
-#if !__GLIBC_PREREQ(2, 36)
+#if RT_GLIBC_BEFORE(2, 36)
 static inline uint32_t arc4random(void) {
     uint32_t v = 0;
     while (getrandom(&v, sizeof v, 0) != sizeof v) {}

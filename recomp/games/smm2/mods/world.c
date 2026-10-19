@@ -3,6 +3,7 @@
 // ("wrapper", this = the network-session object) is answered from core/crates/server's /api routes, writing what
 // the game's own converters would write from a NEX answer. Names of the requests (DataStore SMM2 methods) come
 // from the client vtable slot each wrapper calls (v3.0.3).
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -48,6 +49,32 @@ static const char *const SEARCH_NAMES[14] = {"pick up", "popular", "new", "follo
                                              "terms ranking", "posted by", "liked by", "world records",
                                              "first clears", "played by", "versus", "versus", "versus"};
 
+// GET /api/makers/<maker id>, only for real maker ids (XXX-XXX-XXX: courses from TGRCode's archive may carry a maker
+// name instead, which the server can't look up), and once per unknown id (a 404 is remembered): the course lists
+// ask for every maker on them, and each miss used to cost a request.
+static Json *maker_get(const char *id) {
+    static char unknown[128][16];
+    static int nunknown;
+    static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+    if (!id || strlen(id) != 11 || id[3] != '-' || id[7] != '-') return NULL;
+    for (int i = 0; i < 11; i++)
+        if (i != 3 && i != 7 && !((id[i] >= '0' && id[i] <= '9') || (id[i] >= 'A' && id[i] <= 'Z'))) return NULL;
+    pthread_mutex_lock(&lock);
+    for (int i = 0; i < nunknown && i < 128; i++)
+        if (!strcmp(unknown[i], id)) return pthread_mutex_unlock(&lock), NULL;
+    pthread_mutex_unlock(&lock);
+    char path[64];
+    snprintf(path, sizeof path, "/api/makers/%s", id);
+    int status = 0;
+    Json *j = srv_call("GET", path, NULL, &status);
+    if (!j && status == 404) {
+        pthread_mutex_lock(&lock);
+        snprintf(unknown[nunknown++ % 128], 16, "%s", id);
+        pthread_mutex_unlock(&lock);
+    }
+    return j;
+}
+
 void world_search(Cpu *c, uint64_t no, uint32_t type) {
     uint32_t page = g32(no + NO_PAGE), want_band = 4, want_style = 5;
     char path[256], id[16] = "";
@@ -68,10 +95,7 @@ void world_search(Cpu *c, uint64_t no, uint32_t type) {
     }
     Json *j = NULL;
     if (by_maker) {
-        if (mod_maker_id(g64(no + NO_SEARCH_PID), id)) {
-            snprintf(path, sizeof path, "/api/makers/%s", id);
-            j = srv_call("GET", path, NULL, NULL);
-        }
+        if (mod_maker_id(g64(no + NO_SEARCH_PID), id)) j = maker_get(id);
     } else if (!none) {
         snprintf(path, sizeof path, "/api/courses?sort=%s&offset=%u&limit=100%s%s", sort, page * 100,
                  want_style < 5 ? "&style=" : "", want_style < 5 ? STYLES[want_style] : "");
@@ -150,10 +174,7 @@ uint64_t mod_player_pid(void);
 
 // The maker's record from GET /api/makers/<id> (name, courses -> likes and maker points); NULL: unknown maker.
 static Json *maker_profile(const char *maker_id) {
-    if (!maker_id || !*maker_id) return NULL;
-    char path[64];
-    snprintf(path, sizeof path, "/api/makers/%s", maker_id);
-    return srv_call("GET", path, NULL, NULL);
+    return maker_get(maker_id);
 }
 
 static void fill_user(uint64_t e, uint64_t pid, const char *maker_id, const char *name_hint, Json *prof) {

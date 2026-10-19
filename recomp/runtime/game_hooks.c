@@ -18,7 +18,8 @@ WEAK void romfs_file_read_hook(const char *path) { (void)path; }
 // a folder of files a game's mods generate, laid over the RomFS when no RECOMP_MOD_DIR is set (runtime/services/fs.c)
 WEAK const char *game_romfs_overlay(void) { return NULL; }
 
-// ---- a game's mod settings (the overlay menu's Mods tab, runtime/ui/menu.mm): on/off toggles; none by default
+// ---- a game's mod settings (the overlay menu's Mods tab, runtime/ui/menu.mm): on/off toggles; none by default. An
+// entry with value NULL starts a section titled by its label ({"Online", NULL, NULL, false}); the rest are switches.
 typedef struct { const char *label, *desc; bool *value; bool def; } GameModToggle;
 WEAK int game_mod_toggles(const GameModToggle **out) { *out = NULL; return 0; }
 WEAK void game_mod_toggles_changed(void) {}
@@ -58,6 +59,13 @@ WEAK bool game_lan_config(char *relay, size_t relay_len, char *room, size_t room
     (void)relay, (void)relay_len, (void)room, (void)room_len, (void)slot;
     return false;
 }
+
+// ---- the game network stack's settings (runtime/net/netcfg.h), when a game keeps them in its own settings: none
+WEAK bool game_net_config(const char *key, char *out, size_t cap) {
+    (void)key, (void)out, (void)cap;
+    return false;
+}
+WEAK void game_net_config_set(const char *key, const char *val) { (void)key, (void)val; }
 
 // ---- save data written by the game (runtime/services/fs.c)
 WEAK void flags_ext_save_written(const char *path, uint64_t addr, int64_t off, int64_t size) {

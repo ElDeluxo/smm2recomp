@@ -41,6 +41,15 @@ class CheckFileTests(unittest.TestCase):
     def test_blocked_extension(self):
         self.assertTrue(check_file(self.write("course.bcd", b"\x00" * 16)))
 
+    def test_pem_key_and_certificate_blocked(self):
+        body = b"MIIBszCCAVmgAwIBAgIUQ2xhdWRlIHRlc3QgY2VydGlmaWNhdGUgYm9keTAKBggqhkjOPQQDAjA\n"
+        self.assertTrue(check_file(self.write("ca.txt", b"-----BEGIN CERTIFICATE-----\n" + body)))
+        self.assertTrue(check_file(self.write("k.txt", b"-----BEGIN EC PRIVATE KEY-----\n" + body)))
+        self.assertTrue(check_file(self.write("test-ca.pem", b"")))
+        # TLS library sources name the headers without a key: fine
+        src = b'static const char h[] = "-----BEGIN CERTIFICATE-----";\nint x;\n'
+        self.assertEqual(check_file(self.write("x509_crt.c", src)), [])
+
     def test_blocked_name(self):
         self.assertTrue(check_file(self.write("prod.keys", b"")))
 
@@ -69,6 +78,10 @@ class CheckFileTests(unittest.TestCase):
         self.assertTrue(check_file(self.write("game.dylib", b"\x00")))
         self.assertTrue(check_file(self.write("blob.bin", b"\xcf\xfa\xed\xfe" + b"\x00" * 16)))
         self.assertTrue(check_file(self.write("shader.dat", b"\x03\x02\x23\x07" + b"\x00" * 16)))
+
+    def test_app_packages_blocked(self):
+        for name in ("SMM2Recomp.apk", "app.aab", "classes.dex", "SMM2Recomp.ipa", "android-debug.keystore"):
+            self.assertTrue(check_file(self.write(name, b"PK\x03\x04" + b"\x00" * 16)), name)
 
     def test_player_trace_records_blocked(self):
         self.assertTrue(check_file(self.write("walk.bin", b"TRC1" + b"\x00" * 32)))
