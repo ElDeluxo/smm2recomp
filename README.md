@@ -10,12 +10,25 @@ our open-source course server instead of Nintendo's) and **Mystery Mushroom cost
 You supply your own dump; everything made from it is generated on your machine into gitignored
 folders, and `scripts/check_no_proprietary.py` blocks it in CI and in a pre-commit hook.
 
-**Status** (evidence per platform in [PROGRESS.md](PROGRESS.md)): on macOS (Apple Silicon) the game
-boots and renders its title screen at 60 fps; title frames are within 2.5–4.8 % of pixels of
-Ryujinx's. Playing courses with input replays checked frame by frame against Ryujinx, the 100
-Mario mod, the Windows / Linux builds, iOS and costumes are in progress. Approach and the projects
-it builds on (a fork of [LAS Recomp](https://github.com/peiikai/LASRecomp), MIT): the recomp entry
-in [DECISIONS.md](DECISIONS.md).
+**Status** (evidence in [PROGRESS.md](PROGRESS.md)): on macOS the game boots, plays courses, and
+replays of recorded inputs stay in sync with Ryujinx frame for frame (221,189 of 221,189 player
+updates identical); in-course frames are pixel-identical to Ryujinx's in 71 of 90 style × theme
+courses. It also runs on an iPad Pro. Approach and the projects it builds on (a fork of
+[LAS Recomp](https://github.com/peiikai/LASRecomp), MIT): the recomp entry in
+[DECISIONS.md](DECISIONS.md).
+
+## Platforms
+
+| Platform | Graphics | Status |
+|---|---|---|
+| **macOS** (Apple Silicon) | Metal | Plays; frames and input replays checked against Ryujinx. The reference platform. |
+| **iOS / iPadOS** (arm64) | Metal | Boots to the title and menus at 60 fps on an iPad Pro M5; on-screen controller and touch. The game code is built on your Mac from your dump and installed on your own device. |
+| **Windows** (x64) | Vulkan | Builds and packages (cross-compiled); not yet run on Windows. See [docs/windows.md](docs/windows.md). |
+| **Linux** (x64, arm64) | Vulkan | Builds and packages; arm64 boots to the title in a VM. |
+| **Android** (arm64) | Vulkan | In progress. |
+
+Every platform builds from your own dump; nothing from the game is distributed. Build details
+per platform are in [recomp/README.md](recomp/README.md).
 
 ## Screenshots
 
