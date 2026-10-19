@@ -403,5 +403,11 @@ cache misses:
   source-compiled ones (0 hits), and the other way round.
 - The VS and FS libraries compile side by side; entry points are named `v_/f_/c_<hash>` instead of `main0`.
 
-Left: archive files accumulate (26 after many test runs, 1.6 s to load): merge them now and then. iPad numbers still
-to be measured; the `[shader] slow program` and `[compute] program ... built in` log lines show what's left there.
+- Files don't pile up: each archive file has its pipelines' descriptions next to it (`NNNN.txt`: entry-point names
+  and fixed-function state), and once there are more than 8 files a start-up rebuilds all described pipelines into
+  one new file on the background queue; the files it replaces are deleted at the next start-up (before loading).
+  Archives can't be read back, hence the descriptions. (26 files had taken 1.6 s to load.) Files from before the
+  descriptions are deleted.
+
+iPad numbers are still to be measured; the `[shader] slow program`, `[compute] program ... built in` and
+`[shader] pipeline cache ...` log lines show what's left there.
