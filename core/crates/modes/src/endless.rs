@@ -40,6 +40,9 @@ pub const BONUS_PER_SECOND: u32 = 50;
 pub const BATCH: usize = 10;
 /// History ring length per difficulty (§5.2) [obs].
 pub const HISTORY: usize = 48;
+/// Courses a player was dealt lately, across runs and difficulties ([`EndlessSave::recent`]): a new
+/// draw avoids them while fresh ones are left (ours, not the original's).
+pub const RECENT: usize = 200;
 /// World map nodes and courses per map page (§4.4) [obs].
 pub const MAP_NODES: u32 = 32;
 pub const MAP_PAGE: u32 = 16;
@@ -943,9 +946,22 @@ pub struct EndlessSave {
     pub best: [u32; 4],
     pub last: Option<Difficulty>,
     pub skips: u32,
+    /// The last [`RECENT`] courses dealt to this player in any run, oldest first.
+    pub recent: VecDeque<String>,
 }
 
 impl EndlessSave {
+    /// Remember courses just dealt (the oldest are forgotten past [`RECENT`]).
+    pub fn note_recent<'a>(&mut self, ids: impl IntoIterator<Item = &'a str>) {
+        for id in ids {
+            self.recent.retain(|c| c != id);
+            self.recent.push_back(id.to_string());
+        }
+        while self.recent.len() > RECENT {
+            self.recent.pop_front();
+        }
+    }
+
     pub fn run(&self, d: Difficulty) -> Option<&RunRecord> {
         self.runs[d.index()].as_ref()
     }
@@ -1011,6 +1027,7 @@ impl EndlessSave {
             "best": per(&|d| json!(self.best[d.index()])),
             "last": self.last.map(Difficulty::name),
             "skips": self.skips,
+            "recent": self.recent,
         })
     }
 
@@ -1025,6 +1042,8 @@ impl EndlessSave {
         }
         s.last = v["last"].as_str().and_then(Difficulty::from_name);
         s.skips = (v["skips"].as_u64().unwrap_or(0) as u32).min(SKIP_COUNT_CAP);
+        let recent = v["recent"].as_array().into_iter().flatten();
+        s.note_recent(recent.filter_map(Value::as_str));
         s
     }
 }
@@ -1163,6 +1182,50 @@ pub fn pick_hundred(
         };
     }
     Picked::default()
+}
+
+/// A pick rule ([`pick`] or [`pick_hundred`]).
+pub type PickRule = fn(&[Candidate], Difficulty, &HashSet<&str>, &str, usize, &mut Rng) -> Picked;
+
+/// `rule`, avoiding the player's `recent` courses (oldest first) as well as the run's `excluded`
+/// ones: fresh courses first; when fewer than `count` are fresh, the oldest recent ones are let
+/// back in, a growing share at a time, so a repeat is the course seen longest ago.
+#[allow(clippy::too_many_arguments)] // the pick rule's own arguments, plus the rule and the recent list
+pub fn pick_fresh(
+    rule: PickRule,
+    candidates: &[Candidate],
+    d: Difficulty,
+    excluded: &HashSet<&str>,
+    recent: &VecDeque<String>,
+    player: &str,
+    count: usize,
+    rng: &mut Rng,
+) -> Picked {
+    let mut ex: HashSet<&str> = excluded.clone();
+    ex.extend(recent.iter().map(String::as_str));
+    let mut out = rule(candidates, d, &ex, player, count, rng);
+    // short of fresh ones: the recent courses this run hasn't had, oldest first, a growing share at a time
+    let back: Vec<&str> = recent
+        .iter()
+        .map(String::as_str)
+        .filter(|c| !excluded.contains(c))
+        .collect();
+    let mut released = 0;
+    while out.indices.len() < count && released < back.len() {
+        released = (released.max(count) * 2).min(back.len());
+        let mut ex: HashSet<&str> = excluded.clone();
+        ex.extend(&back[released..]);
+        ex.extend(out.indices.iter().map(|&i| candidates[i].id.as_str()));
+        let p = rule(candidates, d, &ex, player, count - out.indices.len(), rng);
+        // (only the courses let back in: a wider band's fresh ones were the first draw's to take)
+        let again: Vec<usize> = p
+            .indices
+            .into_iter()
+            .filter(|&i| back[..released].contains(&candidates[i].id.as_str()))
+            .collect();
+        out.indices.extend(again);
+    }
+    out
 }
 
 /// What the screen shows next after [`Session::report`].

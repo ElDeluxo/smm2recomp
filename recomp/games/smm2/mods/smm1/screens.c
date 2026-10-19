@@ -165,6 +165,10 @@ Select *select_new(int d, const struct hundred_status *st) {
     lay_hold(t, "MapIn", 0);
     lay_hold(t, "L_Sub_00/ListTitleType", 0);              // the 100 Mario list
     lay_hold(t, "L_Sub_00/OpenType", (float)(open - 2));  // 2 / 3 / 4 tabs as they unlock
+    if ((s->modes = hundred_modes_available())) {  // (the run side's style: plain < and >)
+        lay_text(t, "T_Title_00", "ZL < 100 Mario Challenge > ZR");
+        lyt_set_pane_scale(t->in, "T_Title_00", (const float[2]){0.85f, 0.85f});  // (clear of the UFOs)
+    }
     if (!prepare(s, s->d, st)) { select_free(s); return NULL; }
     lay_play(s->maps[s->d]->l, "In", 0);  // the map comes in (48)
     s->cont = st->can_continue[s->d];
@@ -206,6 +210,10 @@ int select_step(Select *s, const UiIn *in, const struct hundred_status *st, bool
     if (!s->maps[s->d]) return EV_NONE;
     unsigned p = in->pressed;
     int open = open_tabs(st);
+    if (s->modes && (p & (BT_ZL | BT_ZR))) {
+        smm1_se("SE_PageNext1");
+        return EV_MODE;
+    }
     if (p & (BT_LEFT | BT_RIGHT | BT_L | BT_R)) {  // the tab group's cursor (and the shoulder shortcuts)
         int d = s->d + ((p & (BT_RIGHT | BT_R)) ? 1 : -1);
         if (d >= 0 && d < open) {
@@ -231,6 +239,13 @@ int select_step(Select *s, const UiIn *in, const struct hundred_status *st, bool
         return EV_START;
     }
     return EV_NONE;
+}
+bool select_header_hit(Select *s, int x, int y) {
+    float c[2], sz[2];
+    bool v = false;
+    if (!s->modes || s->exit_at >= 0 || !lay_rect(s->title, "T_Title_00", c, sz, &v) || !v) return false;
+    float lx = (float)x - 640, ly = 360 - (float)y;  // layout space: centred, y up
+    return lx >= c[0] - sz[0] / 2 - 120 && lx <= c[0] + sz[0] / 2 + 120 && ly >= c[1] - sz[1] / 2 - 24 && ly <= c[1] + sz[1] / 2 + 24;
 }
 void select_draw(Select *s, LQuads *out) {
     if (s->leaving) lay_draw(s->leaving->l, s->tick, out);
@@ -446,6 +461,7 @@ void intro_started(Intro *s) {
     if (s->phase == P_CARD_HOLD) phase(s, P_CARD_OUT);
 }
 bool intro_full(const Intro *s) { return s->phase < P_CARD_OUT; }
+bool intro_card_up(const Intro *s) { return s->phase >= P_CARD_IN; }
 Lay *intro_map_layout(Intro *s) { return s->map && s->phase < P_CARD_IN ? s->map->l : NULL; }
 int intro_tick(const Intro *s) { return s->tick; }
 

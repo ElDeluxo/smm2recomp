@@ -9,6 +9,7 @@
 
 #include "vk.h"
 #include "../astc.h"
+#include "../bcsoft.h"
 #include "../renderer.h"
 #include "../texpatch.h"
 
@@ -295,10 +296,21 @@ static void create_image(NvnTexture *t, TexBackend *b) {
     VkFormat vf = mf.vf;
     VkFormatFeatureFlags need = VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
     b->astc_bw = b->astc_bh = 0;
-    if (!format_supports(vf, need)) {
+    b->bc_soft = 0;
+    static int force_bc_soft = -1;  // RECOMP_BC_SOFT=1: decode BC on the CPU even where the GPU has it (testing)
+    if (force_bc_soft < 0) force_bc_soft = getenv("RECOMP_BC_SOFT") && atoi(getenv("RECOMP_BC_SOFT"));
+    if (!format_supports(vf, need) || (force_bc_soft && bcsoft_kind(t->format))) {
         bool astc = vf >= VK_FORMAT_ASTC_4x4_UNORM_BLOCK && vf <= VK_FORMAT_ASTC_12x12_SRGB_BLOCK;
         const FormatInfo *fi = t->layout.fmt;
-        if (astc && fi && fi->bpb == 16) {  // desktop GPUs: decoded on the CPU into an RGBA8 image of the same colour space
+        int bck = bcsoft_kind(t->format);
+        if (bck && fi && (fi->bpb == 8 || fi->bpb == 16)) {  // GPUs without BC (most phones): RGBA8 / snorm / RGBA16F
+            uint32_t f = t->format;
+            bool srgb = f == 0x45 || f == 0x46 || f == 0x47 || f == 0x48 || f == 0x4E;
+            b->bc_soft = (uint8_t)bck;
+            vf = bck == BCSOFT_BC6 || bck == BCSOFT_BC6S ? VK_FORMAT_R16G16B16A16_SFLOAT
+               : bck == BCSOFT_BC4S || bck == BCSOFT_BC5S ? VK_FORMAT_R8G8B8A8_SNORM
+               : srgb ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
+        } else if (astc && fi && fi->bpb == 16) {  // desktop GPUs: decoded on the CPU into an RGBA8 image of the same colour space
             b->astc_bw = fi->bw;
             b->astc_bh = fi->bh;
             b->astc_srgb = t->format >= 0x87;
@@ -595,7 +607,7 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
     if (b->tp > 0) b->tp_gen = texpatch_generation();
     b->data_hash = h;
     b->uploaded = true;
-    if (b->format != mf.vf && !b->astc_bw) return;  // unsupported format: nothing sensible to copy
+    if (b->format != mf.vf && !b->astc_bw && !b->bc_soft) return;  // unsupported format: nothing sensible to copy
     VkCommandBuffer cb = vk_upload_cmd();
     uint32_t layers = t->layout.layers ? t->layout.layers : 1;
     if (layers > b->layers && b->depth == 1) layers = b->layers;
@@ -605,6 +617,25 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
     for (uint32_t layer = 0; layer < layers; layer++) {
         for (uint32_t lv = 0; lv < levels; lv++) {
             LevelLayout l = tegra_level(&t->layout, lv);
+            if (b->bc_soft) {  // blocks -> linear block rows -> decoded texels (runtime/nvn/bcsoft.c)
+                const uint8_t *src = (const uint8_t *)(uintptr_t)t->addr + layer * layer_size + l.offset;
+                uint64_t brow = (uint64_t)l.wb * fi->bpb;
+                uint8_t *blocks = malloc(brow * l.hb * l.d);
+                if (linear) for (uint32_t y = 0; y < l.hb; y++) memcpy(blocks + y * brow, src + (uint64_t)y * t->stride, brow);
+                else tegra_deswizzle(src, blocks, l.wb, l.hb, l.d, fi->bpb, l.block_height_log2, l.block_depth_log2);
+                if (b->tp > 0 && layer == 0) texpatch_apply(b->tp - 1, lv, blocks, l.w, l.h, (uint32_t)brow);
+                int ts = bcsoft_texel_size(b->bc_soft);
+                VkSpan s = vk_transient((uint64_t)l.w * l.h * l.d * ts, 16);
+                bcsoft_decode(b->bc_soft, blocks, l.w, l.h, l.d, s.ptr);
+                free(blocks);
+                VkBufferImageCopy rg = {.bufferOffset = s.off, .bufferRowLength = l.w, .bufferImageHeight = l.h,
+                                        .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, lv, b->depth > 1 ? 0 : layer, 1},
+                                        .imageExtent = {l.w < level_w(b, lv) ? l.w : level_w(b, lv), l.h < level_h(b, lv) ? l.h : level_h(b, lv),
+                                                        b->depth > 1 ? l.d : 1}};
+                vk_dl_note_upload((void *)b->image, rg.imageExtent.width, rg.imageExtent.height, rg.imageSubresource.mipLevel);
+                vkCmdCopyBufferToImage(cb, s.buf, b->image, VK_IMAGE_LAYOUT_GENERAL, 1, &rg);
+                continue;
+            }
             if (b->astc_bw) {  // blocks -> linear block rows -> RGBA8 texels
                 const uint8_t *src = (const uint8_t *)(uintptr_t)t->addr + layer * layer_size + l.offset;
                 uint8_t *blocks = malloc((uint64_t)l.wb * l.hb * 16);
@@ -832,6 +863,62 @@ VkImageView vk_view(NvnTexture *t, const NvnTextureView *v, bool has_view, bool 
     if (nlog++ < 30) LOG("[tex] type mismatch: want %d have %d (%ux%ux%u target %u fmt %#x layers %u)\n", want, have, t->width,
                          t->height, t->depth, t->target, t->format, b->layers);
     return vk_dummy_view(want_textype);
+}
+
+// A colour texture sampled with depth comparison (a shadow sampler): Vulkan compares only in depth formats, the Switch
+// compares the red channel of anything. SMM2 binds a 4x4 R32_FLOAT "DepthShadow" where there's no shadow map (and the
+// validation layers flagged it: VUID-vkCmdDrawIndexed-None-06479). Such a 2D texture is sampled through a depth copy
+// (R32_SFLOAT -> D32_SFLOAT, R16_UNORM -> D16_UNORM, level 0), copied image -> buffer -> image in the submission's
+// upload commands, once per submission: what the GPU drew into it earlier in the same submission is a submission late.
+// NULL: not such a texture (the caller keeps its view).
+VkImageView vk_shadow_view(NvnTexture *t) {
+    TexBackend *b = t ? t->backend : NULL;  // (the sampled view made it: vk_view ran vk_tex just before)
+    if (!b || !b->image || (b->aspect & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) || b->samples > 1) return VK_NULL_HANDLE;
+    VkFormat df = b->format == VK_FORMAT_R32_SFLOAT ? VK_FORMAT_D32_SFLOAT : b->format == VK_FORMAT_R16_UNORM ? VK_FORMAT_D16_UNORM
+                                                                                                           : VK_FORMAT_UNDEFINED;
+    if (df == VK_FORMAT_UNDEFINED) return VK_NULL_HANDLE;
+    enum { NSHADOW = 16 };
+    static struct { TexBackend *src; VkImage srcimg; TexBackend d; uint64_t seq; } tab[NSHADOW];
+    static int rr;
+    int k = -1;
+    for (int i = 0; i < NSHADOW; i++)
+        if (tab[i].src == b && tab[i].srcimg == b->image && tab[i].d.width == b->width && tab[i].d.height == b->height) k = i;
+    if (k < 0) {  // a new one (the oldest goes: its last submission may still read it)
+        k = rr++ % NSHADOW;
+        if (tab[k].d.image) vk_defer_image(tab[k].d.image, tab[k].d.mem);
+        memset(&tab[k], 0, sizeof tab[k]);
+        VkImageCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D, .format = df,
+                                .extent = {b->width, b->height, 1}, .mipLevels = 1, .arrayLayers = 1, .samples = VK_SAMPLE_COUNT_1_BIT,
+                                .tiling = VK_IMAGE_TILING_OPTIMAL, .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                                .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED};
+        VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
+        if (vmaCreateImage(g_vk.vma, &ci, &ai, &tab[k].d.image, &tab[k].d.mem, NULL) != VK_SUCCESS) {
+            memset(&tab[k], 0, sizeof tab[k]);
+            return VK_NULL_HANDLE;
+        }
+        tab[k].src = b, tab[k].srcimg = b->image;
+        tab[k].d.format = df, tab[k].d.width = b->width, tab[k].d.height = b->height, tab[k].d.depth = 1;
+        tab[k].d.layers = tab[k].d.levels = tab[k].d.samples = 1;
+        tab[k].d.aspect = VK_IMAGE_ASPECT_DEPTH_BIT, tab[k].d.base_type = VK_IMAGE_VIEW_TYPE_2D;
+        vk_image_init_layout(vk_upload_cmd(), tab[k].d.image, VK_IMAGE_ASPECT_DEPTH_BIT);
+        LOG("[vk] %ux%u colour texture sampled with depth comparison: through a depth copy (format %d -> %d)\n", b->width,
+            b->height, b->format, df);
+    }
+    if (tab[k].seq != vk_pending_seq()) {
+        tab[k].seq = vk_pending_seq();
+        uint32_t bpp = df == VK_FORMAT_D32_SFLOAT ? 4 : 2;
+        VkSpan buf = vk_transient((uint64_t)b->width * b->height * bpp, 16);
+        VkCommandBuffer cb = vk_upload_cmd();
+        VkBufferImageCopy c = {.bufferOffset = buf.off, .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                               .imageExtent = {b->width, b->height, 1}};
+        vkCmdCopyImageToBuffer(cb, b->image, VK_IMAGE_LAYOUT_GENERAL, buf.buf, 1, &c);
+        vk_full_barrier(cb);
+        c.imageSubresource.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+        vkCmdCopyBufferToImage(cb, buf.buf, tab[k].d.image, VK_IMAGE_LAYOUT_GENERAL, 1, &c);
+        vk_full_barrier(cb);
+    }
+    static const VkComponentMapping id = {0};
+    return vk_image_view(&tab[k].d, VK_IMAGE_VIEW_TYPE_2D, df, 0, 1, 0, 1, id, VK_IMAGE_ASPECT_DEPTH_BIT);
 }
 
 // 1x1 black textures for unbound slots, per type

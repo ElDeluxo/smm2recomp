@@ -41,8 +41,8 @@ static float cx(const Control &c, float w, float h) { return c.x < 0 ? w + c.x *
 #if defined(__APPLE__)
 #include <TargetConditionals.h>
 #endif
-#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
-static std::atomic<bool> g_touch_device{true};  // (iOS: touch is the input there is)
+#if (defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE) || defined(__ANDROID__)
+static std::atomic<bool> g_touch_device{true};  // (iOS, Android: touch is the input there is)
 #else
 static std::atomic<bool> g_touch_device{false};  // set by the first finger
 #endif

@@ -1,7 +1,10 @@
-// bsd:u / bsd:s (the system's BSD sockets) for a game's local multiplayer: UDP sockets on the virtual LAN
-// (runtime/net/vlan.h) and nothing else. Without a virtual LAN every socket call fails with ENETDOWN, as on a console
-// without a network; there is no way from here to any real host (never Nintendo's servers): datagrams only go to the
-// relay room. TCP sockets are refused.
+// bsd:u / bsd:s (the system's BSD sockets), three ways:
+//   - a game's local multiplayer: UDP sockets on the virtual LAN (runtime/net/vlan.h) and nothing else; datagrams
+//     only go to the relay room, TCP sockets are refused (this file);
+//   - backend local-nex (runtime/net/netcfg.h): real TCP / UDP host sockets towards local test addresses only
+//     (bsd_host.c);
+//   - otherwise every socket call fails with ENETDOWN, as on a console without a network.
+// There is no way from here to any internet host (never Nintendo's servers).
 //
 // Commands (IClient): 0 RegisterClient, 1 StartMonitoring, 2 Socket, 3 SocketExempt, 5 Select, 6 Poll, 7 Sysctl,
 // 8 Recv, 9 RecvFrom, 10 Send, 11 SendTo, 13 Bind, 14 Connect, 15 GetPeerName, 16 GetSockName, 17 GetSockOpt,
@@ -15,6 +18,7 @@
 
 #include "../hle.h"
 #include "../ipc.h"
+#include "../net/netcfg.h"
 #include "../net/vlan.h"
 
 enum { E_OK = 0, E_BADF = 9, E_AGAIN = 35, E_NOTSOCK = 38, E_PROTONOSUPPORT = 43, E_AFNOSUPPORT = 47,
@@ -101,9 +105,12 @@ static int recv_one(Sock *s, IpcBuf *data, IpcBuf *addr, uint32_t *alen, uint32_
     return (int)n;
 }
 
+void bsd_host_client(IpcReq *req, IpcResp *resp);  // bsd_host.c: real host sockets (backend local-nex)
+
 static void client(Service *svc, IpcReq *req, IpcResp *resp) {
     (void)svc;
     bool lan = vlan_active();
+    if (!lan && net_real_sockets()) { bsd_host_client(req, resp); return; }
     static bool hooked;
     if (lan && !hooked) hooked = true, vlan_set_receiver(deliver);
     int32_t fd = req->data_size >= 4 ? IN(int32_t, 0) : -1;

@@ -32,18 +32,23 @@ void wm_free(WorldMap *m);
 void wm_set_counters(WorldMap *m, int lives, int cleared);
 float wm_dot_frame(const WorldMap *m, int dot);
 
-enum { EV_NONE, EV_EXIT, EV_START, EV_LOCKED, EV_BACK, EV_PLAY, EV_DONE, EV_FETCH, EV_TAB, EV_FOCUS };
+enum { EV_NONE, EV_EXIT, EV_START, EV_LOCKED, EV_BACK, EV_PLAY, EV_DONE, EV_FETCH, EV_TAB, EV_FOCUS, EV_MODE };
 
 typedef struct {
     Lay *title;
     WorldMap *maps[4], *leaving;
     int leave_until, d, focus, tick, exit_at, bgm_track;
-    bool cont;  // this difficulty has a Continue
+    bool cont;   // this difficulty has a Continue
+    bool modes;  // Challenge Modes: the header reads "ZL < 100 Mario Challenge > ZR" and ZL / ZR switch modes
 } Select;
+// the mod (Challenge Modes, mods/hundred.c): SMM2's Endless is the other mode
+bool hundred_modes_available(void);
+void hundred_mode_switch(void);
 Select *select_new(int d, const struct hundred_status *st);
 void select_free(Select *s);
-// EV_START (*resume set), EV_EXIT (after the map's Out), EV_TAB (difficulty changed: s->d), EV_FOCUS
+// EV_START (*resume set), EV_EXIT (after the map's Out), EV_TAB (difficulty changed: s->d), EV_FOCUS, EV_MODE (ZL / ZR)
 int select_step(Select *s, const UiIn *in, const struct hundred_status *st, bool *resume);
+bool select_header_hit(Select *s, int x, int y);  // a tap at game pixels x, y on the mode header
 void select_draw(Select *s, LQuads *out);
 
 enum { ENTRY_NEW, ENTRY_RESUME, ENTRY_AFTER_CLEAR, ENTRY_DIRECT };
@@ -54,6 +59,7 @@ void intro_free(Intro *s);
 void intro_card(Intro *s, const CardInfo *info);  // the course's details as they become known
 void intro_started(Intro *s);                     // the course has started: the card may go (Out)
 bool intro_full(const Intro *s);                  // covers the game (false during the card's Out)
+bool intro_card_up(const Intro *s);               // the card is in (or coming in): the course may start under it
 int intro_step(Intro *s, const UiIn *in);         // EV_DONE when the card's Out has finished
 void intro_draw(Intro *s, LQuads *out);
 Lay *intro_map_layout(Intro *s);  // the map being shown (NULL once the card is up)

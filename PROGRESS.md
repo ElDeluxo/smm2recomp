@@ -92,8 +92,9 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
   translator (conditional rendering, report values, buffer clears, cull-both skip, 3D target slices, first-render
   uploads, storage aliases, cube-array views, in-order uniform updates, compute result flush, blocking compiles, real
   geometry shaders, TLD4 / TMML); player packages recompile the dump on first launch. Evidence in the table;
-  `recomp/private/smm2/evidence/linux/` (private). Left: Mario's model on Vulkan; Windows and x64 untested
+  `recomp/private/smm2/evidence/linux/` (private). Mario's model on the 3D World title (2026-10-19): his composite drew nothing (vertex data 2.6 GB into the heap, past lavapipe's 2 GB allocation limit: now copied there) and his depth mask was not written on lavapipe (a lavapipe-only workaround splits such draws into submissions); he is in the scene now, but a few NaN texels at his eyes bloom into a white blur in the final frame (open). Shadow samplers on a colour texture now go through a depth copy (validation clean apart from the 3.2 GB global-memory binding, see `recomp/docs/smm2-bringup.md`). Left: that NaN; Windows and x64 untested
 - 🔄 iOS / iPadOS (2026-10-19): `make -C recomp TARGET=ios-arm64 | iossim-arm64 GAME=smm2 app` (AOT: the game code is compiled on the Mac and linked into the app; no JIT, no game code library); Documents holds the game files and the log; touches are the console touch screen (macOS: the left mouse button), controllers through SDL; BC textures decoded on the CPU where the GPU lacks them. Evidence: the Simulator boots to the title; an iPad Pro 13 M5 (iOS 27.0, installed over Tailscale, App ID with extended virtual addressing + increased memory limit: `recomp/tools/ios_profile.sh`) boots through the intro to the title screen and its menu at a steady 60 fps (MetalFX to 2752x2064, the 3.25 GB heap buffer taken whole), no faults (`recomp/private/smm2/evidence/ios/`, private: screenshots, boot log, the address-space log below). The guest window stays at 0x7000000000 on iOS: with the entitlement iOS 27 gives an app up to 0x8000000000 and keeps 0x2ee000000-0x7000000000 itself (measured; `GUEST_ORIGIN` moves it where that differs). On-screen controller for touch-only devices (stick, ABXY, L/R/ZL/ZR, +/-, menu, hide), other touches stay the touch screen. Left: play a course on the device; the on-screen controller is drawn but not yet tried by hand
+- 🔄 Android (2026-10-19, emulator only: the owner has no Android device): `make -C recomp TARGET=android-arm64 GAME=smm2 apk install push-data` (AOT as on iOS: the game code is compiled on the Mac and shipped in the APK as `libsmm2game.so`; SDL's Java activity, no Gradle; deps from source: `tools/android_deps.sh`); game files in the app's external files folder (adb), log there and in logcat, `recomp.env` for environment variables; Vulkan backend with an RGBA swapchain fallback, compositor rotation, surface recreation after the home screen, CPU BC decoding; on-screen controller and touch screen, Back = overlay menu. Guest window at 0x800000000 (DECISIONS.md "Android"): [obs] the emulator's kernel has a 39-bit address space, and on one of its boots 742 mappings (6.4 GB) sat in the desktop window 0x7000000000-0x7320000000. Fixed on the way for every Vulkan target: the translator's GLSL `fmin` / `fmax` helpers (renamed: they broke MoltenVK's SPIR-V -> MSL), a settings-load crash on a saved `smm2.ini`. Evidence (`recomp/private/smm2/evidence/android/`, private: screenshots `emulator_title_3.png`, `emulator_stick_walk.png`, `emulator_a_jump.png`, `emulator_course_walk2.png`, `emulator_back_menu.png`, `emulator_resumed.png`, boot logs): intro, full title screen, the title course played by touch. Left: a physical device (install path untested); a course from the menus; fps on real hardware
 - ✅ R2 (macOS): plays courses by input injection, and input replays stay in sync with Ryujinx frame for frame
   (2026-10-19). The game now gets input (`nn::hid::GetNpadStates` answered by the runtime; before, it saw none,
   keyboard included); `RECOMP_PAD_SCRIPT` plays the Ryujinx trace tooling's scripts on the game's own clock (one frame
@@ -141,28 +142,43 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
       award worth several lives found in a test course (the cap is untested in play)
     - 🔄 SMM1 screens and the ending, host-drawn (`games/smm2/mods/smm1/`: SMCraft's SMM1 layout player
       ported to C, a CPU rasterizer drawn through the overlay on Metal and Vulkan; everything from the
-      player's SMM1 dump, generated into `mods-generated/smm1-ui-v4/`):
+      player's SMM1 dump, generated into `mods-generated/smm1-ui-v6/`):
       - ✅ difficulty select (tabs by unlock, Continue only with a record, OutR/OutL slides), world map
         demos as Block.rpx plays them (MapIn, Telop, the Goombas carrying Peach, AnimB, Mario's jump /
         walk / Go, the castle at the end, lives and n/total counters, A skips to Go), the start card (one
-        little Mario per life, AnimA/AnimB by case, held until the course starts, Out over it), pause,
-        clear, hold-to-skip countdown, the card after a miss, game over
+        little Mario per life, AnimA/AnimB by case, held until the course plays, Out over it; "Loading
+        courses..." while the server gathers them); between courses SMM2's own screens (course-in, pause,
+        skip, retry, clear and its Next / Like / Boo result), then SMM1's map and card after each clear
+        (`HUNDRED_NEXT` from the run side)
       - ✅ the ending from the binary: the rescue scene in the cleared course's style (SMB1, SMB3, SMW
         sprites; NSMBU's 3-D Mario posed with its walk), Peach (Toad on Easy), the Thank-you line by
-        difficulty, credits `Nwk_StaffCredit_01/00/03` with each course and maker, TO BE CONTINUED... /
-        END / THE END; nothing skips (as SMM1); a hook for the Mystery Mushroom reward
+        difficulty, the credits roll on SMM1's timing (`Nwk_StaffCredit_01/00/03`) with each cleared course
+        as SMM2's own course card (`Play_CourseIn_00` from the game's romfs: name banner, maker underneath,
+        no Mii), TO BE CONTINUED... / END / THE END; nothing skips (as SMM1); a hook for the Mystery
+        Mushroom reward
+      - ✅ checked against SMM1 itself in Cemu (owner's dump, private captures in
+        `evidence/cemu/`): colours composed in linear light into an sRGB frame as SMM1 does, font border
+        and shadow parameters, the balloon's place and dot pattern, the styles' skies, NSMBU Mario's yaw,
+        skinning, depth and lighting; NSMBU's 3-D sky is an approximation (fixed picture) [inf]
       - ✅ SMM1's music and sounds (Course World stream per difficulty with the beat bounce, the map
-        streams, the ending and staff-roll music, the screens' sound banks), the game's sound faded under
+        streams, the ending and staff-roll music incl. SMW's Toad tune, the screens' sound banks), the game's sound faded under
       - ✅ a whole Super Expert run against the local server, unattended: select → map → card → course →
         clear … (skips, misses) → the ending with the run's courses and makers in the credits → back on
         the select (`RECOMP_HUNDRED_AUTO`, `RECOMP_HUNDRED_SHOTS`; evidence in
         `recomp/private/smm2/evidence/e2e5_sx/`, private); pause, Save & Quit and Continue through the run side
-      - ⬜ a New Game straight after an ending (SMM2 isn't back on its Endless menu after a win: run side),
-        per-frame sound triggers (SLink database not decoded: sounds are placed by name [inf]), the
-        NSMBU ending's perspective camera, Cemu side-by-side (no Cemu installed)
+      - ✅ Challenge Modes: with the mod's modes on, the select's header reads "ZL < 100 Mario Challenge
+        > ZR" and ZL / ZR or a tap on it switch to SMM2's Endless (`hundred_mode_switch`); the run side
+        asks `hundred_flow_ready_to_start` before starting a course (true once the card is up); touches
+        don't reach the game under a full host screen
+      - ⬜ per-frame sound triggers (SLink database not decoded: sounds are placed by name [inf]), the
+        NSMBU ending's perspective camera; 🔄 Cemu side-by-sides (Cemu runs the owner's SMM1 here, frames
+        captured; reaching the ending scene in progress)
   - 🔄 **Settings, one toggle per SMM1 feature** (overlay menu's Mods tab, kept in `smm2mods.ini`):
-    ✅ "100 Mario Challenge (SMM1)" (on screen in the Mods tab: `evidence/mods/mods_tab.png`); ⬜ Mystery Mushroom costumes (model, sounds, physics
-    swaps), mid-air shell jumps, overlapping (overlay) pipes, and more from research/specs/smm1-extras*
+    ✅ "100 Mario Challenge (SMM1)" (on screen in the Mods tab: `evidence/mods/mods_tab.png`); 🔄 "Mystery Mushroom costumes" (`mods/costume.c`: models generated from both dumps, worn as small
+    Mario in SMB1 courses; in game: the costume on from the start (Peach, Samus), the pickup (Super Mushroom
+    → Block costume, its power-up sound), the goal and death sounds, the reward window after the ending;
+    ⬜ a hit taking it off (hook in place, not yet seen in a run), jump / taunt sounds, more than one costume per
+    course), mid-air shell jumps, overlapping (overlay) pipes, and more from research/specs/smm1-extras*
   - 🔄 **Our open-source server everywhere the game would reach Nintendo** (`recomp/docs/mods.md`,
     `games/smm2/mods/world.c`): ✅ Course World's course lists (Hot, Popular, New, detailed search, a
     maker's courses) from `/api/courses`, the course page (likes, plays, clear rate, world record, maker
@@ -175,14 +191,32 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     ✅ courses=tgrcode setting (built-in server, awaiting core/crates/embed);
     ⬜ online multiplayer: plan in `DECISIONS.md` (local play over our relay first, Network Play at
     the enl layer second)
+  - 🔄 **The game's own network stack** (groundwork for Nextendo Network and a local NEX server, offline:
+    `recomp/docs/mods.md` "The game's own network stack"): ✅ real TCP / UDP sockets (`bsd:u`), nsd + sfdnsres
+    from a deny-by-default redirect table, `ssl` on Mbed TLS with the runtime's trust policy, a local account and
+    JWT ID token, `backend=` setting (ours / local-nex / nextendo greyed out), `tools/nex_test_server`;
+    ✅ **Proof 1**: with `backend=local-nex` the game resolves its NEX host to the test server, opens TLS, upgrades
+    the WebSocket and sends its NEX login (`ValidateAndRequestTicketWithParam`, decoded, token checked; evidence
+    in `/Volumes/SSD/smm-work/recomp-net/evidence/proof1/`, private); ✅ default backend unchanged (no sockets,
+    no lookups); ✅ **Proof 2**: `tools/nex_test_server` answers the ticket, the secure connection, Register,
+    GetIntegerSettings and SMM2's DataStore login calls (GetUsers, GetUserNameNgType, SyncUserProfile,
+    GetMiiClothes, GetNewNotification), and Course World's top screen opens through the game's **own** NEX client,
+    no mod override involved (`evidence/proof2/`, private); ✅ UDP port parking for PIA; ⬜ course lists, downloads
+    and the rest of DataStore on the local NEX server; ⬜ Nextendo (owner's go-ahead, app registration, sign-in)
+
+- ⬜ **Releases (melee-pc style, owner-approved)**: per-platform launcher + recompiler, no game code;
+  dump picker with v3.0.3 hash check, the player's prod.keys, extraction, first-launch recompile with
+  bundled zig, optional SMM1 dump, update check. Windows / Linux / macOS first, then Android / iOS
+  build-it-yourself (iOS via a desktop build-sign-install helper). GitHub Actions on release only.
 
 | Platform | Builds | Boots to title | Plays courses | Frames match Ryujinx | Input replays in sync |
 |---|---|---|---|---|---|
 | macOS (Apple Silicon, Metal) | ✅ | ✅ title rendered, 60 fps | ✅ title course to the goal, Course Maker test play | 🔄 in course: 71 / 90 courses bit-identical (all SMB1/SMB3/SMW), the rest within 20 px except 3D World lava 2.28 % px >24 (title: 2.5-4.8 %) | ✅ 221,189 / 221,189 updates identical (31 sessions) |
 | Windows (x64, Vulkan) | ✅ cross-built with zig: exe 2.4 MB + game DLL 186 MB, needs SDL3.dll, libiconv-2.dll, libshaderc_shared.dll, vulkan-1.dll (driver); player zip 85 MB | ⬜ not run (no Windows machine) | ⬜ | ⬜ | ⬜ |
-| Linux arm64 (Vulkan) | ✅ cross-built with zig: exe 11.9 MB + game .so 688 MB, needs libSDL3.so.0, libvulkan.so.1, libshaderc.so.1, glibc 2.36; player zip 71 MB | ✅ title rendered (Debian 13 VM, Mesa lavapipe, ~7 fps); package first launch recompiled the game code from the dump (29 min) and booted | ⬜ | 🔄 seed 4 frame 2386 vs macOS same frame: 0.6 % px >24, 0.17 % >96 (Mario model missing on Vulkan); colour-managed vs Ryujinx 2.99 % >24, 0.24 % >96 (macOS 2.35 / 0.11) | ⬜ |
+| Linux arm64 (Vulkan) | ✅ cross-built with zig: exe 11.9 MB + game .so 688 MB, needs libSDL3.so.0, libvulkan.so.1, libshaderc.so.1, glibc 2.36; player zip 71 MB | ✅ title rendered (Debian 13 VM, Mesa lavapipe, ~7 fps); package first launch recompiled the game code from the dump (29 min) and booted | ⬜ | 🔄 seed 4 frame 2386 vs macOS same frame: 0.6 % px >24, 0.17 % >96 (before: Mario model missing on Vulkan; now in the scene, with a bloom blur at his eyes); colour-managed vs Ryujinx 2.99 % >24, 0.24 % >96 (macOS 2.35 / 0.11) | ⬜ |
 | Linux x64 (Vulkan) | ✅ cross-built with zig: exe 11.3 MB + game .so 856 MB (generated/smm2-c, x86-64-v3), same libraries; player zip 74 MB | ⬜ not run | ⬜ | ⬜ | ⬜ |
 | iOS / iPadOS (arm64, Metal, AOT) | ✅ game code built on the Mac from the dump and linked into the app (exe 141 MB; SDL3 static); device app signed with an App ID carrying extended virtual addressing + increased memory limit (`tools/ios_profile.sh`) | ✅ device: iPad Pro 13 M5 (iOS 27.0) through the intro to the title screen and menu, steady 60 fps, no faults; Simulator (iPad Pro 13 M4): title at 60 fps, lighting wrong there (the Simulator's Metal limits: 32-byte colour targets, no cube arrays) | ⬜ on-screen controller drawn, not yet tried by hand | ⬜ | ⬜ |
+| Android (arm64, Vulkan, AOT) | ✅ cross-built on macOS with the NDK (r29) for the emulator's arm64 image: game code built from the dump into `libsmm2game.so` (143 MB) + runtime `libmain.so` (14 MB stripped), APK 160 MB without Gradle (`make TARGET=android-arm64 apk`); guest window at 0x800000000 | ✅ Android Emulator only (API 35 arm64, gfxstream over MoltenVK): intro at 13-60 fps, full title screen with its course at 5-9 fps (Mac shared with other jobs); survives home screen and back; device install untested (no device) | 🔄 the title course played with the on-screen controller (stick walks Mario into the Koopa Car, A jumps), 5-9 fps; no menu course yet | ⬜ | ⬜ |
 | Web (wasm + WebGPU) | ⬜ feasibility decided after the native ports | | | | |
 
 ---

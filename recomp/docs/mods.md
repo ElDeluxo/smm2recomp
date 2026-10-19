@@ -129,8 +129,19 @@ confirm window's Yes, the map's Play, skip, back) through the test-input hook wh
 flow. The course's outcome comes back through the game's own requests (course start,
 miss, clear, skip). After a skip SMM2's Endless starts the next course at once; after a miss it retries by itself.
 
-The win: the Nth clear's answer has `run_complete`; the flow plays SMM1's ending (`hundred_ending_show`) and calls
-`hundred_run_finish()`, which finishes the run on the server (the completion is on its `hundred_<d>` board already).
+**The clear is SMM2's own:** goal, fanfare and the result screen (Boo / I like it! / Quit / Next) belong to the
+player; the run side presses nothing there. `HUNDRED_CLEAR` comes at the goal (the flow shows nothing for it);
+`HUNDRED_NEXT` when the player leaves the result screen with Next, `HUNDRED_GIVEUP_SAVE` with Quit (the run is kept,
+SMM2 goes back to its menu). The course-end machine (registered at main+0x1bed050) tells them apart: its
+cPostRatingCheckCan exec (main+0x1bef440) reads the screen's choice (+0x2a0: 5 Next, 6 / 7 the ratings, 8 Quit,
+9 comment, 10 tags) and goes to cNextScene (0x4b, enter main+0x1bf6430) for Next and, in the Endless Challenge, to
+cEndlessMode_GetStatus (0x4d, enter main+0x1bf6630) for Quit; the run side hooks the two enters. A miss, the skip
+and SMM2's pause are SMM2's own too (the flow draws nothing for them); at 0 lives the flow calls
+`hundred_run_finish()`, SMM2's game over shows, and its return to the Endless menu opens the flow's select again.
+
+The win: the Nth clear's answer has `run_complete`; on its Next the flow plays SMM1's ending (`hundred_ending_show`)
+and calls `hundred_run_finish()`, which finishes the run on the server (the completion is on its `hundred_<d>` board
+already).
 
 The flow is `games/smm2/mods/smm1/` (strong `hundred_flow_*`, `hundred_course_result`, the ending); it keeps weak
 stand-ins of the run side's functions, which `bridge.c` / `endless.c` replace. `hundred_run_status()` returns a
@@ -143,19 +154,35 @@ the run. `RECOMP_MOD_AUTOPLAY=1` (or `=jump`) plays the courses (right + run [+ 
 scripts the way to the Endless menu. `RECOMP_MOD_UNLOCK_ALL=1` opens every difficulty; `RECOMP_MOD_TRACE=1` logs
 Course World's states and every request the mod doesn't answer.
 
-**Both challenges.** With 100 Mario offered, B on SMM1's difficulty select (`hundred_flow_exit()`) leaves the player
-on SMM2's own Endless menu, which was underneath: runs there use SMM2's rules (5 lives, the start lives are switched
-in the game's run records) until the menu closes towards Course World (its Disappear state, main+0x1a24d30); the
-next visit opens 100 Mario again. **After a win** the run side presses Quit on SMM2's last result screen and answers
-the suspend locally, so SMM2 is back on its Endless menu for the next run; `hundred_run_start()` waits until it is.
+**Challenge Modes** (owner, 2026-10-19). With 100 Mario offered, Course World's Endless Challenge button reads
+"Challenge Modes" and opens the mode used last (`challenge_mode=` in smm2mods.ini): SMM1's 100 Mario Challenge or
+SMM2's own Endless Challenge, which runs under SMM2's rules (5 lives: the start lives are switched in the game's run
+records) and SMM2's screens. ZL / ZR or a tap on the header switch: on SMM2's menu its header reads
+"ZL < Endless Challenge > ZR" and the run side opens the flow; on the flow's select the flow draws
+"ZL ◀ 100 Mario Challenge ▶ ZR" and calls `hundred_mode_switch()`. L / R stay the difficulty, B stays back
+(`hundred_flow_exit()`: the run side presses B on SMM2's menu underneath, back to Course World). **After a win**
+the last result screen's Next is turned into its Quit (cPostRatingCheckCan exec, the screen's choice 5 -> 8) while the
+flow plays the ending, so SMM2 goes back to its Endless menu for the next run; `hundred_run_start()` waits until it
+is. **Course start:** a course SMM2 loads underneath the flow's map waits at its first play frame until
+`hundred_flow_ready_to_start()` (the card is up).
+
+**The RomFS overlay** (`romfs_overlay.{h,c}`): the mods' generated game files (the Challenge Modes texts,
+`relabel.c`; costumes; layout edits) come from the player's own dump at the first launch that needs them, into
+`<data>/mods-generated/romfs/` (private), and replace the game's files (`game_romfs_overlay()`). A feature registers
+`ROV_GENERATOR(name, version, fn)`; the folder is generated again when the set of names and versions changes.
+Helpers: files (`rov_read`, `rov_write`), SARC with or without Yaz0 (`rov_sarc_*`), MSBT texts (`rov_msbt_set`),
+BFLYT sections (`rov_flyt_*`).
 **Loading:** a course list may take long (TGRCode upstream: about a minute for a difficulty's first batch); the
 request waits up to 3 minutes and `hundred_run_status().loading` is set meanwhile.
 
-**Pause.** During a run course SMM2's pause state (`cPausePlay`, state 3 of the Endless play scene's machine; its exec
-is the scene's virtual at vtable+0x390, main+0x1bba050) is held without opening its menu: the play stays frozen and
-the flow gets `hundred_flow_pause()`. `hundred_play_resume()` leaves it as the menu's close does (state 1),
-`hundred_play_retry()` as Start Over (state 0x13, a life, posted as `start_over`), `hundred_run_save_quit()` as the
-confirm window's Yes (state 0x12, the suspend). **Continue:** the run record's state byte (+4 = 1) makes the menu
+**Pause.** SMM2's own pause opens in a run course (Start Over costs a life, posted as `start_over`; its Save & Quit
+suspends the run and the menu's return sends `HUNDRED_GIVEUP_SAVE`). `RECOMP_MOD_SMM1_PAUSE=1` brings back the
+earlier interception for the flow's own pause: SMM2's pause state (`cPausePlay`, state 3 of the Endless play scene's
+machine; its exec is the scene's virtual at vtable+0x390, main+0x1bba050) is held without opening its menu and the
+flow gets `hundred_flow_pause()`; `hundred_play_resume()` leaves it as the menu's close does (state 1),
+`hundred_play_retry()` as Start Over (state 0x13), `hundred_run_save_quit()` as the confirm window's Yes (state
+0x12, the suspend). **Next course data:** when a course starts, the one after it is downloaded in the background
+(`/next?count=2`, its `/data`), so the next course-in doesn't wait on the server. **Continue:** the run record's state byte (+4 = 1) makes the menu
 offer Continue (and show the run on its map); `hundred_run_start(d, true)` presses it. **Course on screen:**
 `hundred_flow_course_started()` comes on the first frame of the play scene's play state (state 1, vtable+0x350,
 main+0x1bb9440) after a course start or a retry. **Next course:** the head of the server's queue is read after New
@@ -163,8 +190,12 @@ Game, each clear / skip and on Continue, so `hundred_run_status().current` names
 asks. `form` is player 0's form at the goal (+0x4a8, small / big from the size class table main+0x23d5e0c).
 
 Flow test extras: `RECOMP_MOD_FLOW_TEST_CONTINUE=1` (Continue instead of New Game), `RECOMP_MOD_FLOW_TEST_PAUSE=<letters>`
-(pause 8 s into a course and answer r resume, o Start Over, q Save & Quit), `RECOMP_MOD_SHOTS=<name>` (window shots
-at the run's moments into `build/<name>_<n>_<what>.png`).
+(pause 8 s into a course and answer r resume, o Start Over, q Save & Quit; with `RECOMP_MOD_SMM1_PAUSE=1`),
+`RECOMP_MOD_FLOW_TEST_QUIT_AFTER_CLEAR=<n>` (Quit, tapped, on the first n result screens),
+`RECOMP_MOD_FLOW_TEST_RESULT_KEYS=<letters>` (keys, stick moves or a tap on the result screen first; see
+`result_keys` in `bridge.c`), `RECOMP_MOD_SHOTS=<name>` (window shots at the run's moments into
+`build/<name>_<n>_<what>.png`). On the result screen the D-pad and the stick don't move the focus off Next in the
+port yet [obs]; touch reaches every button.
 
 ### Test recipe (end to end, unattended)
 
@@ -211,7 +242,8 @@ every difficulty draws from all of them.
   (it calls `hundred_run_start()`, `hundred_play_next()` ...). `RECOMP_MOD_FLOW_TEST=<0..3>` instead plays the run
   without the flow (the stand-in in `bridge.c`).
 - `RECOMP_MOD_AUTOPLAY=jump` plays each course (right + run + jump) and skips it with the test input after
-  `RECOMP_MOD_AUTOPLAY_SKIP` seconds; the result screen's Next is pressed by the run side after a clear.
+  `RECOMP_MOD_AUTOPLAY_SKIP` seconds; under `RECOMP_MOD_FLOW_TEST` the test presses the result screen's Next
+  after a clear (a real player's run side presses nothing there).
   `RECOMP_MOD_UNLOCK_ALL=1` opens Expert and Super Expert without winning the runs before.
 - A Super Expert run (6 clears) takes about 6-12 minutes of game time; Easy (8) about 10. Expected log lines
   (`grep '\[mod\]' run.log`): `New Game: super_expert, hundred rules, 100 lives`, `course start <code>`,
@@ -225,3 +257,100 @@ every difficulty draws from all of them.
 - The Maker avatar is the console's default Mii with your account's name (creating one needs the Mii editor applet,
   which the runtime doesn't have).
 - No SMM2 Mii-costume rewards (the server sends no notifications).
+
+## The game's own network stack (backend local-nex): groundwork for Nextendo and a local NEX server
+
+The mod above *fakes* being online: nifm / acc / friends / mii answer locally, the enl session logs in without NEX,
+and the game's request functions are answered from our HTTP server. The runtime also has a **real network stack**
+for the game's own NEX client, so that SMM2's NEX code can one day talk to a community server (Nextendo Network)
+or our own NEX server. For now it is **offline: local test server only**. Nothing reaches Nextendo's servers until
+the owner has their permission and an app registration, and nothing ever reaches Nintendo's.
+
+### Backends
+
+| `backend=` (smm2mods.ini) / `RECOMP_NET_BACKEND` | What runs |
+|---|---|
+| `ours` (default) | the mod path above; the game's sockets stay off (only the virtual LAN), every name lookup fails |
+| `local-nex` | the mod's online overrides switch **off** (`mod_hundred()` is false), so the game's own enl / NEX code runs on real host sockets against a local NEX test server |
+| `nextendo` | refused (logged: awaiting registration); the backend stays `ours` |
+
+In the Mods tab: "Online: local NEX test server (developers)" (the next start). For the coming app-level settings
+page, `net_backend_options()` / `net_backend_select()` (`runtime/net/netcfg.h`) list the three with Nextendo greyed
+out ("awaiting registration").
+
+### Settings (all in smm2mods.ini, or the environment)
+
+| ini key | Variable | Meaning |
+|---|---|---|
+| `backend=` | `RECOMP_NET_BACKEND` | above |
+| `nex_test_server=` | `RECOMP_NET_TEST_SERVER` | `ip[:port]` of the test server (default `127.0.0.1:44300`); local addresses only (loopback, private, link-local, 100.64/10). The game's TCP connections to it on 443 go to that port |
+| `net_hosts=` | `RECOMP_NET_HOSTS` | extra redirect entries, `name=ip;*.domain=ip` (local addresses only) |
+| `tls_trust=` | `RECOMP_NET_TLS_TRUST` | `local-ca` (default): the server must present a certificate from the local test CA (`net/test-ca.pem`); `any`: any certificate, only towards local addresses |
+| `tls_ca=` | `RECOMP_NET_TLS_CA` | another CA file |
+| `id_token_file=` | `RECOMP_NET_ID_TOKEN_FILE` | a backend-issued ID token to send instead of the local one |
+| `nex_token_file=` | `RECOMP_NET_NEX_TOKEN_FILE` | a backend's NEX login token (Nextendo's `nx2.` token), carried in the local ID token's `nnex` claim; a secret: never logged |
+| `net_log=1` | `RECOMP_NET_LOG=1` | log every socket, name, TLS and token call (TLS plaintext: the first 160 bytes of each read / write) |
+
+### Pieces
+
+| Piece | Where | What |
+|---|---|---|
+| Configuration | `runtime/net/netcfg.c` | backend, **deny-by-default redirect table** (with `local-nex`: `*.nintendo.net`, `*.nintendo.com`, `*.nintendowifi.net`, `*.nintendo.co.jp`, `*.nintendoswitch.cn` → the test server; every other name: no such name), destination policy (a game socket reaches loopback and the table's targets only), TLS trust |
+| Sockets | `runtime/services/bsd_host.c` (bsd.c dispatches) | `bsd:u` / `bsd:s` on host sockets (POSIX and Winsock, `runtime/net/hostsock.h`): TCP and UDP, non-blocking I/O, poll / select, socket options, accept / listen, FreeBSD errno numbers. Blocking calls wait in 50 ms slices with the guest thread's core released (`kernel_host_wait_begin`). A UDP port the game binds that is taken on the host gets another host port, and the game keeps seeing its own, the same pair again on a rebind (two instances on one machine). A UDP socket the game bound and closes is **parked** for 10 s and handed back when the game binds that port again (PIA closes and rebinds after its NAT check; the NAT mapping must survive). Connects / sends elsewhere: `ENETUNREACH`, logged. The virtual LAN keeps its own path |
+| Names | `runtime/services/names.c` | `nsd:u` / `nsd:a` (`%` → `lp1`: the game asks for `g22306d00-%.s.n.srv.nintendo.net`) and `sfdnsres` (GetAddrInfo(WithOptions), GetHostByName(WithOptions)) from the redirect table only; the host's DNS is never asked |
+| TLS | `runtime/services/ssl.c` + `third_party/mbedtls` (3.6.7 LTS, Apache-2.0) | `ssl`: contexts, connections over the game's socket, handshake (TLS 1.2), read / write / peek / pending / poll, ALPN (http/1.1 only), server certificate out. The **runtime's** trust policy decides (the game's own CAs and client certificates are ignored); when the game names an address as the host, the name last resolved to it is used for SNI and the check ("rebuilt") |
+| Account | `runtime/net/token.c`, `services/acc.c` | a local network service account ID (`GetAccountId`; the game logs in with it as its NEX user name) and an ID token: a JWT (HS256, `kid` `recomp-local`, claims shaped like a network service account's plus `tv` = the game version and, with `nex_token_file=`, `nnex`) signed with a local key, both kept in `net/account.txt` in the data folder (private). `id_token_file=` plugs a whole backend-issued token in instead |
+| Test server | `tools/nex_test_server/` (Python, standard library + the `openssl` command) | a local NEX server: TLS on a local address, the HTTP/1.1 WebSocket upgrade, PRUDP Lite (SYN, CONNECT, acks, pings, fragments, resends), RMC, the Kerberos-style ticket (RC4 + HMAC-MD5), the secure server on PRUDP port 2, and enough of SMM2's DataStore for Course World's login (table below). Every request is logged and decoded where known; the token's signature is checked with `net/account.txt` and masked in the log. Makes the local test CA and its certificate in `recomp/private/smm2/net/` on first run (git-ignored; the proprietary guard blocks keys and certificates) |
+
+### What the game does [obs, v3.0.3, backend local-nex]
+
+When the enl session logs in, the game: loads the ID token (acc), asks nsd to resolve
+`g22306d00-%.s.n.srv.nintendo.net` (→ `-lp1`), resolves it with getaddrinfo, then gethostbyname, opens a TCP
+socket (SO_NOSIGPIPE), connects to port 443, makes an ssl context (version 1) and a connection (option
+DoNotCloseSocket on, verify option 0x3, host name set), does the handshake, sends
+`GET / HTTP/1.1` with `Upgrade: websocket`, `Sec-WebSocket-Key: NEX`, `Sec-WebSocket-Protocol: NEX`, and then
+PRUDP Lite in binary frames: SYN (stream RVSecure, port 31 → 1, supported functions 6), CONNECT (with a lite
+connection signature), DATA: RMC `Authentication.ValidateAndRequestTicketWithParam` {platform 3, user name = the
+account ID in decimal, `AuthenticationInfo` {the ID token, NGS version 4, token type 2, server version 0}, NEX
+version 40605, client version 60}. Given a ticket and the station URL `prudps:/address=0.0.0.1;port=1;...;sid=2`
+("the same server"), it opens PRUDP port 30 → 2 **on the same WebSocket**, sends the ticket in its CONNECT, then
+calls, in this order and all at boot (about frame 280, long before Course World opens):
+
+| Request | The test server's answer |
+|---|---|
+| SecureConnection.Register (its station URL `prudp:/address=127.0.0.1;port=1;Pl=3;Tpt=2;...;sid=30`) | success, connection id, the URL back |
+| Utility.GetIntegerSettings(0) | an empty map |
+| DataStore.GetUsers (48) {own PID, option 0xe284} | one UserInfo (revision 3): the PID, a maker code, the name, a default Mii (CharInfo, the same as `services/mii.c`'s), country US. An empty list sends Course World to "Create Maker Avatar" (which needs the console's Mii editor) |
+| DataStore.GetUserNameNgType (65) | 0 (the name is fine) |
+| DataStore.SyncUserProfile (49) {name, Mii (the console's CharInfo), region, country ...} | the profile back |
+| DataStore.GetMiiClothes (63) | none |
+| DataStore.GetNewNotification (125) | four zero bytes [inf: the request function reads one 4-byte field] (an error here crashed the game's network worker later: "Pure virtual function called") |
+
+[obs] The Mii in a UserInfo is the 0x58-byte `nn::mii::CharInfo`: the GetUsers converter (main+0x14d0a60) copies
+the buffer into the user entry as it is.
+
+**Proof 2** (2026-10-19): with these answers Course World's top screen opens through the game's **own** NEX client
+(Courses, Leaderboards, Network Play, Endless Challenge, Ninji Speedruns, the Maker card with the Mii); no mod
+override ran (no `[mod]` line). Evidence (private): `/Volumes/SSD/smm-work/recomp-net/evidence/proof2/`. Course
+lists, course downloads and the rest of DataStore are not answered yet (they log and get Core::NotImplemented).
+
+### Try it
+
+    python3 -m tools.nex_test_server --log /tmp/nex.log        # from the repository root; listens on 127.0.0.1:44300
+    cd recomp/private/smm2 && RECOMP_NET_BACKEND=local-nex RECOMP_NET_LOG=1 ../../build/smm2/smm2recomp extracted
+
+The server logs the game's TLS connection, the upgrade, the PRUDP handshakes, the decoded login (the token's
+signature masked) and every request; then go to Course World: its top screen opens.
+
+### Before a real Nextendo connection (research/specs/recomp-nextendo.md)
+
+- the owner's go-ahead: Nextendo's permission and **an app registration** (a client ID for the recomp; their
+  developer portal is team-only, and their first-party client ID must not be used);
+- **app-level sign-in**: OAuth 2.0 with PKCE (loopback redirect on desktop, `ASWebAuthenticationSession` on iOS),
+  then their NEX token each launch (24 h); it goes into the ID token's `nnex` claim (`nex_token_file=` today);
+  `GetAccountId` must return their PID (today: the local account's ID);
+- **trust and addresses**: their CA pinned (a third `tls_trust` mode) and redirect entries to their public
+  addresses, both behind an explicit setting (today every redirect target must be a local address and nothing
+  else is reachable); UDP to arbitrary peers for PIA (today: refused);
+- the rest is the game's own code: NAT check (`nncs1/2`), MatchmakeExtension, PIA peer-to-peer; their gates (a
+  verified e-mail, one device at a time) show as login errors.

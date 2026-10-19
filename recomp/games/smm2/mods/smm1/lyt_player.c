@@ -54,8 +54,8 @@ typedef struct {
     float frame;
 } Bound;
 typedef struct {
-    bool has_t;
-    float t[2];
+    bool has_t, has_s;
+    float t[2], s[2];
     float alpha;  // < 0: none
 } Ovr;
 
@@ -258,6 +258,17 @@ bool lyt_set_pane(LInst *in, const char *path, const float *xy, float alpha) {
     return true;
 }
 
+bool lyt_set_pane_scale(LInst *in, const char *path, const float *s) {
+    const char *name;
+    LInst *p = resolve(in, path, &name);
+    if (!p) return false;
+    int i = lyt_pane_index(p->res, name);
+    if (i < 0) return false;
+    p->ovr[i].has_s = s != NULL;
+    if (s) p->ovr[i].s[0] = s[0], p->ovr[i].s[1] = s[1];
+    return true;
+}
+
 // ---------------------------------------------------------------- evaluation
 static void base_mats(const LRes *r, MS *ms) {
     for (int m = 0; m < r->nmat; m++) {
@@ -341,6 +352,7 @@ static void states(const LInst *in, PS *ps, MS *ms) {
     }
     for (int i = 0; i < r->npane; i++) {
         if (in->ovr[i].has_t) ps[i].t[0] = in->ovr[i].t[0], ps[i].t[1] = in->ovr[i].t[1];
+        if (in->ovr[i].has_s) ps[i].s[0] = in->ovr[i].s[0], ps[i].s[1] = in->ovr[i].s[1];
         if (in->ovr[i].alpha >= 0) ps[i].alpha = in->ovr[i].alpha;
     }
 }
@@ -508,6 +520,13 @@ static void mat_uvs(const Ctx *c, const LMat *m, const MS *ms, int map, int nset
         float tx = p ? p->t[0] : 0, ty = p ? p->t[1] : 0;
         const float (*pts)[2] = src == 3 ? global : local;
         float w = src == 3 ? c->res->w : c->pane_size[0], h = src == 3 ? c->res->h : c->pane_size[1];
+        // fitted to the layout (flag 1) / the pane (flag 2), else one texel a unit: the texture's own size [obs: Cemu,
+        // the ending balloon's dot pattern repeats every 8 pixels at projection scale 0.5 on a 16-texel tile]
+        int fit = p ? p->flags : 0;
+        if ((src == 3 && !(fit & 1)) || (src == 4 && !(fit & 2))) {
+            const LTex *tx = lyt_tex(mat_texture(c, m, ms, map));
+            if (tx && tx->w > 0) w = (float)tx->w, h = (float)tx->h;
+        }
         if (w < 1e-6f) w = 1e-6f;
         if (h < 1e-6f) h = 1e-6f;
         for (int i = 0; i < 4; i++) {
@@ -712,7 +731,8 @@ static float line_width(const LFont *font, const uint32_t *s, int n, const float
 }
 
 static void text_emit(const LFont *font, const LTxt *t, const uint32_t *s, int n, const float rc[4], const Mtx *mtx,
-                      float alpha, const uint8_t black[4], const uint8_t white[4], uint32_t blend, LQuads *out) {
+                      float alpha, const uint8_t black[4], const uint8_t white[4], const LMat *mat, uint32_t blend,
+                      LQuads *out) {
     float l = rc[0], top = rc[1], w = rc[2], h = rc[3];
     float sy = t->fsize[1] / (font->height ? font->height : 1);
     float line_h = font->line_feed * sy + t->lspace;
@@ -730,7 +750,12 @@ static void text_emit(const LFont *font, const LTxt *t, const uint32_t *s, int n
     float block_h = nlines * line_h - t->lspace;
     float bx = l + (w - block_w) * factor(t->pos), by = top - (h - block_h) * factor(t->pos >> 2);
     float lf = t->lalign == 1 ? 0 : t->lalign == 2 ? 0.5f : t->lalign == 3 ? 1 : factor(t->pos);
-    uint32_t flags = blend | LQ_LINEAR | LQ_COMB_NONE << LQ_COMB_C | LQ_COMB_NONE << LQ_COMB_A;
+    uint32_t flags = blend | LQ_LINEAR | LQ_FONT | LQ_COMB_NONE << LQ_COMB_C | LQ_COMB_NONE << LQ_COMB_A;
+    if (t->flags & 4) flags |= LQ_FONT_NOBORDER;  // (the text box's invisible-border flag)
+    // the shadow pass: the material's font shadow parameter (black / white), else black [inf]
+    static const uint8_t sh_black0[4] = {0, 0, 0, 0}, sh_white0[4] = {0, 0, 0, 255};
+    const uint8_t *sh_black = mat && mat->has_shadow ? mat->shadow_black : sh_black0;
+    const uint8_t *sh_white = mat && mat->has_shadow ? mat->shadow_white : sh_white0;
     float ascent = font->ascent * sy;
     for (int pass_i = (t->flags & 1) ? 0 : 1; pass_i < 2; pass_i++) {
         bool shadow = pass_i == 0;
@@ -762,7 +787,8 @@ static void text_emit(const LFont *font, const LTxt *t, const uint32_t *s, int n
                 q.uv0[0][0] = u0, q.uv0[0][1] = v0, q.uv0[1][0] = u1, q.uv0[1][1] = v0;
                 q.uv0[2][0] = u0, q.uv0[2][1] = v1, q.uv0[3][0] = u1, q.uv0[3][1] = v1;
                 memcpy(q.col[0], tc, 4), memcpy(q.col[1], tc, 4), memcpy(q.col[2], bc, 4), memcpy(q.col[3], bc, 4);
-                memcpy(q.black, black, 4), memcpy(q.white, white, 4);
+                memcpy(q.black, shadow ? sh_black : black, 4), memcpy(q.white, shadow ? sh_white : white, 4);
+                if (shadow) q.black[3] = 0;  // (the shadow parameter has no black alpha)
                 q.tex0 = lyt_font_sheet((LFont *)gf, sheet);
                 q.tex1 = -1;
                 q.flags = flags;
@@ -855,7 +881,8 @@ static void draw_at(const LInst *in, const Mtx *base, float base_alpha, const Ch
                 for (int k = 0; k < 4; k++) black[k] = u8c(P.ms[p->txt.mat].black[k]), white[k] = u8c(P.ms[p->txt.mat].white[k]);
                 blend = blend_flags(&r->mat[p->txt.mat]);
             }
-            text_emit(f, &p->txt, str, n, rc, &P.mtx[i], P.alpha[i], black, white, blend, out);
+            text_emit(f, &p->txt, str, n, rc, &P.mtx[i], P.alpha[i], black, white,
+                      p->txt.mat < r->nmat ? &r->mat[p->txt.mat] : NULL, blend, out);
             break;
         }
         case LP_PRT:
