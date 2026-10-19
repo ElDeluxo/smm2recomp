@@ -1152,6 +1152,11 @@ The recomp builds for Android arm64 (`make -C recomp TARGET=android-arm64 GAME=s
 - **Game files in the app's external files folder** (`/sdcard/Android/data/org.smcraft.smm2recomp/files`), pushed with
   adb (`tools/android_push_data.sh`, links followed, then opened to the app: adb's files belong to the shell user).
   Not bundled in the APK: 3 GB, and the APK should hold as little of the game as possible.
+- **Tested in the emulator only** (the owner has no Android device): the arm64 API 35 image with `-gpu host`, whose
+  Vulkan is gfxstream over MoltenVK. Two things that only showed there were fixed for all Vulkan targets rather than
+  worked around: GLSL helpers named like Metal built-ins (`fmin` / `fmax`, ambiguous once MoltenVK turns SPIR-V into
+  MSL), and the emulator keyboard counted as a gamepad (it hid the on-screen controller; Android only). The
+  SwiftShader mode is not an option (no 8- / 16-bit storage).
 - **BC textures decoded on the CPU** where the GPU lacks them (most phone GPUs), in the Vulkan backend as on iOS
   (`runtime/nvn/bcsoft.c`); `RECOMP_BC_SOFT=1` forces it for testing.
 Would change: a device whose low window is taken (move `GUEST_ORIGIN`, or probe several bases at run time, which

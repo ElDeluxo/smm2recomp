@@ -272,9 +272,12 @@ static VkPresentModeKHR present_mode(void) {
     return VK_PRESENT_MODE_FIFO_KHR;
 }
 
+static void surface_lost(void);
 static void create_swapchain(void) {
     VkSurfaceCapabilitiesKHR caps;
-    VK_CHECK(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(g_vk.phys, g_vk.surface, &caps));
+    VkResult cr = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(g_vk.phys, g_vk.surface, &caps);
+    if (cr == VK_ERROR_SURFACE_LOST_KHR) { surface_lost(); return; }  // (Android, in the background: vk_frame_begin)
+    VK_CHECK(cr);
     int w, h;
     SDL_GetWindowSizeInPixels(window, &w, &h);
     VkExtent2D ext = caps.currentExtent.width != UINT32_MAX ? caps.currentExtent : (VkExtent2D){(uint32_t)w, (uint32_t)h};
@@ -313,7 +316,13 @@ static void create_swapchain(void) {
                                                                                           : VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR,
         .presentMode = present_mode(), .clipped = VK_TRUE,
         .oldSwapchain = old};
-    VK_CHECK(vkCreateSwapchainKHR(g_vk.dev, &ci, NULL, &g_vk.swapchain));
+    cr = vkCreateSwapchainKHR(g_vk.dev, &ci, NULL, &g_vk.swapchain);
+    if (cr == VK_ERROR_SURFACE_LOST_KHR || cr == VK_ERROR_NATIVE_WINDOW_IN_USE_KHR) {
+        g_vk.swapchain = old;
+        surface_lost();
+        return;
+    }
+    VK_CHECK(cr);
     for (uint32_t i = 0; i < g_vk.sc_count; i++) vkDestroyImageView(g_vk.dev, g_vk.sc_views[i], NULL);
     if (old) vkDestroySwapchainKHR(g_vk.dev, old, NULL);
     g_vk.sc_format = sf.format;
@@ -331,6 +340,32 @@ static void create_swapchain(void) {
 static void recreate_swapchain(void) {
     vkDeviceWaitIdle(g_vk.dev);
     create_swapchain();
+}
+
+// The window's surface went away (Android destroys it while the app is in the background and makes a new one on
+// return): swapchain and surface dropped; vk_frame_begin makes new ones from the window once it has one again.
+static void surface_lost(void) {
+    vkDeviceWaitIdle(g_vk.dev);
+    for (uint32_t i = 0; i < g_vk.sc_count; i++) vkDestroyImageView(g_vk.dev, g_vk.sc_views[i], NULL);
+    g_vk.sc_count = 0;
+    if (g_vk.swapchain) vkDestroySwapchainKHR(g_vk.dev, g_vk.swapchain, NULL);
+    g_vk.swapchain = VK_NULL_HANDLE;
+    if (g_vk.surface) vkDestroySurfaceKHR(g_vk.inst, g_vk.surface, NULL);
+    g_vk.surface = VK_NULL_HANDLE;
+}
+
+static bool recreate_surface(void) {
+    surface_lost();
+    if (!SDL_Vulkan_CreateSurface(window, g_vk.inst, NULL, &g_vk.surface)) {
+        static int nlog;
+        if (nlog++ < 5) LOG("[vk] surface lost; no new one yet: %s\n", SDL_GetError());
+        return false;
+    }
+    VkBool32 present = VK_FALSE;
+    vkGetPhysicalDeviceSurfaceSupportKHR(g_vk.phys, g_vk.qfam, g_vk.surface, &present);
+    LOG("[vk] surface recreated (present support %d)\n", present);
+    create_swapchain();
+    return g_vk.swapchain != VK_NULL_HANDLE;
 }
 
 // ================================================================== frames (start screen and game)
@@ -369,6 +404,7 @@ bool vk_frame_begin(const float clear[4]) {
     int w, h;
     SDL_GetWindowSizeInPixels(window, &w, &h);
     if (!w || !h) return false;  // minimised
+    if (!g_vk.surface && !recreate_surface()) return false;
     if (!g_vk.swapchain || (uint32_t)w != g_vk.sc_extent.width || (uint32_t)h != g_vk.sc_extent.height) recreate_swapchain();
     if (!g_vk.swapchain) return false;
     static int trace = -1;
@@ -378,8 +414,8 @@ bool vk_frame_begin(const float clear[4]) {
     if (!acquire_sem[slot]) acquire_sem[slot] = binary_semaphore();
     vk_wait_seq(slot_seq[slot]);
     VkResult r = vkAcquireNextImageKHR(g_vk.dev, g_vk.swapchain, UINT64_MAX, acquire_sem[slot], VK_NULL_HANDLE, &cur_frame.image);
-    if (r == VK_ERROR_OUT_OF_DATE_KHR) {
-        recreate_swapchain();
+    if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_ERROR_SURFACE_LOST_KHR) {
+        if (r == VK_ERROR_SURFACE_LOST_KHR ? !recreate_surface() : (recreate_swapchain(), !g_vk.swapchain)) return false;
         r = vkAcquireNextImageKHR(g_vk.dev, g_vk.swapchain, UINT64_MAX, acquire_sem[slot], VK_NULL_HANDLE, &cur_frame.image);
     }
     if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR) { LOG("[vk] acquire failed: %d\n", r); return false; }
@@ -451,6 +487,7 @@ void vk_frame_end(const char *shot_path) {
                            .swapchainCount = 1, .pSwapchains = &g_vk.swapchain, .pImageIndices = &img};
     VkResult r = vkQueuePresentKHR(g_vk.queue, &pi);
     if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) recreate_swapchain();
+    else if (r == VK_ERROR_SURFACE_LOST_KHR) recreate_surface();
     cur_frame.ok = false;
     if (shot_path) {
         vk_wait_seq(seq);

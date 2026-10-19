@@ -171,19 +171,21 @@ Android runs on Vulkan, like Windows and Linux. As on iOS, the game code is comp
 runtime (`libmain.so`), SDL3 (`libSDL3.so`) and SDL's Java activity. The APK is made from your dump: it is for your own
 devices only, never to be shared, uploaded or put on a store.
 
-Status (2026-10-19), from the Android evidence:
+Status (2026-10-19), from the Android evidence. **Only the Android Emulator has been tried; installing on a phone or
+tablet is untested** (no device was available), so expect problems there.
 
-- **Builds:** cross-built on macOS with the NDK (r29): `libmain.so` 14 MB stripped + `libsmm2game.so` 143 MB + `libSDL3.so` 2 MB,
-  APK 160 MB.
-- **Boots to the title screen** in the Android Emulator (API 35, arm64, Apple Silicon; its Vulkan is gfxstream over
-  MoltenVK): the intro (3D scene with Toad, Yoshi and the Koopa Car) at up to 60 fps, the title screen at about 19 fps.
-  Back opens the overlay menu and a tap closes it.
-- **Not right yet in the emulator:** on the title screen about half the draws are skipped because their pipelines
-  fail to build there (`VK_ERROR_INITIALIZATION_FAILED`), so the background course and parts of the logo are missing.
-  [inf] These are the geometry-shader pipelines: MoltenVK has no geometry shaders, while phone GPUs (Adreno, Mali) do.
-  The emulator's SwiftShader mode is no way round it: it lacks 8- and 16-bit storage, which the backend requires.
-- **Not tested:** a physical device. Neither is a course played, nor the on-screen controller (the emulator reports its
-  keyboard as a gamepad, so the controller hides).
+- **Builds:** cross-built on macOS with the NDK (r29): `libmain.so` 14 MB stripped + `libsmm2game.so` 143 MB + `libSDL3.so`
+  2 MB, APK 160 MB.
+- **Runs in the Android Emulator** (API 35 arm64 image on Apple Silicon; its Vulkan is gfxstream over MoltenVK): the
+  intro (3D scene with Toad, Yoshi and the Koopa Car), then the full title screen with its course. The title course
+  plays with the on-screen controller: the stick walks Mario up the slope and into the Koopa Car, A jumps. Speed there:
+  the intro at 13-60 fps, the title screen and its course at 5-9 fps, on a Mac shared with other jobs (the emulator's
+  GPU path is slow: about 2,000 draws a frame through gfxstream).
+- **Also seen working there:** Back opens the overlay menu and taps work it; the app survives going to the home screen
+  and back (the Vulkan surface is recreated); the guest window at 0x800000000 is claimed on every boot.
+- **Not tested:** a physical device (install, its GPU driver, BC-less GPUs, memory limits); a course from the Course
+  World / Story / Make menus; a Bluetooth controller.
+- [?] The title screen's button bar shows no text in the emulator.
 
 Requirements:
 - **Device:** arm64 (arm64-v8a), Android 13 or newer (the NDK's Vulkan 1.3 entry points), a Vulkan 1.3 driver with
@@ -202,7 +204,13 @@ Requirements:
 
 `JAVA_HOME` must point at the JDK (`/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home`); `ADB_SERIAL=<serial>`
 picks a device when more than one is attached. The APK is signed with a local debug key (`build/android-debug.keystore`,
-made on first use) and installs over USB or Wi-Fi debugging (`adb pair` / `adb connect`).
+made on first use). `install` goes to whatever adb sees: the emulator (tested), or a phone over USB or Wi-Fi debugging
+(`adb pair` / `adb connect`; **untested**).
+
+For the emulator: `sdkmanager "emulator" "system-images;android-35;google_apis;arm64-v8a"`, an AVD with 8 GB of RAM and
+a 16 GB data partition (`avdmanager create avd -n smm2 -k "system-images;android-35;google_apis;arm64-v8a" -d pixel_7`,
+then `hw.ramSize=8192`, `disk.dataPartition.size=16G` in its `config.ini`), started with `emulator -avd smm2 -gpu host`.
+Its SwiftShader mode (`-gpu swiftshader_indirect`) doesn't work: it lacks the 8- and 16-bit storage the backend needs.
 
 The guest's memory window sits at **0x800000000-0xB20000000** on Android, not at 0x7000000000: Android arm64 kernels often
 give apps a 39-bit address space whose libraries are mapped from its top down, over 0x7000000000. Its game code is
