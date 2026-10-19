@@ -1534,3 +1534,20 @@ take the Super Worlds globe, or try a real sixth button), the owner chose **try 
 button** built into Course World's top menu page (`Nwk_Title_00`), with its own panes, update, draw
 and cursor navigation. If that proves unworkable, the fallback is Ninji Speedruns' slot, confirmed
 with the owner first.
+
+## 2026-10-19 — "Challenge Modes" replaces the sixth button; Nextendo groundwork offline
+
+**Owner:**
+- **Challenge Modes** (replaces both the sixth-button plan and "separate menu entries"): Course
+  World's Endless Challenge button is relabelled **"Challenge Modes"**. Inside, **ZL / ZR** (or a tap
+  on the "ZL ◀ mode ▶ ZR" header) switch between **100 Mario Challenge** (SMM1's select / map / card
+  flow) and **Endless Challenge** (SMM2's own, exactly as SMM2); **L / R** still switch difficulty;
+  **B** stays "back"; the last mode used is remembered.
+- **Nextendo Network:** research done (research/specs/recomp-nextendo.md): SMM2 v3.0.3 is supported
+  ("experimental"); a recomp client needs no console identity, but Nextendo must register the app
+  (their developer portal is closed) and their SMM2 server is private; their code is PolyForm
+  Shield, so we write our own client and copy none of it. **Start the offline groundwork now**
+  (real sockets, DNS redirect table, TLS, account token, app sign-in) against a **local test
+  server only**; nothing connects to Nextendo's servers until the owner has their permission and an
+  app registration (the owner is contacting them on Discord). The same pieces give us our own
+  local NEX server route later.
