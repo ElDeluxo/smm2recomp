@@ -561,6 +561,8 @@ static void tab_audio(void) {
 typedef struct { const char *label, *desc; bool *value; bool def; } GameModToggle;
 extern "C" int game_mod_toggles(const GameModToggle **out);
 extern "C" void game_mod_toggles_changed(void);
+extern "C" bool launcher_has_settings(void);   // runtime/ui/launcher.mm: the Mods tab's app section (desktop)
+extern "C" bool launcher_settings_rows(void);
 static void tab_mods(void) {
     const GameModToggle *t;
     int n = game_mod_toggles(&t);
@@ -572,6 +574,7 @@ static void tab_mods(void) {
         changed |= opt_toggle(t[i].label, t[i].value, t[i].def, t[i].desc);
     }
     if (changed) game_mod_toggles_changed();
+    launcher_settings_rows();  // the app's own: updates, game files
     opt_end();
 }
 
@@ -721,7 +724,7 @@ static void tabs_body(float scale, bool in_game, void (*prelaunch)(float)) {
     static const char *names[] = {"Video", "Audio", "Mods", "", "", "", "", "", "Controls", "Quit"};
     static const int order[] = {8, 0, 1, 2, 9};  // Controls, Video, Audio, Mods, Quit
     const GameModToggle *mods;
-    bool have_mods = game_mod_toggles(&mods) > 0;
+    bool have_mods = game_mod_toggles(&mods) > 0 || launcher_has_settings();
     for (int i : order)  // (Quit: in game only; Mods: when the game has some)
         if ((i != 9 || !prelaunch) && (i != 2 || have_mods)) tabs[ntabs++] = {names[i], i, true};
     int cur = 0;  // g_tab / g_tab_request hold ids

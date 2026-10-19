@@ -45,6 +45,27 @@ void plat_init(void) {
         snprintf(path, sizeof path, "%s/Documents/smm2recomp.log", home ? home : "/tmp");
         if (freopen(path, "w", stderr)) { setvbuf(stderr, NULL, _IOLBF, 0); dup2(fileno(stderr), 1); }
     }
+#else
+    {   // the .app started from Finder (no terminal): the log goes to the data folder's smm2recomp.log, as on Linux
+        char exe[1024];
+        uint32_t n = sizeof exe;
+        const char *home = getenv("HOME"), *env = getenv("LARECOMP_DATA_ROOT");
+        if (!isatty(STDERR_FILENO) && _NSGetExecutablePath(exe, &n) == 0 && strstr(exe, ".app/Contents/MacOS/")) {
+            char dir[1024], path[1100];
+            if (env && *env) snprintf(dir, sizeof dir, "%s", env);
+            else snprintf(dir, sizeof dir, "%s/Library/Application Support/" GAME_BUNDLE_ID, home ? home : "/tmp");
+            for (char *c = dir + 1; *c; c++)
+                if (*c == '/') { *c = 0; mkdir(dir, 0755); *c = '/'; }
+            mkdir(dir, 0755);
+            snprintf(path, sizeof path, "%s/" GAME_ID "recomp.log", dir);
+            bool append = getenv("LASRECOMP_LOG_APPEND") != NULL;  // (a re-exec for the guest window: the same log)
+            if (freopen(path, append ? "a" : "w", stderr)) {
+                setvbuf(stderr, NULL, _IOLBF, 0);
+                dup2(fileno(stderr), 1);
+                setenv("LASRECOMP_LOG_APPEND", "1", 1);
+            }
+        }
+    }
 #endif
     struct sigaction sa;
     memset(&sa, 0, sizeof sa);

@@ -87,8 +87,9 @@ MAGICS = [
     # per-frame player traces (recomp games/smm2/trace.c, the Ryujinx trace build): snapshots of game memory
     (0, b"TRC1", "player state trace (game memory)"),
 ]
-# Paths that hold files derived from the dump (recompiled code, translated shaders, extracted data)
-BLOCKED_PATH_PARTS = ("/recomp/private/", "/recomp/generated/", "/recomp/build/")
+# Paths that hold files derived from the dump (recompiled code, translated shaders, extracted data), and the
+# player packages (recomp/dist: built locally, published only as release assets)
+BLOCKED_PATH_PARTS = ("/recomp/private/", "/recomp/generated/", "/recomp/build/", "/recomp/dist/")
 # AArch64 disassembly lines ("71000123c0: f9400420  ldr x0, [x1, #8]" or "ldr x0, [x1]")
 ASM_LINE = re.compile(
     r"\b(ldr|str|ldp|stp|ldrb|strb|ldrh|strh|adrp|movz|movk|blr|cbz|cbnz|tbz|tbnz|ldaxr|stlxr)"

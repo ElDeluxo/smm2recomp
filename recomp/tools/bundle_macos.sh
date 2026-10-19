@@ -1,50 +1,40 @@
 #!/bin/bash
-# make app: build/LAS Recomp.app from <exe> (default build/mac15/lasrecomp). Contents/MacOS: the executable;
-# Contents/Frameworks: every non-system dylib it loads (SDL3, FFmpeg; from build/deps, else Homebrew), load
-# paths rewritten to @rpath; Contents/Resources: the icon, the seed generator helper (build/helper/rando-gen, when
-# built: runtime/ui/rando_tab.mm generator_cmd) and what the start screen builds the game code with on the player's
-# machine (runtime/gamebuild.c): the generator helper (build/helper/lasgen), the compiler (build/zig, tools/fetch_zig.sh)
-# and the headers the code is compiled against (gamelib-src/). Ad-hoc signed. No game files, game code or fonts: the
-# app keeps those in ~/Library/Application Support/<bundle id> (runtime/paths.h).
-# MACOS_MIN=<x.y>: LSMinimumSystemVersion, and every Mach-O inside must be built for it or older (else it fails and
-# lists them); without it the newest minimum found inside is used.
+# usage: tools/bundle_macos.sh <exe>   (make app-macos does this)
+# The macOS player package: build/SMM2Recomp.app, zipped as dist/SMM2Recomp-macos-arm64.zip.
+#   Contents/MacOS/smm2recomp      the runtime with its setup screen (runtime/ui/launcher.mm)
+#   Contents/Frameworks/           every non-system dylib it loads (SDL3, from build/deps: tools/build_deps_macos.sh),
+#                                  load paths rewritten to @rpath
+#   Contents/Resources/            python/ tools/ gamelib-src/ zig/ hactool/ licenses/ (tools/package_lib.sh),
+#                                  README.txt, THIRD-PARTY.txt
+# Nothing from the game: the app keeps the player's set-up game files, the game code built from them, the fonts,
+# saves and settings in ~/Library/Application Support/<bundle id> (runtime/paths.h). Signed ad hoc, or with
+# RECOMP_MACOS_IDENTITY (a Developer ID Application identity; then also notarizable). MACOS_MIN: LSMinimumSystemVersion,
+# and every Mach-O inside must be built for it or older (else it fails and lists them).
 set -euo pipefail
 cd "$(dirname "$0")/.."
-EXE=${1:-build/mac15/lasrecomp}
-APP="build/LAS Recomp.app"
+. tools/package_lib.sh
+EXE=${1:-build/smm2-app/smm2recomp}
+APP=build/SMM2Recomp.app
 DEPS=$PWD/build/deps
-BUNDLE_ID=$(sed -n 's/^#define RT_BUNDLE_ID "\(.*\)"/\1/p' runtime/paths.h)
-VERSION=$(sed -n 's/^#define LARECOMP_VERSION "\(.*\)"/\1/p' runtime/ui/launcher.mm)
-# CFBundleShortVersionString must be digits: beta_<n> -> 0.9.<n>, v1.2.3 -> 1.2.3
-case "$VERSION" in
-    beta_*) VERSION="0.9.${VERSION#beta_}" ;;
-    v*) VERSION="${VERSION#v}" ;;
-esac
-HELPER=build/helper/rando-gen
-GEN_HELPER=build/helper/lasgen
-ZIG=build/zig
-[ -x "$EXE" ] || { echo "no $EXE"; exit 1; }
-[ -x "$GEN_HELPER/lasgen" ] || { echo "no $GEN_HELPER (make gen-helper)"; exit 1; }
-[ -x "$ZIG/zig" ] || { echo "no $ZIG (tools/fetch_zig.sh)"; exit 1; }
+ID=$(sed -n 's/^GAME_ID *:= *//p' games/smm2/game.mk)
+BUNDLE_ID=$(sed -n 's/^GAME_BUNDLE_ID *:= *//p' games/smm2/game.mk)
+VERSION=${RECOMP_VERSION:-$(git describe --tags --match 'v[0-9]*' 2>/dev/null || echo dev)}
+SHORT=$(echo "$VERSION" | sed -n 's/^v\([0-9]*\.[0-9]*\.[0-9]*\).*/\1/p')  # (CFBundleShortVersionString: digits)
+SHORT=${SHORT:-0.0.0}
+IDENTITY=${RECOMP_MACOS_IDENTITY:--}
+[ -x "$EXE" ] || { echo "no $EXE (make app-macos)"; exit 1; }
 # the app must hold no game code: that's built on the player's machine (grep without -q: with pipefail, nm cut off
 # early would hide a match)
-if nm "$EXE" | grep ' _f_70' >/dev/null; then echo "$EXE has game code linked in"; exit 1; fi
+if nm "$EXE" | grep ' _f_7' >/dev/null; then echo "$EXE has game code linked in"; exit 1; fi
 
 rm -rf "$APP"
 C="$APP/Contents"
 mkdir -p "$C/MacOS" "$C/Frameworks" "$C/Resources"
-cp "$EXE" "$C/MacOS/lasrecomp"
-strip -S "$C/MacOS/lasrecomp"  # (debug-map entries only: the symbols crash reports name functions by stay)
-if [ -x "$HELPER/rando-gen" ]; then cp -R "$HELPER" "$C/Resources/rando-gen"; else echo "note: no $HELPER (make rando-helper)"; fi
-cp -R "$GEN_HELPER" "$C/Resources/lasgen"
-cp -R "$ZIG" "$C/Resources/zig"
-mkdir "$C/Resources/gamelib-src"
-cp runtime/cpu.h runtime/simd.h runtime/simd_fp.h runtime/gamelib.h tools/gamelib_entry.c runtime/hle/hle_symbols.txt \
-   "$C/Resources/gamelib-src/"
-cp docs/icon/icon.icns "$C/Resources/icon.icns"
-cp docs/icon/icon_1024.png "$C/Resources/icon.png"  # (window / Dock icon at run time)
-cp third_party/fonts/Baloo2/Baloo2-SemiBold.ttf "$C/Resources/Baloo2-SemiBold.ttf"  # (start screen; OFL, README "License")
-cp third_party/fonts/Baloo2/OFL.txt "$C/Resources/Baloo2-OFL.txt"
+cp "$EXE" "$C/MacOS/$ID""recomp"
+strip -S "$C/MacOS/${ID}recomp"  # (debug-map entries only: the symbols crash reports name functions by stay)
+stage_common "$C/Resources" macos-aarch64 aarch64-macos
+[ -f "$DEPS/share/licenses/SDL3/LICENSE.txt" ] && cp "$DEPS/share/licenses/SDL3/LICENSE.txt" "$C/Resources/licenses/LICENSE-SDL3.txt"
+write_readme "$C/Resources/README.txt" macos-aarch64 "$VERSION"
 
 # ---- dylibs: copy every non-system dependency, recursively; point all references at @rpath/<name>
 is_system() { case "$1" in /usr/lib/*|/System/*) return 0;; esac; return 1; }
@@ -52,19 +42,20 @@ find_dep() {  # dep as referenced by (the original of) $2 -> a real file
     case "$1" in
     @rpath/*|@loader_path/*)
         local n=${1#*/}
-        for d in "$(dirname "$2")" "$DEPS/lib" /opt/homebrew/lib; do [ -e "$d/$n" ] && { echo "$d/$n"; return; }; done
+        for d in "$(dirname "$2")" "$DEPS/lib"; do [ -e "$d/$n" ] && { echo "$d/$n"; return; }; done
         echo "cannot resolve $1 (from $2)" >&2; exit 1;;
     *) echo "$1";;
     esac
 }
 deps_of() { otool -L "$1" | tail -n +2 | awk '{print $1}' | grep -v "^$(otool -D "$1" | tail -n +2 | head -1)\$" || true; }
 origin() { local s; s="$(dirname "$1")/.$(basename "$1").src"; if [ -f "$s" ]; then cat "$s"; else echo "$1"; fi; }
-queue="$C/MacOS/lasrecomp"
+queue="$C/MacOS/${ID}recomp"
 copied=" "
 while [ -n "$queue" ]; do
     f=${queue%%|*}; [ "$queue" = "$f" ] && queue= || queue=${queue#*|}
     for dep in $(deps_of "$f"); do
         is_system "$dep" && continue
+        case "$dep" in /opt/homebrew/*|/usr/local/*) echo "$f links $dep (Homebrew's: build against build/deps)"; exit 1;; esac
         name=$(basename "$dep")
         if [[ "$copied" != *" $name "* ]]; then
             real=$(find_dep "$dep" "$(origin "$f")")
@@ -80,15 +71,11 @@ while [ -n "$queue" ]; do
 done
 rm -f "$C/Frameworks"/.*.src
 rpaths() { otool -l "$1" | awk '/LC_RPATH/ {getline; getline; print $2}'; }
-for r in $(rpaths "$C/MacOS/lasrecomp"); do install_name_tool -delete_rpath "$r" "$C/MacOS/lasrecomp"; done
-install_name_tool -add_rpath "@executable_path/../Frameworks" "$C/MacOS/lasrecomp"
-for f in "$C/Frameworks"/*.dylib; do  # (their own build rpaths, if any: point them at the bundle instead)
-    for r in $(rpaths "$f"); do install_name_tool -delete_rpath "$r" "$f"; done
-    install_name_tool -add_rpath "@loader_path" "$f" 2>/dev/null || true
-done
+for r in $(rpaths "$C/MacOS/${ID}recomp"); do install_name_tool -delete_rpath "$r" "$C/MacOS/${ID}recomp"; done
+install_name_tool -add_rpath "@executable_path/../Frameworks" "$C/MacOS/${ID}recomp"
 
 # ---- every Mach-O inside, its minimum macOS
-machos() { find "$APP" -type f -perm +111 -o -type f -name '*.dylib' -o -type f -name '*.so' | while read -r f; do
+machos() { find "$APP" -type f \( -perm +111 -o -name '*.dylib' -o -name '*.so' \) | while read -r f; do
     file -b "$f" | grep -q Mach-O && echo "$f"; done | sort -u; }
 minos() { otool -l "$1" 2>/dev/null | awk '/LC_BUILD_VERSION/ {b=1} b && /minos/ {print $2; exit}
                                           /LC_VERSION_MIN_MACOSX/ {v=1} v && /version/ {print $2; exit}'; }
@@ -96,11 +83,12 @@ newer() { [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail 
 MIN=${MACOS_MIN:-}
 TOO_NEW=""
 NEWEST=11.0
+MACHOS=$(machos)
 while read -r f; do
     m=$(minos "$f"); [ -n "$m" ] || continue
     newer "$m" "$NEWEST" && NEWEST=$m
     [ -n "$MIN" ] && newer "$m" "$MIN" && TOO_NEW+="  ${f#$APP/} (macOS $m)"$'\n'
-done < <(machos)
+done <<< "$MACHOS"
 if [ -n "$TOO_NEW" ]; then printf 'built for newer than macOS %s:\n%s' "$MIN" "$TOO_NEW"; exit 1; fi
 MIN=${MIN:-$NEWEST}
 
@@ -110,28 +98,36 @@ cat > "$C/Info.plist" <<EOF
 <plist version="1.0">
 <dict>
     <key>CFBundleDevelopmentRegion</key><string>en</string>
-    <key>CFBundleExecutable</key><string>lasrecomp</string>
+    <key>CFBundleExecutable</key><string>${ID}recomp</string>
     <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
-    <key>CFBundleName</key><string>LAS Recomp</string>
-    <key>CFBundleDisplayName</key><string>LAS Recomp</string>
-    <key>CFBundleIconFile</key><string>icon</string>
+    <key>CFBundleName</key><string>SMM2 Recomp</string>
+    <key>CFBundleDisplayName</key><string>SMM2 Recomp</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>$VERSION</string>
-    <key>CFBundleVersion</key><string>$VERSION</string>
+    <key>CFBundleShortVersionString</key><string>$SHORT</string>
+    <key>CFBundleVersion</key><string>$SHORT</string>
     <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
     <key>LSMinimumSystemVersion</key><string>$MIN</string>
     <key>LSArchitecturePriority</key><array><string>arm64</string></array>
     <key>LSApplicationCategoryType</key><string>public.app-category.games</string>
     <key>NSHighResolutionCapable</key><true/>
+    <key>GCSupportsControllerUserInteraction</key><true/>
 </dict>
 </plist>
 EOF
 printf 'APPL????' > "$C/PkgInfo"
 
-# ---- ad-hoc signature (Apple Silicon refuses to run unsigned code; the rewrites above invalidated the originals):
-# every Mach-O inside first, then the bundle
-while read -r f; do [ "$f" = "$C/MacOS/lasrecomp" ] || codesign -f -s - "$f" 2>/dev/null; done < <(machos)
-codesign -f -s - "$APP"
+# ---- signature (Apple silicon runs no unsigned code; the rewrites above invalidated the originals): every Mach-O
+# inside first (the hardened runtime with a Developer ID: zig and Python run with it as they are), then the bundle
+OPTS=()
+[ "$IDENTITY" != - ] && OPTS=(--options runtime --timestamp)
+while read -r f; do [ "$f" = "$C/MacOS/${ID}recomp" ] || codesign -f -s "$IDENTITY" ${OPTS[@]+"${OPTS[@]}"} "$f" 2>/dev/null; done <<< "$MACHOS"
+codesign -f -s "$IDENTITY" ${OPTS[@]+"${OPTS[@]}"} "$APP"
 codesign --verify --strict "$APP"
-if find "$APP" -name 'lasgame*' | grep . >/dev/null; then echo "game code inside $APP"; exit 1; fi
-echo "$APP: $(du -sh "$APP" | cut -f1), $(ls "$C/Frameworks" | wc -l | tr -d ' ') dylibs, macOS $MIN+"
+
+python3 ../scripts/check_package.py "$APP"
+mkdir -p dist
+ZIP=dist/SMM2Recomp-macos-arm64.zip
+rm -f "$ZIP"
+ditto -c -k --keepParent "$APP" "$ZIP"
+echo "$APP: $(du -sh "$APP" | cut -f1), $(ls "$C/Frameworks" | wc -l | tr -d ' ') dylibs, macOS $MIN+, signed $([ "$IDENTITY" = - ] && echo 'ad hoc' || echo "by $IDENTITY")"
+echo "$ZIP: $(du -h "$ZIP" | cut -f1), $VERSION"

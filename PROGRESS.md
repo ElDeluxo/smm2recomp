@@ -185,10 +185,28 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     ⬜ online multiplayer: plan in `DECISIONS.md` (local play over our relay first, Network Play at
     the enl layer second)
 
-- ⬜ **Releases (melee-pc style, owner-approved)**: per-platform launcher + recompiler, no game code;
-  dump picker with v3.0.3 hash check, the player's prod.keys, extraction, first-launch recompile with
-  bundled zig, optional SMM1 dump, update check. Windows / Linux / macOS first, then Android / iOS
-  build-it-yourself (iOS via a desktop build-sign-install helper). GitHub Actions on release only.
+- 🔄 **Releases (melee-pc style, owner-approved)**: per-platform launcher + recompiler, no game code
+  (`recomp/README.md` "Player packages and the setup screen", DECISIONS.md "How it's built")
+  - ✅ **Setup screen** in the runtime (`runtime/ui/launcher.mm`, SDL3 + ImGui, Metal / Vulkan) in place of the game
+    until it's set up: the dump (NSP / XCI or extracted folders), prod.keys + firmware (suggested from Ryujinx /
+    yuzu), optional SMM1 dump; then the v3.0.3 check + layout (`games/smm2/setup.py --source`), fonts and system
+    data (`sysdata.py`), the first-launch recompile with progress (`runtime/gamebuild.c`, bundled Python + zig),
+    and the game in the same window. Errors per step with what to do; keys read in place, values never shown or
+    logged (hactool's output masked). Back to it: Quit to Start Screen, Mods > Game files, `--setup`
+  - ✅ **Known-good v3.0.3 table** (`games/smm2/versions.py`): build ids, SHA-256 of the 4 ExeFS files, title
+    versions (3.0.3 = update v458752), program NCA ids - hashes of the owner's files only
+  - ✅ **Update check**: GitHub's latest release vs the build's tag, notice + link only (setup screen and the
+    overlay menu's Mods tab, "Check for updates" switch); `RECOMP_UPDATE_TAGS=v0.2.0` shows it offline
+  - ✅ **Packages** (`make app-macos`, `make TARGET=... package`; each checked by `scripts/check_package.py`,
+    which fails on anything from a dump - names, magics, the known ExeFS hashes, key lines, recompiled code):
+    macOS `.app` 319 MB → zip 96 MB (macOS 15+, ad hoc signed); Windows zip 113 MB (425 MB);
+    Linux x86-64 tar.gz LINUX64 ; Linux arm64 tar.gz LINUXARM
+  - ✅ **Release workflow** `.github/workflows/release.yml`: only on `v*` tags; Windows + Linux cross-built in a
+    Debian 13 container, macOS on a macOS runner, every package re-checked, attached to the release (a draft if
+    none) - ⬜ not run yet (no tag)
+  - E2E_MAC
+  - ⬜ Windows / Linux packages not run on their systems yet; Linux AppImage (bundled SDL3); notarized macOS app
+    (needs a Developer ID); Android / iOS stay build-it-yourself (iOS: a desktop build-sign-install helper)
 
 | Platform | Builds | Boots to title | Plays courses | Frames match Ryujinx | Input replays in sync |
 |---|---|---|---|---|---|

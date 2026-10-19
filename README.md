@@ -14,9 +14,44 @@ On top of the original game it adds:
 - **SMM1 features as mods**, each with its own switch (in progress: Mystery Mushroom costumes,
   mid-air shell jumps, overlapping pipes)
 
-> **You need your own copy of the game.** This repository contains no code, assets, text, keys
-> or recompiled output from Super Mario Maker 2 or Super Mario Maker. You point the build at your
-> own dump, and everything made from it is generated on your machine.
+> **You need your own copy of the game.** This repository and its downloads contain no code,
+> assets, text, keys or recompiled output from Super Mario Maker 2 or Super Mario Maker. You point
+> the program at your own dump, and everything made from it is generated on your machine.
+
+## Play it
+
+A download is a **launcher plus the recompiler**, not the game: on first start it takes your dump,
+checks it, recompiles the game code on your computer, and then runs it.
+
+> No release has been published yet. The packages are built by GitHub Actions when a release is
+> tagged; until the first one, build it yourself ([Building](#building)).
+
+1. **Download** the package for your system from
+   [Releases](https://github.com/smm2recomp/smm2recomp/releases):
+
+   | System | Package | Also needs |
+   |---|---|---|
+   | Windows 10 / 11, x64 | `SMM2Recomp-windows-x86_64.zip` | a CPU with AVX2, a Vulkan 1.3 graphics driver ([docs/windows.md](docs/windows.md)) |
+   | Linux, x64 or arm64 | `SMM2Recomp-linux-x86_64.tar.gz`, `-linux-aarch64.tar.gz` | SDL3 3.2+ and a Vulkan 1.3 driver from your distribution (Debian 13, Ubuntu 25.04, Fedora 41, Arch or newer); x64: AVX2 |
+   | macOS 15+, Apple silicon | `SMM2Recomp-macos-arm64.zip` (`SMM2Recomp.app`) | nothing; the app isn't notarized: right-click > Open the first time |
+
+2. **Unpack it and start it** (`smm2recomp.exe`, `./smm2recomp` or `SMM2Recomp.app`). Windows
+   keeps everything in the unpacked folder, so put it somewhere writable.
+3. **Point it at your dump.** The setup screen asks for:
+   - **Super Mario Maker 2 with the 3.0.3 update:** the game's NSP or XCI and the update's NSP,
+     or folders with their extracted ExeFS and RomFS. The version is checked against the known
+     3.0.3 files (build ids and hashes of your own files).
+   - **Your console's `prod.keys` and firmware** (the folder of its system `.nca` files): the
+     game's fonts come from there. If an emulator already has them, they're filled in. They're
+     read where they are, never copied, and key values are never shown or logged.
+   - Optionally **Super Mario Maker (Wii U)**, for the SMM1 mods.
+4. **Set up and play.** The first time it extracts and lays out your files, copies the fonts and
+   recompiles the game code with the bundled compiler: a few minutes to half an hour. Then the
+   game starts, and later starts go straight to it.
+
+The setup screen tells you when a newer release is out and links to it; nothing is downloaded by
+itself. Android and iOS / iPadOS have no download: they're built yourself from source
+([recomp/README.md](recomp/README.md)); iOS needs a Mac to build, sign and install the app.
 
 ## Screenshots
 
@@ -36,14 +71,15 @@ On top of the original game it adds:
 
 ## Status
 
-**Early development.** Not yet released; you build it yourself from source.
+**Early development.** No release has been published yet; the release packages build, and you can
+build it yourself from source.
 
 | Platform | Graphics | Status |
 |---|---|---|
-| **macOS** (Apple Silicon) | Metal | Plays courses. Input replays stay frame-for-frame in sync with the game running in Ryujinx, and in-course frames are pixel-identical in 71 of 90 style × theme combinations. The reference platform. |
+| **macOS** (Apple Silicon) | Metal | Plays courses. Input replays stay frame-for-frame in sync with the game running in Ryujinx, and in-course frames are pixel-identical in 71 of 90 style × theme combinations. The reference platform. The player app goes from an empty data folder through its setup screen and the first-launch recompile to the title screen. |
 | **iOS / iPadOS** (arm64) | Metal | Plays at 60 fps on iPad Pro, with an on-screen controller and touch. Built on a Mac and installed on your own device. |
-| **Windows** (x64) | Vulkan | Builds and packages; not yet tested on real hardware. See [docs/windows.md](docs/windows.md). |
-| **Linux** (x64, arm64) | Vulkan | Builds and packages; arm64 boots to the title screen in a VM. |
+| **Windows** (x64) | Vulkan | The player package (setup screen, recompiler) builds; not yet tested on real hardware. See [docs/windows.md](docs/windows.md). |
+| **Linux** (x64, arm64) | Vulkan | The player packages build; arm64 boots to the title screen in a VM. |
 | **Android** (arm64) | Vulkan | In progress: boots to the title screen in the emulator. |
 
 | Feature | Status |
@@ -111,6 +147,18 @@ make -C recomp run-smm2    # play
 - **Windows:** cross-compiled from macOS into a package that recompiles the game from your dump on
   first launch. See [docs/windows.md](docs/windows.md).
 - **iOS / iPadOS, Linux, Android:** see [recomp/README.md](recomp/README.md).
+
+### The player packages
+
+```sh
+make -C recomp GAME=smm2 app-macos                                  # dist/SMM2Recomp-macos-arm64.zip
+recomp/tools/fetch_zig.sh && recomp/tools/fetch_deps.sh windows-x86_64
+make -C recomp TARGET=windows-x86_64 GAME=smm2 DEPS="$PWD/recomp/build/deps-windows-x86_64" package
+```
+
+Each package is checked for anything from a game dump before it is archived
+(`scripts/check_package.py`). `.github/workflows/release.yml` builds all of them when a `v*` tag
+is pushed and attaches them to the release; details in [recomp/README.md](recomp/README.md).
 
 ## The course server
 
