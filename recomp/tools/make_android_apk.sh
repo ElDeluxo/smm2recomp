@@ -42,7 +42,7 @@ cat > "$W/AndroidManifest.xml" <<EOF
     <uses-permission android:name="android.permission.VIBRATE" />
     <!-- extractNativeLibs false: the 0.5+ GB game code library is mapped from the APK, not copied out of it;
          no heap pointer tagging: host pointers stay plain 64-bit values -->
-    <application android:label="SMM2 Recomp" android:hasCode="true" android:extractNativeLibs="false"
+    <application android:label="SMM2 Recomp" android:icon="@mipmap/ic_launcher" android:hasCode="true" android:extractNativeLibs="false"
         android:allowNativeHeapPointerTagging="false" android:largeHeap="true" android:isGame="true"
         android:appCategory="game" android:hardwareAccelerated="true">
         <activity android:name="org.libsdl.app.SDLActivity" android:exported="true"
@@ -63,8 +63,11 @@ find "$DEPS/java" -name '*.java' > "$W/sources.txt"
 "$JAVAC" -nowarn -Xlint:-options -source 8 -target 8 -bootclasspath "$JAR" -d "$W/classes" @"$W/sources.txt"
 "$BT/d8" --release --min-api "$API" --lib "$JAR" --output "$W/dex" $(find "$W/classes" -name '*.class')
 
+# the launcher icon in every density (docs/branding/android, tools/make_icons.sh)
+mkdir -p "$W/res"
+"$BT/aapt2" compile -o "$W/res" "$(cd "$(dirname "$0")/../.." && pwd)"/docs/branding/android/mipmap-*/ic_launcher.png
 "$BT/aapt2" link -o "$W/base.apk" --manifest "$W/AndroidManifest.xml" -I "$JAR" \
-    --min-sdk-version "$API" --target-sdk-version "$TARGET_API"
+    --min-sdk-version "$API" --target-sdk-version "$TARGET_API" "$W"/res/*.flat
 
 # native libraries: stored (not compressed) so they can be mapped from the APK; debug info stripped (the build keeps it)
 "$STRIP" --strip-unneeded -o "$W/root/lib/arm64-v8a/libSDL3.so" "$DEPS/lib/libSDL3.so"

@@ -111,10 +111,12 @@ cat > "$C/Info.plist" <<EOF
     <key>LSApplicationCategoryType</key><string>public.app-category.games</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>GCSupportsControllerUserInteraction</key><true/>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
 </dict>
 </plist>
 EOF
 printf 'APPL????' > "$C/PkgInfo"
+cp ../docs/branding/app-icon.icns "$C/Resources/AppIcon.icns"  # (the owner's app icon: tools/make_icons.sh)
 
 # ---- signature (Apple silicon runs no unsigned code; the rewrites above invalidated the originals): every Mach-O
 # inside first (the hardened runtime with a Developer ID: zig and Python run with it as they are), then the bundle

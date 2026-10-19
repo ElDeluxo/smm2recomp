@@ -27,9 +27,21 @@ cp "$EXE" "$OUT/"
 if [ "$OS" = windows ]; then
     cp "$B/${ID}recomp.dll.a" "$OUT/"
     for d in SDL3.dll libiconv-2.dll libshaderc_shared.dll; do cp "$DEPS/bin/$d" "$OUT/"; done
+    cp ../docs/branding/app-icon.ico "$OUT/SMM2Recomp.ico"  # (also in the exe: runtime/platform/windows.rc)
 else
     mkdir -p "$OUT/lib"
     cp -L "$DEPS/lib/libshaderc.so" "$OUT/lib/libshaderc.so.1"
+    # the app icon and a menu entry: install-desktop-entry.sh writes it to ~/.local/share/applications with this
+    # folder's absolute paths (a .desktop file can't name files relative to itself)
+    cp ../docs/branding/app-icon-256.png "$OUT/smm2recomp.png"
+    printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=SMM2 Recomp' \
+        'Comment=Super Mario Maker 2, recompiled from your own dump' 'Exec=@DIR@/smm2recomp' 'Path=@DIR@' \
+        'Icon=@DIR@/smm2recomp.png' 'Terminal=false' 'Categories=Game;' > "$OUT/smm2recomp.desktop"
+    printf '%s\n' '#!/bin/sh' '# Adds SMM2 Recomp to the desktop menu (with its icon), pointing at this folder' 'set -e' \
+        'dir=$(cd "$(dirname "$0")" && pwd)' 'mkdir -p "$HOME/.local/share/applications"' \
+        'sed "s|@DIR@|$dir|g" "$dir/smm2recomp.desktop" > "$HOME/.local/share/applications/smm2recomp.desktop"' \
+        'echo "Added: $HOME/.local/share/applications/smm2recomp.desktop"' > "$OUT/install-desktop-entry.sh"
+    chmod +x "$OUT/install-desktop-entry.sh"
 fi
 ZT=$([ "$TARGET" = windows-x86_64 ] && echo x86_64-windows || echo "${TARGET#*-}-linux")
 stage_common "$OUT" "$TARGET" "$ZT"
