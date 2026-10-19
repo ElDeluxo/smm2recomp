@@ -184,6 +184,15 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     ✅ courses=tgrcode setting (built-in server, awaiting core/crates/embed);
     ⬜ online multiplayer: plan in `DECISIONS.md` (local play over our relay first, Network Play at
     the enl layer second)
+  - 🔄 **The game's own network stack** (groundwork for Nextendo Network and a local NEX server, offline:
+    `recomp/docs/mods.md` "The game's own network stack"): ✅ real TCP / UDP sockets (`bsd:u`), nsd + sfdnsres
+    from a deny-by-default redirect table, `ssl` on Mbed TLS with the runtime's trust policy, a local account and
+    JWT ID token, `backend=` setting (ours / local-nex / nextendo greyed out), `tools/nex_test_server`;
+    ✅ **Proof 1**: with `backend=local-nex` the game resolves its NEX host to the test server, opens TLS, upgrades
+    the WebSocket and sends its NEX login (`ValidateAndRequestTicketWithParam`, decoded, token checked; evidence
+    in `/Volumes/SSD/smm-work/recomp-net/evidence/proof1/`, private); ✅ default backend unchanged (no sockets,
+    no lookups); ⬜ Proof 2: the login, the secure connection and SMM2's DataStore calls answered by a local NEX
+    server so Course World opens through the game's own NEX client; ⬜ Nextendo (owner's go-ahead)
 
 | Platform | Builds | Boots to title | Plays courses | Frames match Ryujinx | Input replays in sync |
 |---|---|---|---|---|---|

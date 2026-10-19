@@ -1551,3 +1551,32 @@ with the owner first.
   server only**; nothing connects to Nextendo's servers until the owner has their permission and an
   app registration (the owner is contacting them on Discord). The same pieces give us our own
   local NEX server route later.
+
+## 2026-10-19 — The game's own network stack: Mbed TLS, the runtime's trust policy, deny-by-default names
+
+**Decision** (the Nextendo groundwork above, offline):
+- **TLS library: Mbed TLS 3.6.7 LTS**, vendored unmodified in `recomp/third_party/mbedtls` and taken under its
+  **Apache-2.0** licence (it is dual Apache-2.0 / GPL-2.0-or-later; notice in `LICENSE` and `README.recomp`). It
+  builds from C on every target (macOS, iOS, Windows with zig, Linux, Android) with no system TLS. Configured as a
+  TLS 1.2 client only (`runtime/net/mbedtls_user_config.h`): the console's ssl service speaks TLS 1.2 to the game's
+  servers, and it keeps PSA crypto / threading out of the picture.
+- **Trust is the runtime's, never the game's.** The CAs and client certificates the game imports or names are
+  ignored (no console certificate or PRODINFO is used anywhere). `tls_trust=local-ca` (default): the server must
+  present a certificate from the local test CA (made by `tools/nex_test_server` into `recomp/private/`, never
+  committed; the proprietary guard now blocks PEM keys / certificates and `.pem` / `.key` / `.crt` files).
+  `tls_trust=any`: accept any certificate, and only towards local addresses. A pinned CA for a community server
+  is a third mode, added with the registration.
+- **Names and addresses are deny-by-default.** The game's names never reach the host's DNS: nsd and sfdnsres answer
+  from a redirect table; with the default backend every name fails, with `backend=local-nex` the game's domains go
+  to the local test server. Every redirect target must be a local address (loopback, private, link-local,
+  100.64/10), and a game socket may reach only loopback and those targets; anything else is refused and logged.
+- **Backend setting** in smm2mods.ini: `ours` (default, the mod path, unchanged), `local-nex` (the mod's online
+  overrides off, the game's own NEX client against the test server), `nextendo` (listed, refused: awaiting
+  registration).
+- **Account:** a local network service account ID and a local JWT ID token (HS256 with a local key in
+  `net/account.txt`); a backend's real token plugs in through `id_token_file=`.
+**Why:** the owner's "start the groundwork offline, against a local test server only"; our own client code (none
+of Nextendo's PolyForm-Shield or citron's GPL code), written from public protocol documentation and the game's
+behaviour. The same pieces are the "local NEX server" route.
+**Would change:** the owner's go-ahead with Nextendo's permission and registration (public redirect targets and a
+pinned CA behind an explicit setting); a game server that needs TLS 1.3.

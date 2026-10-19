@@ -19,6 +19,7 @@
 #endif
 
 #include "mod.h"
+#include "../../../runtime/net/netcfg.h"
 #include "../../../runtime/net/online.h"
 
 ModSettings g_mod;
@@ -101,7 +102,8 @@ void mod_server_ready(void) {
     if (!strcmp(g_mod.courses, "tgrcode")) pthread_once(&once, start_builtin_server);
 }
 
-bool mod_hundred(void) { mod_settings_load(); return g_mod.hundred; }
+// (another online backend than our server, backend.c: the game's own NEX client runs, the mod's overrides are off)
+bool mod_hundred(void) { mod_settings_load(); return g_mod.hundred && net_backend() == NET_BACKEND_OURS; }
 // Both challenges in one build: with 100 Mario offered (ruleset=hundred) Course World's Endless Challenge button opens
 // SMM1's 100 Mario Challenge; B on its difficulty select leads to SMM2's own Endless Challenge (its menu is underneath)
 // until the player leaves that menu. SMM1's rules apply only in the 100 Mario part.
@@ -125,9 +127,9 @@ bool net_pretend_online(void) { return mod_hundred() || (getenv("RECOMP_PRETEND_
 // off: SMM2's own Endless Challenge, against our server under SMM2's rules); costumes, mid-air shell jumps and
 // overlapping pipes will follow.
 typedef struct { const char *label, *desc; bool *value; bool def; } GameModToggle;
-static bool t_hundred = true, t_tgrcode;
+static bool t_hundred = true, t_tgrcode, t_local_nex;
 
-static void ini_set(const char *key, const char *val) {  // replace or add one key=value line
+void mod_ini_set(const char *key, const char *val) {  // replace or add one key=value line (also backend.c)
     const char *path = getenv("RECOMP_MOD_INI") ? getenv("RECOMP_MOD_INI") : "smm2mods.ini";
     char lines[64][512];
     int n = 0;
@@ -160,8 +162,16 @@ int game_mod_toggles(const GameModToggle **out) {
          "(no account needed). Off: the course server set in smm2mods.ini (server=, token=). Takes effect at the "
          "next start.",
          &t_tgrcode, false},
+        {"Online: local NEX test server (developers)",
+         "On: the game's own online code talks to a NEX test server on this computer (tools/nex_test_server) and "
+         "the mod's Course World answers are off. Off: our server (the mod). Nextendo Network: greyed out, awaiting "
+         "registration. Takes effect at the next start.",
+         &t_local_nex, false},
     };
-    if (!mod_hundred()) { *out = NULL; return 0; }  // (the mod itself is off: nothing to switch)
+    // (the mod is off and the backend is ours: nothing to switch)
+    mod_settings_load();
+    if (!g_mod.hundred && net_backend_setting() == NET_BACKEND_OURS) { *out = NULL; return 0; }
+    t_local_nex = net_backend_setting() == NET_BACKEND_LOCAL_NEX;
     t_hundred = !strcmp(g_mod.ruleset, "hundred");
     t_tgrcode = !strcmp(g_mod.courses, "tgrcode");
     *out = toggles;
@@ -170,13 +180,15 @@ int game_mod_toggles(const GameModToggle **out) {
 
 void game_mod_toggles_changed(void) {
     snprintf(g_mod.ruleset, sizeof g_mod.ruleset, "%s", t_hundred ? "hundred" : "smm2");
-    ini_set("ruleset", g_mod.ruleset);
+    mod_ini_set("ruleset", g_mod.ruleset);
     LOG("[mod] 100 Mario Challenge (SMM1) %s\n", t_hundred ? "on" : "off");
     const char *courses = t_tgrcode ? "tgrcode" : "server";
     if (strcmp(courses, g_mod.courses)) {  // (the server in use stays until the next start)
-        ini_set("courses", courses);
+        mod_ini_set("courses", courses);
         LOG("[mod] courses from %s at the next start\n", t_tgrcode ? "TGRCode" : "your server");
     }
+    if (t_local_nex != (net_backend_setting() == NET_BACKEND_LOCAL_NEX))
+        net_backend_select(t_local_nex ? NET_BACKEND_LOCAL_NEX : NET_BACKEND_OURS);  // (saved; the next start)
 }
 
 // Overrides are registered before the game's first instruction runs (dispatch reads them on every first call). Each

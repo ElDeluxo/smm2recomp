@@ -59,6 +59,13 @@ WEAK bool game_lan_config(char *relay, size_t relay_len, char *room, size_t room
     return false;
 }
 
+// ---- the game network stack's settings (runtime/net/netcfg.h), when a game keeps them in its own settings: none
+WEAK bool game_net_config(const char *key, char *out, size_t cap) {
+    (void)key, (void)out, (void)cap;
+    return false;
+}
+WEAK void game_net_config_set(const char *key, const char *val) { (void)key, (void)val; }
+
 // ---- save data written by the game (runtime/services/fs.c)
 WEAK void flags_ext_save_written(const char *path, uint64_t addr, int64_t off, int64_t size) {
     (void)path, (void)addr, (void)off, (void)size;

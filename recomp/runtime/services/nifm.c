@@ -35,7 +35,7 @@ static void online_request(NifmRequest *r, IpcReq *req, IpcResp *resp) {
 
 static void request(Service *s, IpcReq *req, IpcResp *resp) {
     NifmRequest *r = s->state;
-    if (net_pretend_online() && req->cmd != 2) { online_request(r, req, resp); return; }
+    if (net_online() && req->cmd != 2) { online_request(r, req, resp); return; }
     switch (req->cmd) {
     case 0: OUT(uint32_t, 0) = REQUEST_ERROR; resp_size(resp, 4); break;  // GetRequestState
     case 1: break;                                                         // GetResult
@@ -76,7 +76,7 @@ static void general(Service *s, IpcReq *req, IpcResp *resp) {
     }
     default: break;
     }
-    if (net_pretend_online()) switch (req->cmd) {
+    if (net_online()) switch (req->cmd) {
     case 5: {  // GetCurrentNetworkProfile -> buffer (left empty: no real network)
         IpcBuf *b = out_buf(req, 0);
         if (b && b->size) memset((void *)(uintptr_t)b->addr, 0, b->size);
