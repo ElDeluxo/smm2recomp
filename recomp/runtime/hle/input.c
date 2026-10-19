@@ -85,6 +85,10 @@ static bool test_event(const SDL_Event *e) {
     case SDL_EVENT_KEY_DOWN: case SDL_EVENT_KEY_UP: return e->key.which == TEST_DEVICE;
     case SDL_EVENT_TEXT_INPUT: return e->text.windowID == TEST_DEVICE;
     case SDL_EVENT_GAMEPAD_BUTTON_DOWN: case SDL_EVENT_GAMEPAD_BUTTON_UP: return e->gbutton.which == TEST_DEVICE;
+    // ("finger" tests: the mouse SDL makes up from a touch, marked with the test's window id)
+    case SDL_EVENT_MOUSE_MOTION: return e->motion.which == SDL_TOUCH_MOUSEID && e->motion.windowID == TEST_DEVICE;
+    case SDL_EVENT_MOUSE_BUTTON_DOWN: case SDL_EVENT_MOUSE_BUTTON_UP:
+        return e->button.which == SDL_TOUCH_MOUSEID && e->button.windowID == TEST_DEVICE;
     default: return false;
     }
 }
@@ -141,6 +145,18 @@ int input_pad_family(void) {
 
 bool input_gamepad_connected(void) { return pad_connected; }
 
+// (Android: the emulator's own keyboard, "qwerty2", has gamepad keys and SDL lists it as a gamepad; it would hide
+// the on-screen controller)
+static bool real_gamepad(SDL_JoystickID id) {
+#ifdef __ANDROID__
+    const char *n = SDL_GetGamepadNameForID(id);
+    if (n && !strcmp(n, "qwerty2")) return false;
+#else
+    (void)id;
+#endif
+    return true;
+}
+
 void input_handle_event(const SDL_Event *e) {
     extern bool touchpad_handle_event(const SDL_Event *e);  // runtime/ui/touchpad.mm (the on-screen controller)
     extern bool touch_handle_event(const SDL_Event *e);  // runtime/hle/touch.c (touches, the mouse as a finger)
@@ -150,7 +166,7 @@ void input_handle_event(const SDL_Event *e) {
         scanned = true;
         int n = 0;
         SDL_JoystickID *ids = SDL_GetGamepads(&n);
-        if (n > 0 && !pad) { pad = SDL_OpenGamepad(ids[0]); LOG("[input] gamepad: %s\n", SDL_GetGamepadName(pad)); note_family(); }
+        if (n > 0 && !pad && real_gamepad(ids[0])) { pad = SDL_OpenGamepad(ids[0]); LOG("[input] gamepad: %s\n", SDL_GetGamepadName(pad)); note_family(); }
         SDL_free(ids);
     }
     switch (e->type) {
@@ -160,7 +176,7 @@ void input_handle_event(const SDL_Event *e) {
         recompute_keyboard();
         break;
     case SDL_EVENT_GAMEPAD_ADDED:
-        if (!pad) { pad = SDL_OpenGamepad(e->gdevice.which); LOG("[input] gamepad: %s\n", SDL_GetGamepadName(pad)); note_family(); }
+        if (!pad && real_gamepad(e->gdevice.which)) { pad = SDL_OpenGamepad(e->gdevice.which); LOG("[input] gamepad: %s\n", SDL_GetGamepadName(pad)); note_family(); }
         break;
     case SDL_EVENT_GAMEPAD_REMOVED:
         if (pad && SDL_GetGamepadID(pad) == e->gdevice.which) { SDL_CloseGamepad(pad); pad = NULL; note_family(); }
@@ -188,6 +204,9 @@ static _Atomic int32_t script_lx, script_ly, script_rx, script_ry;
 //   at frame, up `frames` later): they reach menus and the on-screen keyboard first, as a player's would.
 // "frame:click:<x>/<y>:frames" holds the left mouse button at window point x, y (a real event: the mouse as a finger).
 // "frame:tap:<x>/<y>:frames" touches the touch screen at game pixel x, y (1280x720) for that long.
+// "frame:finger:<x>/<y>[/<dy>]:frames" a finger on the window at point x, y as SDL reports one on a phone / tablet (the
+//   mouse it makes up: moved there and pressed in the same instant, released `frames` later), sliding dy points down
+//   over that time: the overlay menu's touch input.
 // "frame:shot:<name>" saves the window (game + menus) to build/<name>.png.
 // LARECOMP_BIND_TEST="frame:pad|key:<input>:<host>,..." starts a rebind capture of <input> (bind_* name: a, zl,
 //   ls_up...) at that frame (the Controls tab shows it waiting) and presses <host> 90 frames later ("esc" cancels,
@@ -217,6 +236,22 @@ static void test_push(uint64_t frame, unsigned long start, unsigned long len, co
         SDL_Window *w = SDL_GetMouseFocus() ? SDL_GetMouseFocus() : SDL_GetKeyboardFocus();
         if (!w) { int n = 0; SDL_Window **ws = SDL_GetWindows(&n); if (n > 0) w = ws[0]; SDL_free(ws); }
         e.button.windowID = w ? SDL_GetWindowID(w) : 0;
+        SDL_PushEvent(&e);
+        return;
+    }
+    if (!strcmp(dev, "finger")) {  // "frame:finger:<x>/<y>[/<dy>]:frames" (SDL's mouse from a touch)
+        float x = 0, y = 0, dy = 0;
+        sscanf(arg, "%f/%f/%f", &x, &y, &dy);
+        if (frame < start || frame > start + len) return;
+        float fy = y + (len ? dy * (float)(frame - start) / (float)len : 0);
+        e.type = SDL_EVENT_MOUSE_MOTION;
+        e.motion.which = SDL_TOUCH_MOUSEID, e.motion.windowID = TEST_DEVICE, e.motion.x = x, e.motion.y = fy;
+        if (frame == start || dy != 0) SDL_PushEvent(&e);
+        if (frame != start && frame != start + len) return;
+        memset(&e, 0, sizeof e);
+        e.type = frame == start ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
+        e.button.which = SDL_TOUCH_MOUSEID, e.button.windowID = TEST_DEVICE, e.button.button = SDL_BUTTON_LEFT;
+        e.button.down = frame == start, e.button.x = x, e.button.y = fy;
         SDL_PushEvent(&e);
         return;
     }
@@ -280,7 +315,7 @@ static void host_test_frame(uint64_t frame) {
             unsigned long start = 0, len = 10;
             char dev[8] = "", name[400] = "";
             if (sscanf(tok, "%lu:%7[a-z]:%399[^:]:%lu", &start, dev, name, &len) < 3) continue;
-            if (!strcmp(dev, "type") || !strcmp(dev, "sdlpad") || !strcmp(dev, "sdlkey") || !strcmp(dev, "shot") || !strcmp(dev, "tap") || !strcmp(dev, "click")) {
+            if (!strcmp(dev, "type") || !strcmp(dev, "sdlpad") || !strcmp(dev, "sdlkey") || !strcmp(dev, "shot") || !strcmp(dev, "tap") || !strcmp(dev, "click") || !strcmp(dev, "finger")) {
                 test_push(frame, start, len, dev, name);
                 continue;
             }

@@ -1128,6 +1128,47 @@ renderers upload a texture when a sprite first uses it. Measured on the same cou
   Basics sets its own flag (which also grows the title-course rotation from 8 to 10), power-up
   lessons set nothing; Nina's introduction is one flag for every lesson kind (save +0x100 bit 10).
 
+## 2026-10-19 — Android: guest window at 0x800000000, game code built on the Mac, APK without Gradle
+The recomp builds for Android arm64 (`make -C recomp TARGET=android-arm64 GAME=smm2 apk install push-data`; how-to in
+`recomp/README.md`, "Building (Android)"). The choices:
+- **The guest window moves to 0x800000000-0xB20000000 on Android** (`GUEST_ORIGIN`, the mechanism the iOS work added:
+  the game code is generated for that base into `generated/smm2-0x800000000`). Android's arm64 kernels commonly give
+  apps a 39-bit address space (user space ends at 0x8000000000) and map libraries top-down from its end, with up to
+  ~64 GB of randomisation, so 0x7000000000-0x7320000000 falls where libraries and the zygote's mappings can already
+  sit, the same for every app forked from it, and an app can't re-exec for a fresh layout. Nothing maps low by default
+  (ART's heaps are under 4 GB, executables at ~0x55_5555_5555), and the window still fits the guest's 39-bit pointers.
+  It is claimed with `MAP_FIXED_NOREPLACE` from a constructor in `libmain.so` (when the activity loads it, before
+  SDL_main); if the claim fails, the app says so and logs what is mapped there. Evidence [obs]: the API 35 arm64
+  emulator (kernel 6.6, 4K pages) has a 39-bit space (highest mapping ends at 0x7fd2c01000) and the low window is
+  claimed. [obs] Whether the default window would have been free changes from boot to boot: one emulator boot had
+  nothing mapped in 0x7000000000-0x7320000000, the next had 742 mappings (6.4 GB) there, so the desktop base would
+  have failed on it while the low window was claimed both times.
+- **Game code compiled on the Mac, shipped in the APK** (as on iOS: no compiler on the device). It is a separate
+  `libsmm2game.so` (143 MB) linked against `libmain.so` (the runtime, SDL3's entry, static libc++ and shaderc), loaded
+  by name so it can stay inside the APK (`extractNativeLibs=false`, 16 KB-aligned). The APK carries code made from the
+  player's dump: their own devices only; `scripts/check_no_proprietary.py` blocks `.apk`, `.aab`, `.dex`, `.ipa` and
+  keystores.
+- **Android 13 (API 33) minimum:** the Vulkan backend needs 1.3 (dynamic rendering, synchronization2, timeline
+  semaphores), and the NDK's `libvulkan.so` exports the 1.3 entry points from API 33.
+- **No Gradle:** `tools/make_android_apk.sh` runs javac, d8, aapt2, zipalign and apksigner on SDL's own Java activity
+  (`org.libsdl.app.SDLActivity`) and a generated manifest, signed with a local debug key. Fewer moving parts than an
+  Android Studio project, and the same make-driven pipeline as the other targets.
+- **shaderc built from Google's sources** (`tools/android_deps.sh`, v2026.1 with its pinned glslang / SPIRV-Tools): the
+  NDK's bundled copy (2022) rejects `GL_EXT_texture_shadow_lod`, which the shader translator emits.
+- **Game files in the app's external files folder** (`/sdcard/Android/data/org.smcraft.smm2recomp/files`), pushed with
+  adb (`tools/android_push_data.sh`, links followed, then opened to the app: adb's files belong to the shell user).
+  Not bundled in the APK: 3 GB, and the APK should hold as little of the game as possible.
+- **Tested in the emulator only** (the owner has no Android device): the arm64 API 35 image with `-gpu host`, whose
+  Vulkan is gfxstream over MoltenVK. Two things that only showed there were fixed for all Vulkan targets rather than
+  worked around: GLSL helpers named like Metal built-ins (`fmin` / `fmax`, ambiguous once MoltenVK turns SPIR-V into
+  MSL), and the emulator keyboard counted as a gamepad (it hid the on-screen controller; Android only). The
+  SwiftShader mode is not an option (no 8- / 16-bit storage).
+- **BC textures decoded on the CPU** where the GPU lacks them (most phone GPUs), in the Vulkan backend as on iOS
+  (`runtime/nvn/bcsoft.c`); `RECOMP_BC_SOFT=1` forces it for testing.
+Would change: a device whose low window is taken (move `GUEST_ORIGIN`, or probe several bases at run time, which
+would need base-independent game code); a store build (then the game code would have to be built on the device or
+by the player, as the desktop packages do).
+
 ## 2026-10-19 — Recomp R2: replays keyed to the player's update, compared record for record with Ryujinx
 Input replays run in the recompiled game and in Ryujinx and stay identical (findings: `recomp/docs/smm2-bringup.md`,
 "Input replays"). The choices:
@@ -1551,6 +1592,22 @@ with the owner first.
   server only**; nothing connects to Nextendo's servers until the owner has their permission and an
   app registration (the owner is contacting them on Discord). The same pieces give us our own
   local NEX server route later.
+
+## 2026-10-19 — Releases: a launcher plus recompiler per platform, bring your own game
+
+**Owner-approved plan (relayed by mario-maker-c4), modelled on melee-pc** (github.com/999sian/melee-pc):
+per-platform releases that ship **no game code**. The generated C is Nintendo's code, so a release is
+a **launcher plus the recompiler**: the launcher takes the player's dump, checks its hash against the
+known v3.0.3 versions, uses the player's own prod.keys, extracts the dump, recompiles the game on
+first launch with the bundled zig, then runs it; it also takes an optional SMM1 dump (100 Mario,
+costumes) and checks for updates.
+
+- **Windows, Linux and macOS first** (builds on the existing first-launch recompile of the Windows
+  package). **Android and iOS later**, as build-it-yourself paths; iOS can't compile on the device,
+  so it needs a desktop helper that builds, signs and installs the app.
+- Release builds come from GitHub Actions, run only for releases (CI minutes budget).
+- The repository still has no top-level licence for the project's own code; the owner hasn't chosen
+  one (MIT like LAS Recomp, or GPL-3.0 like melee-pc). Until then none is added.
 
 ## 2026-10-19 — The game's own network stack: Mbed TLS, the runtime's trust policy, deny-by-default names
 

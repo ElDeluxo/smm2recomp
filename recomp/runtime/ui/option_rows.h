@@ -40,3 +40,5 @@ void opt_end(void);
 // the next page's first row takes the controller's cursor (Down on the tab bar: ImGui's own pick across the nested
 // panes was unreliable - some tabs went to a row further down, some nowhere). Cleared by the next opt_begin / call.
 void opt_focus_first(bool on);
+// touch (a finger last; the iPhone / iPad): taller rows, the ◀ ▶ arrows easier to hit
+void opt_touch(bool on);
