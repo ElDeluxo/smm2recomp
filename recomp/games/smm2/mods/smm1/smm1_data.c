@@ -367,12 +367,40 @@ static bool generate(void) {
 }
 
 // ---------------------------------------------------------------- the loader the layout player uses
+// "nx:<Layout>": one of SMM2's own layouts, from the game's romfs (Layout/<Layout>.Nin_NX_NVN.szs: Yaz0, a SARC holding
+// <Layout>.arc)
+static uint8_t *ld_arc_nx(const char *name, size_t *n) {
+    char p[400];
+    snprintf(p, sizeof p, "extracted/romfs/Layout/%s.Nin_NX_NVN.szs", name);
+    size_t zn, an, in;
+    uint8_t *z = smm1_read_file(p, &zn);
+    uint8_t *arc = z ? lyt_yaz0(z, zn, &an) : NULL;
+    free(z);
+    LSarc s;
+    uint8_t *out = NULL;
+    if (arc && lyt_sarc_open(&s, arc, an)) {
+        char inner[160];
+        snprintf(inner, sizeof inner, "%s.arc", name);
+        const uint8_t *a = lyt_sarc_get(&s, inner, &in);
+        if (a) {
+            out = malloc(in);
+            memcpy(out, a, in);
+            *n = in;
+        }
+        lyt_sarc_close(&s);
+    }
+    free(arc);
+    if (!out) fprintf(stderr, LOGP "SMM2 layout %s not found at %s\n", name, p);
+    return out;
+}
 static uint8_t *ld_arc(const char *name, size_t *n) {
+    if (!strncmp(name, "nx:", 3)) return ld_arc_nx(name + 3, n);
     char p[300];
     snprintf(p, sizeof p, CACHE "/layout/%s.arc", name);
     return smm1_read_file(p, n);
 }
 static uint8_t *ld_msbt(const char *layout, size_t *n) {
+    if (!strncmp(layout, "nx:", 3)) return NULL;  // (SMM2's texts are set by the caller)
     char p[300];
     snprintf(p, sizeof p, CACHE "/msg/%s.msbt", layout);
     return smm1_read_file(p, n);

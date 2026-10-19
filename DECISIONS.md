@@ -75,7 +75,13 @@ each on the game's own layout where it has one:
   records every server course from its start and hands over the cleared run), the server
   re-simulating it; refused, a plain `clear` with the time follows; with play options that change
   play (`Host::play_options_affect_play`) the clear goes without a time and no replay [inf].
-  Signed out: the anonymous clear report as before. 100 Mario in SMM2's presentation reports the
+  Signed out: the anonymous clear report as before.
+**Done:** each row is SMM2's own course card, `Play_CourseIn_00` read from the game's romfs at run
+time (the layout player now reads Switch BFLYT 8+/9 and BNTX textures with the runtime's Tegra
+deswizzle, BC and ASTC decoders), with the course name and maker set and the ID, flag, Mii and the
+card's other parts hidden. Each card sits where SMM1's row would be on that frame, scaled 0.6, so the
+roll keeps SMM1's timing, scroll and music. Its text uses SMM1's bitmap MessageFont: SMM2's message
+font is a scalable OpenType font from the console's system fonts, which the recomp does not ship. 100 Mario in SMM2's presentation reports the
   run's courses cleared after each clear (`endless`; the server keeps the best) [inf: as the run
   grows, so a run that ends any way counts].
 - **Input:** `FrontInput::text` (one typed key per tick: a character, '\u{8}' erase, '\n' done,

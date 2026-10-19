@@ -151,8 +151,14 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
         (`HUNDRED_NEXT` from the run side)
       - ✅ the ending from the binary: the rescue scene in the cleared course's style (SMB1, SMB3, SMW
         sprites; NSMBU's 3-D Mario posed with its walk), Peach (Toad on Easy), the Thank-you line by
-        difficulty, credits `Nwk_StaffCredit_01/00/03` with each course and maker, TO BE CONTINUED... /
-        END / THE END; nothing skips (as SMM1); a hook for the Mystery Mushroom reward
+        difficulty, the credits roll on SMM1's timing (`Nwk_StaffCredit_01/00/03`) with each cleared course
+        as SMM2's own course card (`Play_CourseIn_00` from the game's romfs: name banner, maker underneath,
+        no Mii), TO BE CONTINUED... / END / THE END; nothing skips (as SMM1); a hook for the Mystery
+        Mushroom reward
+      - ✅ checked against SMM1 itself in Cemu (owner's dump, private captures in
+        `evidence/cemu/`): colours composed in linear light into an sRGB frame as SMM1 does, font border
+        and shadow parameters, the balloon's place and dot pattern, the styles' skies, NSMBU Mario's yaw,
+        skinning, depth and lighting; NSMBU's 3-D sky is an approximation (fixed picture) [inf]
       - ✅ SMM1's music and sounds (Course World stream per difficulty with the beat bounce, the map
         streams, the ending and staff-roll music, the screens' sound banks), the game's sound faded under
       - ✅ a whole Super Expert run against the local server, unattended: select → map → card → course →

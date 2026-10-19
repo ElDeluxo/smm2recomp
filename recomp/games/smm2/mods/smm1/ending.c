@@ -7,10 +7,14 @@
 // 2. NetEndingScene: on black, after its fade-in, the staff credits play once at speed 1 - Nwk_StaffCredit_00 (16
 //    rows, InOut 1420 frames, "END") for Normal and Expert, _01 (8 rows, 1020, "TO BE CONTINUED...") for Easy, _03
 //    (6 rows, 1020, "THE END") for Super Expert - listing each cleared course (name, maker) under "Course Design".
+//    Each row is drawn in SMM2's look instead of SMM1's Mii row (owner, 2026-10-19: the makers' Miis are not there):
+//    SMM2's own course card (Play_CourseIn_00 from the game's romfs: the yellow course-name banner with the maker
+//    underneath, no Mii, no flag), placed where SMM1's row is on each frame, so the roll keeps SMM1's timing.
 //    180 frames after the credits the Mystery Mushroom costume window opens (the costumes mod: hundred_costume_reward).
 // Neither scene reads the controller: nothing skips [obs].
 #include "ending.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,6 +29,8 @@ __attribute__((weak)) int hundred_ending_costume(void) { return -1; }  // costum
 
 struct Ending {
     int d, tick, rescue_len, credits_start, credits_len, end, text_in, text_out, style;
+    Lay *rows[16];  // SMM2 course cards, one a cleared course
+    int nrows;
     bool done;
     Rescue *rescue;
     Lay *text, *credits;
@@ -71,12 +77,27 @@ Ending *ending_new_style(int d, int n, const struct hundred_credit *c, int style
             char part[32], p[96];
             snprintf(part, sizeof part, "L_MiiInfo_%02d", i);
             if (lyt_pane_index(e->credits->res, part) < 0) continue;
-            if (i >= n) { lay_show(e->credits, part, false); continue; }
-            snprintf(p, sizeof p, "%s/T_CourseName_00", part), lay_text(e->credits, p, c[i].name);
-            snprintf(p, sizeof p, "%s/T_MiiName_00", part), lay_text(e->credits, p, c[i].maker);
-            // no SMM1 country code for our makers: as SMM1 does for codes >= 195, no flag frame and no flag
-            snprintf(p, sizeof p, "%s/P_Frame_00", part), lay_show(e->credits, p, false);
-            snprintf(p, sizeof p, "%s/L_NationalFlag_00", part), lay_show(e->credits, p, false);
+            lay_show(e->credits, part, false);  // (SMM2's card is drawn in its place)
+            if (i >= n) continue;
+            Lay *row = lay_open("nx:Play_CourseIn_00");
+            if (!row) {  // (no SMM2 layout: SMM1's row, without the Mii's flag)
+                lay_show(e->credits, part, true);
+                snprintf(p, sizeof p, "%s/T_CourseName_00", part), lay_text(e->credits, p, c[i].name);
+                snprintf(p, sizeof p, "%s/T_MiiName_00", part), lay_text(e->credits, p, c[i].maker);
+                snprintf(p, sizeof p, "%s/P_Frame_00", part), lay_show(e->credits, p, false);
+                snprintf(p, sizeof p, "%s/L_NationalFlag_00", part), lay_show(e->credits, p, false);
+                continue;
+            }
+            lay_hold_end(row, "AnimDefault");
+            lay_text(row, "T_CourseName_00", c[i].name);
+            lay_text(row, "T_PlayerName_00", c[i].maker);
+            static const char *hide[] = {"N_Align_00", "N_Info_00", "N_EventAlign_00", "N_EventFirst_00",
+                                         "P_GhostVolumenone_00", "L_LoadingGhost_00", "L_MiiIcon_00",
+                                         "L_NationalFlag_00", "T_CourseID_00", "N_Caracter_00", NULL};
+            for (int k = 0; hide[k]; k++) lay_show(row, hide[k], false);
+            lay_show(row, "N_MakerAnim_00", true);
+            e->rows[i] = row;
+            if (i + 1 > e->nrows) e->nrows = i + 1;
         }
     }
     e->end = e->credits_start + e->credits_len + 180;
@@ -86,6 +107,7 @@ void ending_free(Ending *e) {
     if (!e) return;
     rescue_free(e->rescue);
     lay_free(e->text), lay_free(e->credits);
+    for (int i = 0; i < e->nrows; i++) lay_free(e->rows[i]);
     free(e);
 }
 int ending_length(const Ending *e) { return e ? e->end : 0; }
@@ -143,6 +165,22 @@ void ending_draw(Ending *e, LQuads *out) {
     }
     g_bg[0] = g_bg[1] = g_bg[2] = 0, g_bg[3] = 255;
     if (e->credits) lay_draw(e->credits, t, out);
+    // the SMM2 cards where SMM1's rows are: the card's banner (1150 x 162, centred 223 above its root) at 0.6, so the
+    // cards keep gaps between them [inf: a choice, SMM1 had no such cards]
+    for (int i = 0; e->credits && i < e->nrows; i++) {
+        if (!e->rows[i]) continue;
+        char part[32];
+        snprintf(part, sizeof part, "L_MiiInfo_%02d", i);
+        float cr[4][2], a;
+        bool vis;
+        if (!lyt_pane_global(e->credits->in, part, cr, &a, &vis) || a <= 0) continue;
+        float cx = (cr[0][0] + cr[3][0]) / 2, cy = (cr[0][1] + cr[3][1]) / 2;
+        const float k = 0.6f;  // (97 high on SMM1's 120-unit row pitch)
+        float xy[2] = {cx, cy - 223 * k}, sc[2] = {k, k};
+        lyt_set_pane(e->rows[i]->in, "N_All_00", xy, a * 255);
+        lyt_set_pane_scale(e->rows[i]->in, "N_All_00", sc);
+        lay_draw(e->rows[i], t, out);
+    }
     int cf = t - (e->rescue_len + FADE);
     if (cf < FADE) fade_quad(out, 1 - (float)cf / FADE);
 }

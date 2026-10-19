@@ -280,6 +280,7 @@ bool lyt_clear_text(LInst *i, const char *pane_path);
 bool lyt_set_visible(LInst *i, const char *pane_path, int vis);  // 0 hide, 1 show, -1 back to the animations
 // Force a pane's translate (x, y) / alpha (0-255) over its animations (NULL / < 0: keep the animated value).
 bool lyt_set_pane(LInst *i, const char *pane_path, const float *xy, float alpha);
+bool lyt_set_pane_scale(LInst *i, const char *pane_path, const float *s);  // NULL: back to the animations
 // A pane's values after the bound animations (in its parent's space).
 typedef struct {
     float t[3], r[3], s[2], size[2], alpha;
