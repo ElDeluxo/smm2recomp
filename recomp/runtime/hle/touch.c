@@ -76,6 +76,16 @@ static void touch_event(SDL_FingerID id, float fx, float fy, int kind) {  // kin
 
 // (tests: LARECOMP_HOST_INPUT "frame:tap:x/y:frames", runtime/hle/input.c) a touch at game pixels
 #define TEST_FINGER ((SDL_FingerID)0x54455354ull)
+// The first finger down now (game pixels), for a mod's own touch areas over the game's screens; false: none.
+bool touch_first(int32_t *x, int32_t *y) {
+    bool any = false;
+    pthread_mutex_lock(&lock);
+    for (int i = 0; i < MAX_TOUCH && !any; i++)
+        if (touches[i].id && !touches[i].ended) *x = touches[i].x, *y = touches[i].y, any = true;
+    pthread_mutex_unlock(&lock);
+    return any;
+}
+
 void touch_test(int32_t x, int32_t y, bool down) {
     pthread_mutex_lock(&lock);
     Touch *t = NULL;

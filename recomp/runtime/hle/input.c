@@ -219,6 +219,9 @@ static void push_key(SDL_Scancode sc, SDL_Keymod mod, bool down) {
     e.key.key = SDL_GetKeyFromScancode(sc, mod, false);
     SDL_PushEvent(&e);
 }
+// a real key event by SDL key name, as a player's ("Left", "K"): for a mod's tests that act on what is on screen
+void input_test_key(const char *name, bool down) { push_key(SDL_GetScancodeFromName(name), SDL_KMOD_NONE, down); }
+
 static void test_push(uint64_t frame, unsigned long start, unsigned long len, const char *dev, const char *arg) {
     SDL_Event e;
     memset(&e, 0, sizeof e);
