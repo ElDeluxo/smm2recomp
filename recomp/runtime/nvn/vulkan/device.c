@@ -272,12 +272,24 @@ static VkPresentModeKHR present_mode(void) {
     return VK_PRESENT_MODE_FIFO_KHR;
 }
 
+static void surface_lost(void);
 static void create_swapchain(void) {
     VkSurfaceCapabilitiesKHR caps;
-    VK_CHECK(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(g_vk.phys, g_vk.surface, &caps));
+    VkResult cr = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(g_vk.phys, g_vk.surface, &caps);
+    if (cr == VK_ERROR_SURFACE_LOST_KHR) { surface_lost(); return; }  // (Android, in the background: vk_frame_begin)
+    VK_CHECK(cr);
     int w, h;
     SDL_GetWindowSizeInPixels(window, &w, &h);
     VkExtent2D ext = caps.currentExtent.width != UINT32_MAX ? caps.currentExtent : (VkExtent2D){(uint32_t)w, (uint32_t)h};
+    VkSurfaceTransformFlagBitsKHR xform = caps.currentTransform;
+#ifdef __ANDROID__
+    // A phone held in landscape reports a 90 / 270 degree transform (its display is portrait) with a landscape size:
+    // the image is made upright at that size and the compositor turns it (no pre-rotation).
+    static int logged;
+    if (!logged++) LOG("[vk] surface %ux%u, transform %#x, window %dx%d\n", caps.currentExtent.width, caps.currentExtent.height,
+                       caps.currentTransform, w, h);
+    if (caps.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR) xform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+#endif
     if (!ext.width || !ext.height) return;  // minimised
     uint32_t nf = 0;
     vkGetPhysicalDeviceSurfaceFormatsKHR(g_vk.phys, g_vk.surface, &nf, NULL);
@@ -288,6 +300,9 @@ static void create_swapchain(void) {
     VkSurfaceFormatKHR sf = fmts[0];
     for (uint32_t i = 0; i < nf; i++)
         if (fmts[i].format == VK_FORMAT_B8G8R8A8_UNORM && fmts[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) { sf = fmts[i]; break; }
+    if (sf.format != VK_FORMAT_B8G8R8A8_UNORM)  // (Android offers RGBA: still UNORM, not an sRGB format that would re-encode)
+        for (uint32_t i = 0; i < nf; i++)
+            if (fmts[i].format == VK_FORMAT_R8G8B8A8_UNORM && fmts[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) { sf = fmts[i]; break; }
     uint32_t count = caps.minImageCount + 1;
     if (caps.maxImageCount && count > caps.maxImageCount) count = caps.maxImageCount;
     if (count > 8) count = 8;
@@ -296,10 +311,18 @@ static void create_swapchain(void) {
         .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR, .surface = g_vk.surface, .minImageCount = count,
         .imageFormat = sf.format, .imageColorSpace = sf.colorSpace, .imageExtent = ext, .imageArrayLayers = 1,
         .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-        .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE, .preTransform = caps.currentTransform,
-        .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR, .presentMode = present_mode(), .clipped = VK_TRUE,
+        .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE, .preTransform = xform,
+        .compositeAlpha = caps.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR ? VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR
+                                                                                          : VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR,
+        .presentMode = present_mode(), .clipped = VK_TRUE,
         .oldSwapchain = old};
-    VK_CHECK(vkCreateSwapchainKHR(g_vk.dev, &ci, NULL, &g_vk.swapchain));
+    cr = vkCreateSwapchainKHR(g_vk.dev, &ci, NULL, &g_vk.swapchain);
+    if (cr == VK_ERROR_SURFACE_LOST_KHR || cr == VK_ERROR_NATIVE_WINDOW_IN_USE_KHR) {
+        g_vk.swapchain = old;
+        surface_lost();
+        return;
+    }
+    VK_CHECK(cr);
     for (uint32_t i = 0; i < g_vk.sc_count; i++) vkDestroyImageView(g_vk.dev, g_vk.sc_views[i], NULL);
     if (old) vkDestroySwapchainKHR(g_vk.dev, old, NULL);
     g_vk.sc_format = sf.format;
@@ -317,6 +340,32 @@ static void create_swapchain(void) {
 static void recreate_swapchain(void) {
     vkDeviceWaitIdle(g_vk.dev);
     create_swapchain();
+}
+
+// The window's surface went away (Android destroys it while the app is in the background and makes a new one on
+// return): swapchain and surface dropped; vk_frame_begin makes new ones from the window once it has one again.
+static void surface_lost(void) {
+    vkDeviceWaitIdle(g_vk.dev);
+    for (uint32_t i = 0; i < g_vk.sc_count; i++) vkDestroyImageView(g_vk.dev, g_vk.sc_views[i], NULL);
+    g_vk.sc_count = 0;
+    if (g_vk.swapchain) vkDestroySwapchainKHR(g_vk.dev, g_vk.swapchain, NULL);
+    g_vk.swapchain = VK_NULL_HANDLE;
+    if (g_vk.surface) vkDestroySurfaceKHR(g_vk.inst, g_vk.surface, NULL);
+    g_vk.surface = VK_NULL_HANDLE;
+}
+
+static bool recreate_surface(void) {
+    surface_lost();
+    if (!SDL_Vulkan_CreateSurface(window, g_vk.inst, NULL, &g_vk.surface)) {
+        static int nlog;
+        if (nlog++ < 5) LOG("[vk] surface lost; no new one yet: %s\n", SDL_GetError());
+        return false;
+    }
+    VkBool32 present = VK_FALSE;
+    vkGetPhysicalDeviceSurfaceSupportKHR(g_vk.phys, g_vk.qfam, g_vk.surface, &present);
+    LOG("[vk] surface recreated (present support %d)\n", present);
+    create_swapchain();
+    return g_vk.swapchain != VK_NULL_HANDLE;
 }
 
 // ================================================================== frames (start screen and game)
@@ -355,6 +404,7 @@ bool vk_frame_begin(const float clear[4]) {
     int w, h;
     SDL_GetWindowSizeInPixels(window, &w, &h);
     if (!w || !h) return false;  // minimised
+    if (!g_vk.surface && !recreate_surface()) return false;
     if (!g_vk.swapchain || (uint32_t)w != g_vk.sc_extent.width || (uint32_t)h != g_vk.sc_extent.height) recreate_swapchain();
     if (!g_vk.swapchain) return false;
     static int trace = -1;
@@ -364,8 +414,8 @@ bool vk_frame_begin(const float clear[4]) {
     if (!acquire_sem[slot]) acquire_sem[slot] = binary_semaphore();
     vk_wait_seq(slot_seq[slot]);
     VkResult r = vkAcquireNextImageKHR(g_vk.dev, g_vk.swapchain, UINT64_MAX, acquire_sem[slot], VK_NULL_HANDLE, &cur_frame.image);
-    if (r == VK_ERROR_OUT_OF_DATE_KHR) {
-        recreate_swapchain();
+    if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_ERROR_SURFACE_LOST_KHR) {
+        if (r == VK_ERROR_SURFACE_LOST_KHR ? !recreate_surface() : (recreate_swapchain(), !g_vk.swapchain)) return false;
         r = vkAcquireNextImageKHR(g_vk.dev, g_vk.swapchain, UINT64_MAX, acquire_sem[slot], VK_NULL_HANDLE, &cur_frame.image);
     }
     if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR) { LOG("[vk] acquire failed: %d\n", r); return false; }
@@ -437,6 +487,7 @@ void vk_frame_end(const char *shot_path) {
                            .swapchainCount = 1, .pSwapchains = &g_vk.swapchain, .pImageIndices = &img};
     VkResult r = vkQueuePresentKHR(g_vk.queue, &pi);
     if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) recreate_swapchain();
+    else if (r == VK_ERROR_SURFACE_LOST_KHR) recreate_surface();
     cur_frame.ok = false;
     if (shot_path) {
         vk_wait_seq(seq);
@@ -504,6 +555,10 @@ static bool save_png_plain(const char *path, const uint8_t *rgba, uint32_t w, ui
 #endif
 
 void vk_save_png(const char *path, const uint8_t *rgba, uint32_t w, uint32_t h) {
+#ifdef __ANDROID__  // (SDL takes a relative path as one in the app's internal storage: keep it in the data root)
+    char abs[1200];
+    if (path[0] != '/' && getcwd(abs, 1000)) { snprintf(abs + strlen(abs), sizeof abs - strlen(abs), "/%s", path); path = abs; }
+#endif
 #if SDL_VERSION_ATLEAST(3, 4, 0)
     SDL_Surface *s = SDL_CreateSurfaceFrom((int)w, (int)h, SDL_PIXELFORMAT_ABGR8888, (void *)rgba, (int)w * 4);
     if (!s || !SDL_SavePNG(s, path)) LOG("[vk] saving %s failed: %s\n", path, SDL_GetError());
@@ -724,6 +779,9 @@ void ui_window_init(void) {
     int win_w = 1280, win_h = 720;
     if (getenv("LARECOMP_WINDOW")) sscanf(getenv("LARECOMP_WINDOW"), "%dx%d", &win_w, &win_h);
     SDL_WindowFlags wflags = SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+#ifdef __ANDROID__
+    wflags |= SDL_WINDOW_FULLSCREEN;  // (immersive: no status / navigation bar over the game)
+#endif
     if (getenv("LARECOMP_HIDDEN")) wflags |= SDL_WINDOW_HIDDEN;
     {   // scripted test runs (user input ignored: runtime/hle/input.c input_user_blocked) open without taking the
         // keyboard focus from whatever the player is doing

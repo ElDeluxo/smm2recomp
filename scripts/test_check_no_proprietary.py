@@ -70,6 +70,10 @@ class CheckFileTests(unittest.TestCase):
         self.assertTrue(check_file(self.write("blob.bin", b"\xcf\xfa\xed\xfe" + b"\x00" * 16)))
         self.assertTrue(check_file(self.write("shader.dat", b"\x03\x02\x23\x07" + b"\x00" * 16)))
 
+    def test_app_packages_blocked(self):
+        for name in ("SMM2Recomp.apk", "app.aab", "classes.dex", "SMM2Recomp.ipa", "android-debug.keystore"):
+            self.assertTrue(check_file(self.write(name, b"PK\x03\x04" + b"\x00" * 16)), name)
+
     def test_player_trace_records_blocked(self):
         self.assertTrue(check_file(self.write("walk.bin", b"TRC1" + b"\x00" * 32)))
 
