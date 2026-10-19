@@ -178,7 +178,15 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     Mario in SMB1 courses; in game: the costume on from the start (Peach, Samus), the pickup (Super Mushroom
     → Block costume, its power-up sound), the goal and death sounds, the reward window after the ending;
     ⬜ a hit taking it off (hook in place, not yet seen in a run), jump / taunt sounds, more than one costume per
-    course), mid-air shell jumps, overlapping (overlay) pipes, and more from research/specs/smm1-extras*
+    course); the SMM1 extras (`mods/smm1_extras.c`, all off by default, `recomp/docs/mods.md` "SMM1 extras"):
+    ✅ "Overlapping pipes (SMM1)" (one hook in the game's placement check, main+0xfe827c: SMM2 rejects a
+    course whose pipes overlap and plays a blank one, and its Course Maker snaps a pipe dragged onto another back;
+    with the setting on, both test courses (ours and the pipes of SMM1's sample course 95, read from the SMM1
+    dump) load and play, and a pipe dragged onto another stays; with it off, a replay against Ryujinx is
+    identical in 606 / 606 updates and the whole player object; both switches on screen in the Mods tab: `evidence/smm1-extras/`); 🔄 "Mid-air shell
+    jumps (SMM1)" (hooks in place: SMM1's flat falling stomp window on shells, main+0x1267ce8, and the 5-frame
+    instead of 16-frame no-hit window after a mid-air kick off a wall, main+0x1202c88; ⬜ a test course where
+    the SMM1 jump works with it on); ⬜ more from research/specs/smm1-extras*
   - 🔄 **Our open-source server everywhere the game would reach Nintendo** (`recomp/docs/mods.md`,
     `games/smm2/mods/world.c`): ✅ Course World's course lists (Hot, Popular, New, detailed search, a
     maker's courses) from `/api/courses`, the course page (likes, plays, clear rate, world record, maker
@@ -204,10 +212,28 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     no mod override involved (`evidence/proof2/`, private); ✅ UDP port parking for PIA; ⬜ course lists, downloads
     and the rest of DataStore on the local NEX server; ⬜ Nextendo (owner's go-ahead, app registration, sign-in)
 
-- ⬜ **Releases (melee-pc style, owner-approved)**: per-platform launcher + recompiler, no game code;
-  dump picker with v3.0.3 hash check, the player's prod.keys, extraction, first-launch recompile with
-  bundled zig, optional SMM1 dump, update check. Windows / Linux / macOS first, then Android / iOS
-  build-it-yourself (iOS via a desktop build-sign-install helper). GitHub Actions on release only.
+- 🔄 **Releases (melee-pc style, owner-approved)**: per-platform launcher + recompiler, no game code
+  (`recomp/README.md` "Player packages and the setup screen", DECISIONS.md "How it's built")
+  - ✅ **Setup screen** in the runtime (`runtime/ui/launcher.mm`, SDL3 + ImGui, Metal / Vulkan) in place of the game
+    until it's set up: the dump (NSP / XCI or extracted folders), prod.keys + firmware (suggested from Ryujinx /
+    yuzu), optional SMM1 dump; then the v3.0.3 check + layout (`games/smm2/setup.py --source`), fonts and system
+    data (`sysdata.py`), the first-launch recompile with progress (`runtime/gamebuild.c`, bundled Python + zig),
+    and the game in the same window. Errors per step with what to do; keys read in place, values never shown or
+    logged (hactool's output masked). Back to it: Quit to Start Screen, Mods > Game files, `--setup`
+  - ✅ **Known-good v3.0.3 table** (`games/smm2/versions.py`): build ids, SHA-256 of the 4 ExeFS files, title
+    versions (3.0.3 = update v458752), program NCA ids - hashes of the owner's files only
+  - ✅ **Update check**: GitHub's latest release vs the build's tag, notice + link only (setup screen and the
+    overlay menu's Mods tab, "Check for updates" switch); `RECOMP_UPDATE_TAGS=v0.2.0` shows it offline
+  - ✅ **Packages** (`make app-macos`, `make TARGET=... package`; each checked by `scripts/check_package.py`,
+    which fails on anything from a dump - names, magics, the known ExeFS hashes, key lines, recompiled code):
+    macOS `.app` 319 MB → zip 96 MB (macOS 15+, ad hoc signed); Windows zip 113 MB (425 MB);
+    Linux x86-64 tar.gz LINUX64 ; Linux arm64 tar.gz LINUXARM
+  - ✅ **Release workflow** `.github/workflows/release.yml`: only on `v*` tags; Windows + Linux cross-built in a
+    Debian 13 container, macOS on a macOS runner, every package re-checked, attached to the release (a draft if
+    none) - ⬜ not run yet (no tag)
+  - E2E_MAC
+  - ⬜ Windows / Linux packages not run on their systems yet; Linux AppImage (bundled SDL3); notarized macOS app
+    (needs a Developer ID); Android / iOS stay build-it-yourself (iOS: a desktop build-sign-install helper)
 
 | Platform | Builds | Boots to title | Plays courses | Frames match Ryujinx | Input replays in sync |
 |---|---|---|---|---|---|

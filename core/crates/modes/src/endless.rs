@@ -942,7 +942,10 @@ impl Finished {
 /// difficulty, the last difficulty chosen and the lifetime skip count (0–3, §2.5).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct EndlessSave {
+    /// SMM2's Endless runs (ruleset smm2).
     pub runs: [Option<RunRecord>; 4],
+    /// The 100 Mario runs (ruleset hundred), kept apart: a New Game in one mode never ends the other's run.
+    pub hundred: [Option<RunRecord>; 4],
     pub best: [u32; 4],
     pub last: Option<Difficulty>,
     pub skips: u32,
@@ -979,11 +982,60 @@ impl EndlessSave {
         self.new_game_with(d, Ruleset::Smm2, now)
     }
 
-    /// New Game under `ruleset` (100 Mario: 100 lives and a goal).
+    /// New Game under `ruleset` (100 Mario: 100 lives and a goal), in that ruleset's slot.
     pub fn new_game_with(&mut self, d: Difficulty, ruleset: Ruleset, now: u64) -> &mut RunRecord {
         self.last = Some(d);
         let best = self.best[d.index()];
-        self.runs[d.index()].insert(RunRecord::with_rules(ruleset, d, best, now))
+        self.slots_mut(ruleset)[d.index()].insert(RunRecord::with_rules(ruleset, d, best, now))
+    }
+
+    fn slots_mut(&mut self, ruleset: Ruleset) -> &mut [Option<RunRecord>; 4] {
+        match ruleset {
+            Ruleset::Smm2 => &mut self.runs,
+            Ruleset::Hundred => &mut self.hundred,
+        }
+    }
+
+    /// The run of `ruleset` on `d`.
+    pub fn run_of(&self, ruleset: Ruleset, d: Difficulty) -> Option<&RunRecord> {
+        match ruleset {
+            Ruleset::Smm2 => self.runs[d.index()].as_ref(),
+            Ruleset::Hundred => self.hundred[d.index()].as_ref(),
+        }
+    }
+
+    pub fn run_of_mut(&mut self, ruleset: Ruleset, d: Difficulty) -> Option<&mut RunRecord> {
+        self.slots_mut(ruleset)[d.index()].as_mut()
+    }
+
+    /// Which slot a request on `d` means: `want` when given, else the one holding a run that can
+    /// go on, else the one holding a run at all (SMM2's when both or neither do).
+    pub fn slot(&self, d: Difficulty, want: Option<Ruleset>) -> Ruleset {
+        let live = |r: Ruleset| self.run_of(r, d).is_some_and(|x| x.status.can_continue());
+        let held = |r: Ruleset| self.run_of(r, d).is_some();
+        let hundred = (live(Ruleset::Hundred) && !live(Ruleset::Smm2))
+            || (held(Ruleset::Hundred) && !held(Ruleset::Smm2));
+        want.unwrap_or(if hundred {
+            Ruleset::Hundred
+        } else {
+            Ruleset::Smm2
+        })
+    }
+
+    /// Finish the run of `ruleset` on `d` (see [`Self::finish`]).
+    pub fn finish_of(&mut self, ruleset: Ruleset, d: Difficulty) -> Option<Finished> {
+        let r = self.slots_mut(ruleset)[d.index()].take()?;
+        // a 100 Mario run isn't an Endless score
+        let best = if r.status.ruleset == Ruleset::Smm2 {
+            self.update_best(d, r.status.clears)
+        } else {
+            self.best[d.index()]
+        };
+        Some(Finished {
+            clears: r.status.clears,
+            best,
+            new_high_score: r.status.new_high_score(),
+        })
     }
 
     /// Keep the best clears (called after every clear, so a suspended run counts too).
@@ -1000,18 +1052,7 @@ impl EndlessSave {
 
     /// Finish the run (game over): update the best and clear the run.
     pub fn finish(&mut self, d: Difficulty) -> Option<Finished> {
-        let r = self.runs[d.index()].take()?;
-        // a 100 Mario run isn't an Endless score
-        let best = if r.status.ruleset == Ruleset::Smm2 {
-            self.update_best(d, r.status.clears)
-        } else {
-            self.best[d.index()]
-        };
-        Some(Finished {
-            clears: r.status.clears,
-            best,
-            new_high_score: r.status.new_high_score(),
-        })
+        self.finish_of(Ruleset::Smm2, d)
     }
 
     pub fn to_json(&self) -> Value {
@@ -1024,6 +1065,10 @@ impl EndlessSave {
         json!({
             "version": 1,
             "runs": per(&|d| self.run(d).map_or(Value::Null, RunRecord::to_json)),
+            "hundred_runs": per(&|d| {
+                self.run_of(Ruleset::Hundred, d)
+                    .map_or(Value::Null, RunRecord::to_json)
+            }),
             "best": per(&|d| json!(self.best[d.index()])),
             "last": self.last.map(Difficulty::name),
             "skips": self.skips,
@@ -1034,9 +1079,14 @@ impl EndlessSave {
     pub fn from_json(v: &Value) -> Self {
         let mut s = Self::default();
         for d in Difficulty::ALL {
-            let r = &v["runs"][d.name()];
-            if r.is_object() {
-                s.runs[d.index()] = Some(RunRecord::from_json(r));
+            // (files from before the separate slots kept 100 Mario runs under "runs": by their ruleset)
+            for key in ["runs", "hundred_runs"] {
+                let r = &v[key][d.name()];
+                if r.is_object() {
+                    let rec = RunRecord::from_json(r);
+                    let ruleset = rec.status.ruleset;
+                    s.slots_mut(ruleset)[d.index()] = Some(rec);
+                }
             }
             s.best[d.index()] = v["best"][d.name()].as_u64().unwrap_or(0) as u32;
         }
@@ -2112,6 +2162,36 @@ mod tests {
     }
 
     #[test]
+    fn the_two_rulesets_keep_their_own_slots_and_old_saves_are_sorted_in() {
+        let mut save = EndlessSave::default();
+        save.new_game_with(Difficulty::Easy, Ruleset::Smm2, 1);
+        save.new_game_with(Difficulty::Easy, Ruleset::Hundred, 2);
+        assert_eq!(save.run(Difficulty::Easy).unwrap().status.lives, 5);
+        assert_eq!(
+            save.run_of(Ruleset::Hundred, Difficulty::Easy)
+                .unwrap()
+                .status
+                .lives,
+            100
+        );
+        let back = EndlessSave::from_json(&save.to_json());
+        assert_eq!(back, save);
+        // a file from before the slots: a 100 Mario run under "runs"
+        let mut old = save.to_json();
+        old["runs"]["easy"] = old["hundred_runs"]["easy"].take();
+        let back = EndlessSave::from_json(&old);
+        assert!(back.run(Difficulty::Easy).is_none());
+        assert_eq!(back.slot(Difficulty::Easy, None), Ruleset::Hundred);
+        assert_eq!(
+            back.run_of(Ruleset::Hundred, Difficulty::Easy)
+                .unwrap()
+                .status
+                .lives,
+            100
+        );
+    }
+
+    #[test]
     fn a_hundred_mario_run_has_100_lives_free_skips_and_an_end() {
         let mut save = EndlessSave::default();
         let rec = save.new_game_with(Difficulty::Easy, Ruleset::Hundred, 10);
@@ -2141,7 +2221,7 @@ mod tests {
         let back = RunStatus::from_json(&rec.status.to_json());
         assert_eq!(back, rec.status);
         // not an Endless score
-        let f = save.finish(Difficulty::Easy).unwrap();
+        let f = save.finish_of(Ruleset::Hundred, Difficulty::Easy).unwrap();
         assert_eq!((f.clears, save.best[0]), (8, 0));
         // SMM2's rules are unchanged
         assert_eq!(Ruleset::Smm2.goal(Difficulty::SuperExpert), 0);

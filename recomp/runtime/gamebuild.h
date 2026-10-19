@@ -19,6 +19,10 @@ typedef struct {
 bool gamebuild_run(const char *game_dir, const GameBuildOpts *opts, char *why, size_t why_size);
 // The generator and the compiler are there (shipped builds; a source checkout with tools/venv and clang).
 bool gamebuild_available(void);
+// The Python the generator and the setup scripts (runtime/ui/launcher.mm) run with: the one that comes with the
+// package (python/), else tools/venv (a source checkout, or a package whose player made it). Also sets up the
+// environment the children get (no bytecode written into the app, no user site-packages, UTF-8). false: none.
+bool gamebuild_python(char *out, size_t n);
 
 #ifdef __cplusplus
 }

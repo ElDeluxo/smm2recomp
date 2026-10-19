@@ -18,6 +18,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --quiet
 cd "$root"
 python3 scripts/test_check_no_proprietary.py -q
+python3 scripts/test_check_package.py -q
 if $recomp && [ "$(uname -s)" = Darwin ]; then
   make -s -C "$root/recomp" GAME=smm2 -j8 runtime-objs
 fi

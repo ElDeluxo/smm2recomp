@@ -316,6 +316,12 @@ $(B)/rt/ui/%.o: runtime/ui/%.mm $(RT_HDRS)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $(UIFLAGS) -c $< -o $@
 
+# The release this build is (the setup screen shows it; its update check compares it with GitHub's latest release):
+# the tag, e.g. v0.1.0 (release builds pass RECOMP_VERSION=<tag>), else git's description, else "dev"
+RECOMP_VERSION ?= $(shell git describe --tags --match 'v[0-9]*' 2>/dev/null || echo dev)
+$(B)/rt/ui/launcher.o: CXXFLAGS += -DRECOMP_VERSION='"$(RECOMP_VERSION)"'
+$(B)/rt/ui/launcher.o: runtime/gamebuild.h runtime/paths.h
+
 $(B)/imgui/%.o: $(IMGUI)/%.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
@@ -368,11 +374,23 @@ install: apk
 push-data:
 	tools/android_push_data.sh $(DATA)
 
-# A player package of a cross build (runtime, compiler, generator; nothing from the game): dist/SMM2Recomp-<target>.zip
-#   make TARGET=windows-x86_64 GAME=smm2 DEPS=<deps> all package
-package: all
-	$(if $(TARGET),,$(error package: pass TARGET=windows-x86_64 | linux-x86_64 | linux-aarch64))
-	tools/package.sh $(TARGET) $(B) $(GAME_ID) $(GAME_HLE) $(DEPS)
+# A player package of a cross build (runtime with its setup screen, Python, recompiler, zig, hactool; nothing from the
+# game): dist/SMM2Recomp-windows-x86_64.zip, dist/SMM2Recomp-linux-<arch>.tar.gz
+#   make TARGET=windows-x86_64 GAME=smm2 DEPS=<deps> package
+package: $(EXE)
+	$(if $(TARGET),,$(error package: pass TARGET=windows-x86_64 | linux-x86_64 | linux-aarch64 (macOS: make app-macos)))
+	RECOMP_VERSION=$(RECOMP_VERSION) tools/package.sh $(TARGET) $(B) $(GAME_ID) $(DEPS)
+
+# The macOS player package: dist/SMM2Recomp-macos-arm64.zip with SMM2Recomp.app (runtime built for MACOS_MIN against
+# SDL3 from tools/build_deps_macos.sh; the rest as the other packages). RECOMP_MACOS_IDENTITY=<Developer ID> signs it
+# with that identity, else ad hoc. (macOS 15: what zig 0.17 itself needs.)
+APP_MACOS_MIN ?= 15.0
+app-macos:
+	$(if $(filter macos,$(PLATFORM)),,$(error app-macos: on macOS))
+	[ -f build/deps/lib/libSDL3.0.dylib ] || MACOS_MIN=$(APP_MACOS_MIN) tools/build_deps_macos.sh
+	$(MAKE) GAME=$(GAME) B=build/$(GAME)-app DEPS=$(realpath build)/deps MACOS_MIN=$(APP_MACOS_MIN) \
+	    RECOMP_VERSION=$(RECOMP_VERSION) build/$(GAME)-app/$(GAME_ID)recomp
+	RECOMP_VERSION=$(RECOMP_VERSION) MACOS_MIN=$(APP_MACOS_MIN) tools/bundle_macos.sh build/$(GAME)-app/$(GAME_ID)recomp
 
 # The course server inside the app (core/crates/embed) for this target, with cargo
 embed-server:
@@ -404,4 +422,4 @@ JOBS ?= $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 build/test_shaders: tools/test_shaders.m runtime/nvn/maxwell/translate.c runtime/nvn/maxwell/shader.h
 	clang -O1 -fobjc-arc -framework Metal -framework Foundation -o $@ tools/test_shaders.m runtime/nvn/maxwell/translate.c
 
-.PHONY: all venv setup gen clean-gen run gen-objs runtime-objs test-tools smm2 run-smm2 package embed-server app apk install push-data
+.PHONY: all venv setup gen clean-gen run gen-objs runtime-objs test-tools smm2 run-smm2 package embed-server app app-macos apk install push-data

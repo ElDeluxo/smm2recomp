@@ -181,9 +181,10 @@ class Server:
         return b"\0"  # the name is fine
 
     def new_notification(self, conn: Connection, req: rmc.Request) -> bytes:
-        # [inf] GetNewNotification: four one-byte flags (the request function, main+0x14edee0, reads a 4-byte field
-        # and keeps bytes 1-3); all 0: nothing new
-        return b"\0\0\0\0"
+        # [obs] GetNewNotification answers a structure of three bools (its extractor, main+0x5ef890, reads the
+        # version / length header, then three bools, the request function main+0x14edee0 keeps them); all false:
+        # nothing new. (An error here leads the game's network worker to "Pure virtual function called" later.)
+        return structure(b"\0\0\0")
 
     def event_course_status(self, conn: Connection, req: rmc.Request) -> bytes:
         return structure(struct.pack("<Q", 0) + b"\0" + struct.pack("<Q", 0))  # EventCourseStatusInfo: no event

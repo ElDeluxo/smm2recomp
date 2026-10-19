@@ -93,6 +93,10 @@ pub struct Meta {
     /// Fetched from an upstream course source ([`upstream`]): its code and data ID are the
     /// source's, and local IDs never count it.
     pub upstream: bool,
+    /// An edited copy of another maker's course: the original's code and maker name ("" for an
+    /// original course). Set at upload (`POST /api/courses?based_on=<code>`), shown in listings.
+    pub based_on: String,
+    pub based_on_maker: String,
 }
 
 impl Meta {
@@ -112,6 +116,7 @@ impl Meta {
             "boos": self.boos, "maker_id": self.maker_id, "record_ms": self.record_ms,
             "record_holder": self.record_holder, "first_clear": self.first_clear,
             "record_verified": self.record_verified, "upstream": self.upstream,
+            "based_on": self.based_on, "based_on_maker": self.based_on_maker,
         })
     }
 
@@ -139,6 +144,8 @@ impl Meta {
             record_verified: v["record_verified"].as_bool().unwrap_or(false),
             first_clear: s("first_clear"),
             upstream: v["upstream"].as_bool().unwrap_or(false),
+            based_on: s("based_on"),
+            based_on_maker: s("based_on_maker"),
         })
     }
 }
@@ -667,11 +674,41 @@ impl Store {
         maker: &str,
         account: Option<&accounts::Account>,
     ) -> Result<Meta, StoreError> {
+        self.upload_based_on(data, maker, account, None)
+    }
+
+    /// [`Store::upload_as`] for an edited copy of another course: `based_on` is the original's code
+    /// and the maker name the uploader knows it by. A course this server holds is credited to its
+    /// own maker; another source's (an upstream, another server) to the given name.
+    pub fn upload_based_on(
+        &self,
+        data: &[u8],
+        maker: &str,
+        account: Option<&accounts::Account>,
+        based_on: Option<(&str, &str)>,
+    ) -> Result<Meta, StoreError> {
         if data.len() > MAX_UPLOAD {
             return Err(StoreError::TooLarge);
         }
+        let based_on = match based_on {
+            Some((code, _)) if !is_course_code(code) => {
+                return Err(StoreError::Bad("based_on: not a course code".into()));
+            }
+            Some((code, name)) => Some((
+                code.to_ascii_uppercase(),
+                name.chars().take(32).collect::<String>(),
+            )),
+            None => None,
+        };
         let course = Course::parse(data).map_err(|e| StoreError::NotACourse(e.to_string()))?;
         let mut g = self.inner.lock().unwrap();
+        let (based_on, based_on_maker) = match based_on {
+            Some((code, name)) => {
+                let known = g.by_code.get(&code).map(|&i| g.courses[i].maker.clone());
+                (code, known.unwrap_or(name))
+            }
+            None => Default::default(),
+        };
         let data_id = g.next_id;
         g.next_id += 1;
         let code = smm2_data_id_to_code(data_id, false);
@@ -698,6 +735,8 @@ impl Store {
             record_verified: false,
             first_clear: String::new(),
             upstream: false,
+            based_on,
+            based_on_maker,
         };
         fs::write(self.dir.join(format!("courses/{code}.bin")), data)
             .map_err(|e| StoreError::Io(e.to_string()))?;
@@ -902,6 +941,19 @@ impl Store {
     }
 }
 
+/// `XXX-XXX-XXX` (letters and digits).
+fn is_course_code(code: &str) -> bool {
+    let b = code.as_bytes();
+    b.len() == 11
+        && b.iter().enumerate().all(|(i, &c)| {
+            if i == 3 || i == 7 {
+                c == b'-'
+            } else {
+                c.is_ascii_alphanumeric()
+            }
+        })
+}
+
 fn query(url: &str) -> HashMap<String, String> {
     url.split_once('?')
         .map(|(_, q)| {
@@ -1092,10 +1144,17 @@ pub fn handle(
             if account.as_ref().is_some_and(|a| a.banned) {
                 return err(403, "banned");
             }
-            match store.upload_as(body, maker, account.as_ref()) {
+            let based_on = q.get("based_on").map(|c| {
+                (
+                    c.as_str(),
+                    q.get("based_on_maker").map(String::as_str).unwrap_or(""),
+                )
+            });
+            match store.upload_based_on(body, maker, account.as_ref(), based_on) {
                 Ok(m) => json(201, m.to_json()),
                 Err(StoreError::TooLarge) => err(413, "too large"),
                 Err(StoreError::NotACourse(e)) => err(400, &format!("not a course: {e}")),
+                Err(StoreError::Bad(e)) => err(400, &e),
                 Err(e) => err(500, &format!("{e:?}")),
             }
         }
@@ -1379,6 +1438,74 @@ mod tests {
         // persisted
         let again = Store::open(&dir).unwrap();
         assert_eq!(again.get(&code).unwrap().clears, 1);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn edited_copies_credit_the_original() {
+        let dir = tmp("based_on");
+        let store = Store::open(&dir).unwrap();
+        let call = |method: &str, url: &str, token: Option<&str>, body: &[u8]| {
+            let headers: Vec<(String, String)> = token
+                .map(|t| vec![("Authorization".into(), format!("Bearer {t}"))])
+                .unwrap_or_default();
+            let (st, _, b) = handle(&store, method, url, &headers, body);
+            (
+                st,
+                serde_json::from_slice::<Value>(&b).unwrap_or(Value::Null),
+            )
+        };
+        let data = Course::blank("M1").to_bytes().unwrap();
+        let (_, ada) = call("POST", "/api/accounts", None, br#"{"name":"Ada"}"#);
+        let (_, bob) = call("POST", "/api/accounts", None, br#"{"name":"Bob"}"#);
+        let (ada, bob) = (
+            ada["token"].as_str().unwrap(),
+            bob["token"].as_str().unwrap(),
+        );
+        let (st, orig) = call("POST", "/api/courses", Some(ada), &data);
+        assert_eq!(st, 201);
+        assert_eq!(orig["based_on"], "");
+        let code = orig["code"].as_str().unwrap().to_string();
+        // a copy of a course held here: credited to its own maker, whatever the client says
+        let url = format!(
+            "/api/courses?based_on={}&based_on_maker=Someone",
+            code.to_lowercase()
+        );
+        let (st, copy) = call("POST", &url, Some(bob), &data);
+        assert_eq!(st, 201);
+        assert_eq!(
+            (copy["maker"].as_str(), copy["based_on"].as_str()),
+            (Some("Bob"), Some(code.as_str()))
+        );
+        assert_eq!(copy["based_on_maker"], "Ada");
+        assert_ne!(copy["code"], orig["code"]);
+        // a course from elsewhere: the given name; a bad code is refused
+        let (_, other) = call(
+            "POST",
+            "/api/courses?based_on=ABC-DEF-GHJ&based_on_maker=Cy",
+            Some(bob),
+            &data,
+        );
+        assert_eq!(
+            (other["based_on"].as_str(), other["based_on_maker"].as_str()),
+            (Some("ABC-DEF-GHJ"), Some("Cy"))
+        );
+        assert_eq!(
+            call("POST", "/api/courses?based_on=nope", Some(bob), &data).0,
+            400
+        );
+        // kept across a restart and in the listings
+        let again = Store::open(&dir).unwrap();
+        let copy_code = copy["code"].as_str().unwrap();
+        assert_eq!(again.get(copy_code).unwrap().based_on_maker, "Ada");
+        let (_, list) = call("GET", "/api/courses?limit=10", None, b"");
+        let row = list["courses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["code"] == copy_code)
+            .cloned();
+        assert_eq!(row.unwrap()["based_on"], code.as_str());
         let _ = fs::remove_dir_all(&dir);
     }
 
