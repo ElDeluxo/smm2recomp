@@ -356,12 +356,18 @@ static void can_rate(Cpu *c) {
     uint64_t no = c->x[0], id = g64(no + 0xe8578);
     const char *cv = getenv("RECOMP_MOD_CANRATE");  // (test: the flag's value)
     uint8_t flag = cv ? (uint8_t)atoi(cv) : 1;
+    // The comment button (main+0x1be7d30) also wants the comment answer's two allowances (+0x10 / +0x11, from a
+    // map in the NEX answer) above the player's comment count on the course (course +0x7896c), and the course's
+    // "comments on" flag (course global main+0x2c4b710 +0x860: the maker's profile setting, copied into the
+    // course list's entries +0x830) [inf, from the code]. Our server takes comments on every course.
     netobj_lock(c);
     for (int i = 0; i < 2; i++) {
         uint64_t r = no + (i ? 0xe8530 : 0xe8580);
-        s64(r, id), s8(r + 8, flag), s32(r + 0xc, 0), s16(r + 0x10, 0), s8(r + 0x12, 1);
+        s64(r, id), s8(r + 8, flag), s32(r + 0xc, 0), s16(r + 0x10, i ? 0x0a0a : 0), s8(r + 0x12, 1);
     }
     netobj_unlock(c);
+    uint64_t course = g64(MAIN_ADDR(0x2c4b710));
+    if (course && g64(course + 0x5a8) == id) s8(course + 0x860, 1), s8(course + 0x861, 1);
     MLOG("rating / comments allowed for %llu\n", (unsigned long long)id);
     finish(c, no, true, 0);
 }
@@ -528,7 +534,12 @@ static void post_course(Cpu *c) {
     char code[16] = "?";
     if (src && g32(src + 0xc) == 0x4c444353 && g32(src) == 1) {  // "SCDL", version 1
         int st = 0;
-        Json *j = srv_post_bytes("/api/courses", (const void *)(uintptr_t)(src + 0x10), 0x5bfc0, &st);
+        char path[256], based_on[200];  // an edited copy of someone else's course credits the original (edit.c)
+        extern void edit_upload_query(const uint8_t *course, char *out, size_t cap);
+        edit_upload_query((const uint8_t *)(uintptr_t)(src + 0x10), based_on, sizeof based_on);
+        snprintf(path, sizeof path, "/api/courses%s", based_on);
+        if (based_on[0]) LOG("[mod] course upload: an edited copy (%s)\n", based_on + 1);
+        Json *j = srv_post_bytes(path, (const void *)(uintptr_t)(src + 0x10), 0x5bfc0, &st);
         uint32_t id;
         if (j && code_to_data_id(json_str(json_get(j, "code"), ""), &id)) {
             snprintf(code, sizeof code, "%s", json_str(json_get(j, "code"), ""));

@@ -34,6 +34,8 @@ stage_common() {
     cp LICENSE-LASRecomp "$dest/licenses/LICENSE-LASRecomp.txt"
     cp third_party/imgui/LICENSE.txt "$dest/licenses/LICENSE-imgui.txt"
     cp third_party/smaa/LICENSE.txt "$dest/licenses/LICENSE-smaa.txt" 2>/dev/null || true
+    cp third_party/zstd/LICENSE "$dest/licenses/LICENSE-zstd.txt"
+    cp third_party/bcdec/LICENSE "$dest/licenses/LICENSE-bcdec.txt"
     cp "$dest/hactool/mbedtls-LICENSE.txt" "$dest/licenses/Apache-2.0.txt"
     {
         echo "Third-party components in this package and their licenses (the project's own code: see the source repository)"
@@ -41,6 +43,9 @@ stage_common() {
         echo "- LAS Recomp (the recompiler and runtime this is forked from): MIT, licenses/LICENSE-LASRecomp.txt"
         echo "- Dear ImGui (the setup screen and the overlay menu): MIT, licenses/LICENSE-imgui.txt"
         echo "- SMAA (built in): MIT-style, licenses/LICENSE-smaa.txt"
+        echo "- Mbed TLS 3.6 (built in: the game's TLS client): Apache-2.0, licenses/Apache-2.0.txt"
+        echo "- Zstandard decoder (built in: the costume models): BSD-3-Clause, licenses/LICENSE-zstd.txt"
+        echo "- bcdec (built in: BC texture decoding where the GPU lacks it): MIT / Unlicense, licenses/LICENSE-bcdec.txt"
         echo "- zig (zig/, the compiler the game code is built with): MIT, zig/LICENSE; its clang / lld: Apache-2.0 with"
         echo "  LLVM exception (licenses/Apache-2.0.txt)"
         echo "- Python 3.12 (python/, python-build-standalone): PSF License and its components' own: python/README-LICENSES.txt"

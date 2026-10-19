@@ -6,7 +6,6 @@
 #include "romfs_overlay.h"
 
 #include <errno.h>
-#include <ftw.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,6 +14,7 @@
 #include <unistd.h>
 
 #include "mod.h"
+#include "../../../runtime/platform.h"  // (mkdir with a mode and plat_remove_tree on every host)
 #include "smm1/lyt.h"  // lyt_yaz0
 
 typedef RovBuf Buf;
@@ -417,10 +417,6 @@ bool rov_flyt_insert(RovBuf *b, size_t at, const void *sec, size_t n) {
 }
 
 // ---- generation: at the first call (the game opening its RomFS), while the mods are on
-static int rm_entry(const char *p, const struct stat *sb, int flag, struct FTW *ftw) {
-    (void)sb, (void)flag, (void)ftw;
-    return remove(p);
-}
 
 static bool same_identity(const char *path, const char *id) {
     RovBuf b = {0};
@@ -442,7 +438,7 @@ static void generate_all(void) {
     snprintf(gen_dir, sizeof gen_dir, ROV_ROOT "/romfs");
     if (same_identity(ROV_ROOT "/romfs.id", id)) return;  // (generated before, for the same generators)
     snprintf(gen_dir, sizeof gen_dir, ROV_ROOT "/romfs.new");
-    nftw(gen_dir, rm_entry, 16, FTW_DEPTH | FTW_PHYS);
+    plat_remove_tree(gen_dir);
     mkdirs(gen_dir);
     generating = true;
     int ok = 0;
@@ -452,7 +448,7 @@ static void generate_all(void) {
         LOG("[mod] overlay: %s v%d %s\n", gens[i].name, gens[i].version, r ? "generated" : "FAILED");
     }
     generating = false;
-    nftw(ROV_ROOT "/romfs", rm_entry, 16, FTW_DEPTH | FTW_PHYS);
+    plat_remove_tree(ROV_ROOT "/romfs");
     if (rename(ROV_ROOT "/romfs.new", ROV_ROOT "/romfs")) {
         LOG("[mod] overlay: could not move the generated files into place (%s)\n", strerror(errno));
         gen_dir[0] = 0;

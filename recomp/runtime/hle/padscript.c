@@ -82,6 +82,21 @@ bool padscript_game_clock(void) { return padscript_active() && game_clock; }
 
 uint64_t padscript_buttons(void) { return padscript_active() ? current : 0; }
 
+// RECOMP_PAD_ORIGIN=player: the presented-frame clock starts at the game's first player update (the same game frame
+// in every runtime that hooks it: the Ryujinx trace build counts its frames from there too), not at boot.
+static _Atomic int origin_set;
+static _Atomic int64_t frames_since_origin = -1;
+void padscript_origin(void) {
+    if (!origin_set) { origin_set = 1; frames_since_origin = 0; LOG("[pad] frame clock origin: first player update\n"); }
+}
+int64_t padscript_frames(void) { return frames_since_origin; }
+void padscript_frame(void) {  // each presented frame (runtime/hle/input.c)
+    if (origin_set) frames_since_origin++;
+    static int wait = -1;
+    if (wait < 0) wait = getenv("RECOMP_PAD_ORIGIN") && !strcmp(getenv("RECOMP_PAD_ORIGIN"), "player");
+    if (padscript_active() && !game_clock && (!wait || origin_set)) padscript_tick();
+}
+
 void padscript_tick(void) {
     if (!padscript_active()) return;
     int64_t t = ticks++;

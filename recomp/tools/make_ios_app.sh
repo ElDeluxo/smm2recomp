@@ -73,6 +73,16 @@ if [ -n "${RECOMP_IOS_DATA:-}" ]; then
         mkdir -p "$stage/$d"
         rsync -aL --delete "$RECOMP_IOS_DATA/$d/" "$stage/$d/"
     done
+    # The shaders that data folder's runs met (and RECOMP_IOS_SHADERS="<dir>:<dir>...", other data folders'
+    # cache/shaders), precompiled for the device: their first use there loads them instead of compiling the source.
+    # RECOMP_IOS_NO_SHADERS=1: leave them out.
+    if [ -z "${RECOMP_IOS_NO_SHADERS:-}" ]; then
+        dirs=("$RECOMP_IOS_DATA/cache/shaders")
+        IFS=: read -r -a more <<< "${RECOMP_IOS_SHADERS:-}"
+        [ ${#more[@]} -eq 0 ] || dirs+=("${more[@]}")
+        "$(dirname "$0")/precompile_shaders.sh" "$stage/metallib" ios "${dirs[@]}" ||
+            echo "make_ios_app: shaders not precompiled (they compile on the device instead)" >&2
+    fi
     cp -Rc "$stage" "$APP/data" 2>/dev/null || cp -R "$stage" "$APP/data"
 fi
 if [ "$PLAT" = iossim ]; then

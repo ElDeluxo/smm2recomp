@@ -29,7 +29,19 @@ DATASTORE_SMM2_METHODS = {8: "GetMeta", 9: "GetMetas", 25: "PrepareGetObject", 4
                           73: "SearchCoursesLatest", 74: "SearchCoursesPostedBy", 79: "SearchCoursesEndlessMode",
                           125: "GetNewNotification", 131: "GetUserOrCourse", 134: "GetReqGetInfoHeadersInfo",
                           151: "LoginCheck", 152: "UpdateLastLoginInfo", 154: "GetEventCourseStatus"}
-EXTRA_METHODS: dict[int, dict[int, str]] = {0x6E: UTILITY_METHODS, 0x73: DATASTORE_SMM2_METHODS}
+MATCHMAKE_EXT_METHODS = {1: "CloseParticipation", 2: "OpenParticipation", 3: "AutoMatchmake_Postpone",
+                         4: "BrowseMatchmakeSession", 6: "CreateMatchmakeSession", 7: "JoinMatchmakeSession",
+                         11: "UpdateApplicationBuffer", 12: "UpdateMatchmakeSessionAttribute",
+                         14: "UpdateMatchmakeSession", 15: "AutoMatchmakeWithSearchCriteria_Postpone",
+                         16: "GetPlayingSession", 34: "UpdateProgressScore", 38: "CreateMatchmakeSessionWithParam",
+                         39: "JoinMatchmakeSessionWithParam", 40: "AutoMatchmakeWithParam_Postpone"}
+NAT_METHODS = {1: "RequestProbeInitiation", 2: "InitiateProbe", 3: "RequestProbeInitiationExt",
+               4: "ReportNATTraversalResult", 5: "ReportNATProperties", 6: "GetRelaySignatureKey",
+               7: "ReportNATTraversalResultDetail"}
+MATCHMAKING_METHODS = {41: "GetSessionURLs", 42: "UpdateSessionHost", 43: "UpdateGatheringOwnership"}
+EXTRA_METHODS: dict[int, dict[int, str]] = {0x6E: UTILITY_METHODS, 0x73: DATASTORE_SMM2_METHODS,
+                                            0x6D: MATCHMAKE_EXT_METHODS, 3: NAT_METHODS, 0x15: MATCHMAKING_METHODS,
+                                            0x32: {1: "EndParticipation"}, 14: {1: "ProcessNotificationEvent"}}
 AUTH_METHODS = {1: "ValidateAndRequestTicket", 2: "ValidateAndRequestTicketWithCustomData", 3: "RequestTicket",
                 4: "GetPID", 5: "GetName", 6: "ValidateAndRequestTicketWithParam"}
 SECURE_METHODS = {1: "Register", 2: "RequestConnectionData", 3: "RequestUrls", 4: "RegisterEx", 5: "TestConnectivity",
@@ -64,6 +76,24 @@ def parse_request(data: bytes) -> Request | None:
         off += 2
     call_id, method = struct.unpack_from("<II", data, off)
     return Request(proto, call_id, method, data[off + 8:4 + size])
+
+
+def request(protocol: int, call_id: int, method: int, params: bytes) -> bytes:
+    head = (bytes([protocol | 0x80]) if protocol < 0x7F else bytes([0xFF]) + struct.pack("<H", protocol))
+    rest = head + struct.pack("<II", call_id, method) + params
+    return struct.pack("<I", len(rest)) + rest
+
+
+def parse_response(data: bytes) -> tuple[int, bool, int, int] | None:
+    """(protocol, success, call id, method or error code) of a response, None if not one"""
+    if len(data) < 14 or data[4] & 0x80:
+        return None
+    proto, off = data[4], 5
+    if proto == 0x7F:
+        proto, off = struct.unpack_from("<H", data, 5)[0], 7
+    ok = data[off] == 1
+    a, b = struct.unpack_from("<II", data, off + 1)
+    return (proto, ok, a, b & 0x7FFF) if ok else (proto, ok, b, a)
 
 
 def response(protocol: int, call_id: int, method: int, body: bytes) -> bytes:

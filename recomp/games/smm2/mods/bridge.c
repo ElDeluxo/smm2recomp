@@ -275,15 +275,34 @@ static void driver_start(void) {
 // Challenge Modes on SMM2's side: on SMM2's Endless menu, ZL / ZR or a tap on its header ("ZL < Endless Challenge >
 // ZR", relabel.c; the header's band at the top left) switch to the 100 Mario Challenge.
 extern bool touch_first(int32_t *x, int32_t *y);     // runtime/hle/touch.c
+// (ZL / ZR or the touch that switched here from the flow count as held: they must be let go first)
+static uint64_t switch_prev_b;
+static bool switch_prev_touch;
 static bool mode_switch_pressed(void) {
-    static uint64_t prev_b;
-    static bool prev_touch;
+    uint64_t prev_b = switch_prev_b;
+    bool prev_touch = switch_prev_touch;
     uint64_t b = input_player_buttons() & (1u << 8 | 1u << 9);  // ZL, ZR
     int32_t x = 0, y = 0;
     bool touch = touch_first(&x, &y) && x >= 90 && x < 760 && y < 90;
     bool hit = (b & ~prev_b) || (touch && !prev_touch);
-    prev_b = b, prev_touch = touch;
+    switch_prev_b = b, switch_prev_touch = touch;
     return hit;
+}
+
+// choose the difficulty asked for (pending_tab) the way the tab buttons do, on the menu page's Disp
+static void select_pending_tab(Cpu *c, uint64_t page) {
+    if (pending_tab < 0) return;
+    int d = pending_tab;
+    uint64_t save[8];
+    memcpy(save, c->x, sizeof save);
+    c->x[0] = g64(page + 0x48);  // (the tab buttons' handlers get the page's owner [obs: their this = page+0x48])
+    // (a handler does nothing for the difficulty already shown (main+0x2c3f618): another one first, so the page
+    // redraws the run as the records say now [inf, main+0x1a22260])
+    s32(MAIN_ADDR(0x2c3f618), (uint32_t)(d + 1) % 4);
+    if (c->x[0]) guest_call(c, MENU_TAB0 + 0xc0ull * (uint64_t)d);
+    memcpy(c->x, save, sizeof save);
+    pending_tab = -1;
+    MLOG("bridge: difficulty %d selected\n", d);
 }
 
 static void menu_disp(Cpu *c) {
@@ -296,6 +315,7 @@ static void menu_disp(Cpu *c) {
     if ((!mod_hundred_offered() || mod_smm2_session()) && test_difficulty() < 0) {
         bool settled = now0 - menu_seen <= 30;
         menu_seen = now0;
+        select_pending_tab(c, c->x[0]);  // (after a switch: the page shows the records as this mode sees them)
         guest_call_orig(c, MENU_DISP_EXEC);
         if (mod_hundred_offered() && mode_switch_pressed() && settled) {
             LOG("[mod] bridge: Challenge Modes: to the 100 Mario Challenge\n");
@@ -308,16 +328,7 @@ static void menu_disp(Cpu *c) {
     uint64_t page = c->x[0], now = now0;
     bool back = now - menu_seen > 30;  // (first Disp frame after a while: the menu is (back) on screen)
     menu_page = page, menu_seen = now;
-    if (pending_tab >= 0) {  // choose the difficulty the way the tab buttons do
-        int d = pending_tab;
-        uint64_t save[8];
-        memcpy(save, c->x, sizeof save);
-        c->x[0] = g64(page + 0x48);  // (the tab buttons' handlers get the page's owner [obs: their this = page+0x48])
-        if (c->x[0]) guest_call(c, MENU_TAB0 + 0xc0ull * (uint64_t)d);
-        memcpy(c->x, save, sizeof save);
-        pending_tab = -1;
-        MLOG("bridge: difficulty %d selected\n", d);
-    }
+    select_pending_tab(c, page);
     guest_call_orig(c, MENU_DISP_EXEC);
     if (back && leaving_won) {  // a won run: SMM2 is back on its menu, ready for the next one
         leaving_won = suspending = false;
@@ -579,7 +590,7 @@ static void post_later(const char *what) {
     static const char *const diff[4] = {"easy", "normal", "expert", "super_expert"};
     if (run_d < 0) return;
     char *path = malloc(80);
-    snprintf(path, 80, "/api/endless/%s/%s", diff[run_d], what);
+    snprintf(path, 80, "/api/endless/%s/%s?ruleset=hundred", diff[run_d], what);
     pthread_t th;
     pthread_create(&th, NULL, post_async, path);
     pthread_detach(th);
@@ -622,6 +633,9 @@ void hundred_mode_switch(void) {  // ZL / ZR / the tap on the flow's select: SMM
     set_drv(DRV_IDLE);
     mod_remember_mode(true);
     mod_set_smm2_session(true);
+    switch_prev_b = 1u << 8 | 1u << 9, switch_prev_touch = true;
+    uint32_t d = g32(MAIN_ADDR(0x2c3f618));  // (the menu's difficulty: its tab again redraws the run shown)
+    pending_tab = d < 4 ? (int)d : 0;
 }
 
 // (the flow's: whether a course may start playing; this stand-in, for builds without it, says yes)

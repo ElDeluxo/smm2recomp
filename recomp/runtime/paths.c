@@ -81,10 +81,10 @@ static void fail(const char *msg) {
 
 #if TARGET_OS_IPHONE
 // A build that carries the game files in the app (tools/make_ios_app.sh RECOMP_IOS_DATA: data/extracted, fonts,
-// sysdata) links them into Documents at every launch, since the app's own path changes with each install; files the
-// player copied into Documents themselves are left alone.
+// sysdata, and metallib: precompiled shaders) links them into Documents at every launch, since the app's own path
+// changes with each install; files the player copied into Documents themselves are left alone.
 static void ios_link_bundle_data(void) {
-    static const char *const names[] = {"extracted", "fonts", "sysdata"};
+    static const char *const names[] = {"extracted", "fonts", "sysdata", "metallib"};
     for (size_t i = 0; i < sizeof names / sizeof *names; i++) {
         char target[1100];
         snprintf(target, sizeof target, "%s/data/%s", g_exe_dir, names[i]);

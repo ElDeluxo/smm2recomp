@@ -159,25 +159,66 @@ generated C needs no changes: arm64 shares `generated/smm2` with macOS, and x86-
 
 **Linux arm64 in a VM (Mesa lavapipe):**
 - The build boots to the title screen.
-- Its frames match Metal's except for one thing: the Mario model is missing in the 3D World title course.
-  - His draws are issued, with the same programs, vertex counts and textures as on Metal.
-  - His texture is uploaded and the material alpha uniform is 1.
-  - The translated GLSL matches the MSL statement for statement (Metal's `LARECOMP_SAVE_GLSL=1` writes both). The
-    signed LDC offsets and the bone-matrix reads are the same code.
-  - [obs] He *is* drawn. In a pass with two targets he is drawn into a character layer (1600x900 RG11B10F): pass
-    images (`LARECOMP_DEBUG_PASS_NCOLOR=2`) show him there.
-  - The scene's composite shader then copies him into the scene where target 1 (RG16F) is not exactly 1.0. It
-    discards wherever that target reads 1.0, its cleared value.
-  - [obs] A texel probe (`LARECOMP_DEBUG_PROBE=310,555`) reads target 1 as 1.0 (0x3c00) at Mario's pixels after his
-    pass. His fragment shader's second output never lands there.
-  - So the composite discards him. Not the cause: copy aliases (`LARECOMP_VK_COPY_OPT=0`) and storage aliases
-    (`RECOMP_NO_TEX_ALIAS=1`).
-  - Next: that target's write mask, attachment or clear order in the two-target pass.
+- The Mario model in the 3D World title course (2026-10-19). How SMM2 draws him:
+  - A pass with two targets draws him into a character layer: target 0 (1600x900 RG11B10F, blended) and target 1
+    (RG16F, not blended; cleared to 1.0, his view depth in R and a rim glow in G).
+  - A composite in the scene pass then draws a box around him. Its shader discards where target 1 is 1.0, compares the
+    depth in target 1 with the scene depth, and copies the character layer into the scene.
+- Two causes kept him out, both fixed:
+  - [obs] The composite drew nothing at all. With its output forced to a constant and its discard removed, the scene
+    did not change (`LARECOMP_DEBUG_FS_OUT`, `LARECOMP_DEBUG_FS_NODISCARD`, `LARECOMP_DEBUG_PROBE_DRAWS`). Its box
+    vertices are in a per-frame buffer 2.6 GB into the guest heap, read in place from the imported heap. Lavapipe
+    allows 2 GB allocations (maxMemoryAllocationSize); the 3.2 GB import still works there and shader global memory
+    reads past 2 GB fine, but vertex and index fetches past 2 GB read other memory. Copying the vertices
+    (`LARECOMP_VK_COPY_VERTICES=1`) made the box draw.
+    - Fix (`guest_direct`, exec.c): vertex / index data is read in place only within the device's
+      maxMemoryAllocationSize and maxBufferSize; past that it is copied, as anywhere outside the heap.
+  - [obs] Target 1 was never written by his draw: a texel probe read 1.0 (0x3c00) at his pixels while target 0 had
+    his colour. It was written whenever his draw started a new command buffer (a probe's flush before it), never when
+    it followed the earlier draws in the same command buffer, with or without a pass restart in between
+    (`LARECOMP_DEBUG_PROBE_LAZY`).
+    - Not on our side, as far as can be checked: the validation layers report nothing in that pass, the barrier before
+      every pass is a full one with every image in GENERAL layout, and the state filter (`LARECOMP_VK_STATE_FILTER=0`)
+      and vertex copies change nothing. A standalone Vulkan program with the same targets, formats, blend split,
+      clears and several pipelines writes target 1 correctly on the same lavapipe, so the trigger is narrower.
+    - Workaround (`lavapipe_mrt_split`, exec.c), lavapipe only: in a pass with several targets, some blended and some
+      not, a draw whose program differs from the previous draw's starts a new submission.
+      `LARECOMP_VK_MRT_SPLIT=0 / 1` forces it off / on for any driver. Real drivers are not expected to need it.
+  - [obs] With both fixes the probe reads his depth in target 1 and the composite copies him into the scene (pass
+    images: he is there, as on Metal). The final frame still shows a white blur where he stands: a few texels of the
+    character layer become NaN (`LARECOMP_DEBUG_NAN_SCAN=1`: 5-15 texels at his eyes, after the draw with fragment
+    program 0x729accc000; its colour alpha comes out NaN), and the bloom spreads them. Whether real drivers produce
+    them too is open.
+- Shadow sampling: where there is no shadow map, SMM2 binds a 4x4 R32_FLOAT texture ("DepthShadow") to a shadow
+  sampler. Vulkan compares only depth formats (validation: VUID-vkCmdDrawIndexed-None-06479); the Switch compares the
+  red channel. Such a texture is now sampled through a D32_SFLOAT copy made in the submission's upload commands
+  (`vk_shadow_view`, textures.c).
+- Shader global memory binds the whole 3.2 GB heap as one storage buffer. That is over lavapipe's
+  maxStorageBufferRange (128 MB; VUID-VkWriteDescriptorSet-descriptorType-00333), but lavapipe reads it correctly,
+  and clamping the range there broke the HUD text (its shaders read past 128 MB). NVIDIA, AMD and Intel allow large
+  storage buffers; left as it is for now.
 - Comparing captures needs care with colour:
   - Vulkan read-backs are raw sRGB; the Ryujinx references are window-server grabs.
   - Raw against grab is about 23 % of pixels apart on colour alone, for Metal too.
   - Compare raw with raw, or map the raw capture through the colour transform measured from a Metal raw / grab pair
     of the same frame.
+
+**Where this stands (2026-10-19, paused):**
+- Vulkan Mario: both causes fixed (vertex data past the allocation limit; the lavapipe-only draw split). Open: the
+  NaN texels at his eyes (fragment program 0x729accc000, alpha NaN) that bloom into a white blur, on lavapipe.
+  Paused until the owner's Windows test on a real GPU shows whether it happens there. Next step if it does: find
+  the instruction that makes the alpha NaN (an output-side tracer: the NaN checks on registers were folded away by
+  lavapipe's compiler, so trace the outputs instead), and compare with the same values on Metal.
+- Windows package: builds from main with zig. The first-launch build emulated from the package (its own generator,
+  headers and patches, mods' patch points included; 908 files, linked against its import library) produces the game
+  code DLL. Not run on Windows; no zip on the Desktop (the owner paused Windows testing).
+- macOS title frame vs Ryujinx (seed 4, frame 2386; 2.35-2.5 % of pixels > 24 apart): the differences sit on edges
+  everywhere (outlines of the logo, tiles, text), not in flat areas. [obs] Sampling our window grab 0.25-0.5 px
+  higher halves them (2.69 % -> 1.27 % on a bilinear resample); 1 px shifts and blurring don't. So most of what's
+  left is a sub-pixel vertical offset between the two grabs. Not yet known whether it's in the rendering (a half-pixel
+  in the viewport / present) or in the capture (a Retina window grabbed at 1x, its 32 px title bar cropped). Next
+  step: the same test on the raw read-back mapped through the colour transform (`cmtransfer.py`); if the offset
+  stays, check the present pass's texel centres against Ryujinx's. Text and the blink timing are untouched.
 
 ## Open issues
 
@@ -321,3 +362,46 @@ PCM before the host volume), the same session (the stock title course to the goa
   from 62 Hz to 16 kHz within 0.6 dB, 70 loud onsets against 69, loudness envelopes correlating 0.76. Sound events
   land at slightly different wall-clock times (audio runs on host time; loading and pacing differ), so the waveforms
   don't line up sample for sample.
+
+### Where the frame work stands (paused 2026-10-19)
+
+- Sampler border colours are now honoured (`renderer.m` `sampler_for`): 3D World castle lava 2.28 % -> 0.22 % px
+  >24. Depth clamp (`nvnCommandBufferSetDepthClamp`) is recorded and applied (SMM2 leaves it off; Vulkan ignores it).
+  The 90-course recheck with both stopped after 23 courses (all still identical): resume from M1_sky_night.
+- Left: 3D World forest (0.20 %: glint quads on the poison water, an effect draw [inf]), NSMBU underwater (+-1-2
+  levels, rounding [inf]).
+- Menus in lockstep: a presented-frame clock from the first player update on both sides (`RECOMP_PAD_CLOCK=frame
+  RECOMP_PAD_ORIGIN=player`, `RECOMP_FRAME_SHOT=k1,k2,...`; the Ryujinx trace build's `RYU_TRACE_FRAMECLOCK=1
+  RYU_TRACE_FRAMESHOT`). Built, not yet run against Ryujinx.
+
+## First-use shader compiles: the Metal shader caches (2026-10-19)
+
+iPad build 24 stalled 3.5 s on the first use of a compute program, and every first draw with a new program waited
+for its compile. Measured on macOS (M4 Pro, a heavily loaded machine: absolute times are noisy): the stock title
+course to presented frame 2750 (both compute programs included), with `LARECOMP_SHADER_SALT` so that Metal's own
+cache misses:
+
+| Run | Compile time | Worst 2 s window of compiles | Compute programs built in |
+|---|---|---|---|
+| cold (nothing cached) | 55-64 s | 22-28 s | 290-455 ms each |
+| precompiled shaders, no pipeline cache yet | 21-34 s (back-end only) | 3.6-15.7 s | 540-850 ms |
+| precompiled shaders + pipeline cache (steady state) | 3.1 s | 0.6 s | 3-5 ms, from the cache |
+
+- [obs] The front-end (MSL to AIR, `newLibraryWithSource`) was most of the cost (~70 of ~85 s in one cold run),
+  pipeline creation (AIR to GPU code) the rest.
+- [obs] Metal's own on-disk cache can't be relied on: it's shared by every process and size-limited, and a "second
+  launch" an hour of other compiles later was fully cold again (138 s). An app update may clear it too [?].
+- Three layers now, all in the data folder's `cache/` (Documents on iOS, which an app update keeps):
+  `cache/shaders/` (the translated MSL, as before; warmed in the background at start-up unless precompiled);
+  `cache/metallib/` and `metallib/` (precompiled with `tools/precompile_shaders.sh`, Metal's offline compiler, so
+  Mac only: `make_ios_app.sh` precompiles `RECOMP_IOS_DATA`'s shaders, plus `RECOMP_IOS_SHADERS` folders, into the
+  app); `cache/pipelines/NNNN.bin` (Metal binary archives of the pipelines built, written from a background queue).
+- [obs] Saving an archive again after adding to it (or after loading it) failed now and then on macOS 27 ("Failed to
+  generate machO ... expecting 'fragment' stage in pipeline no. N") and emptied it, while the same pipelines saved
+  fine from a fresh archive: each save is a new write-once file.
+- [obs] An archive serves only pipelines built from the same AIR: archives made with precompiled shaders don't serve
+  source-compiled ones (0 hits), and the other way round.
+- The VS and FS libraries compile side by side; entry points are named `v_/f_/c_<hash>` instead of `main0`.
+
+Left: archive files accumulate (26 after many test runs, 1.6 s to load): merge them now and then. iPad numbers still
+to be measured; the `[shader] slow program` and `[compute] program ... built in` log lines show what's left there.

@@ -363,7 +363,7 @@ NVN(nvnCommandBufferSetRenderEnableConditional) {
     CmdRec *r = record(c, CMD_SET_RENDER_ENABLE, 0, &s);
     r->x[0] = (uint32_t)s.x[1]; r->x[1] = s.x[2]; r->x[2] = 1;
 }
-NVN(nvnCommandBufferSetDepthClamp) { (void)c; }
+NVN(nvnCommandBufferSetDepthClamp) { Snap s = snap(c); record(c, CMD_SET_DEPTH_CLAMP, 0, &s); }  // x[0]: enable
 NVN(nvnCommandBufferSetRasterizerDiscard) { (void)c; }
 NVN(nvnCommandBufferSetConservativeRasterEnable) { (void)c; }
 NVN(nvnCommandBufferSetConservativeRasterDilate) { (void)c; }

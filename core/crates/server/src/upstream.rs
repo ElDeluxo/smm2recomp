@@ -380,6 +380,8 @@ fn meta_of(v: &Value) -> Option<Meta> {
         record_verified: false,
         first_clear: s(&v["first_completer"]["name"]),
         upstream: true,
+        based_on: String::new(),
+        based_on_maker: String::new(),
     })
 }
 
