@@ -893,6 +893,21 @@ static int g_pass_ncolor;
 static NvnTexture *g_pass_depth;  // (its depth target, for the probe)
 static void vk_end_pass_at(int line);
 void vk_end_pass(void) { vk_end_pass_at(0); }
+// LARECOMP_DEBUG_PROBE_LAZY=1 (with the probe): the texels are copied without a flush at each pass end and logged
+// when the frame is presented, so the probe doesn't change how the work is submitted
+static struct { int pass, target, fmt; void *tex; } lazy_probe[2048];
+static int nlazy;
+void vk_probe_drain(void) {
+    if (!nlazy) return;
+    renderer_flush();
+    const uint8_t *base = (const uint8_t *)vk_readback(16 << 20).ptr + (8 << 20);
+    for (int k = 0; k < nlazy; k++) {
+        const uint8_t *q = base + k * 16;
+        LOG("[probe] (lazy #%d) pass %d target %d (%p fmt %d): %02x%02x%02x%02x\n", k, lazy_probe[k].pass, lazy_probe[k].target,
+            lazy_probe[k].tex, lazy_probe[k].fmt, q[0], q[1], q[2], q[3]);
+    }
+    nlazy = 0;
+}
 #define vk_end_pass() vk_end_pass_at(__LINE__)
 static void vk_end_pass_at(int line) {
     if (!in_pass) return;
@@ -906,6 +921,24 @@ static void vk_end_pass_at(int line) {
             for (int i = 0; i < g_pass_ncolor; i++) {
                 TexBackend *b = g_pass_color[i] ? (TexBackend *)g_pass_color[i]->backend : NULL;
                 if (!b || !b->image || (uint32_t)px >= b->width || (uint32_t)py >= b->height) continue;
+                static int lazy = -1;
+                if (lazy < 0) lazy = getenv("LARECOMP_DEBUG_PROBE_LAZY") != NULL;
+                if (lazy) {
+                    if (nlazy == 2048) continue;
+                    VkSpan out = vk_readback(16 << 20);
+                    VkBufferImageCopy c = {.bufferOffset = (8 << 20) + (VkDeviceSize)nlazy * 16,
+                                           .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .imageOffset = {px, py, 0},
+                                           .imageExtent = {1, 1, 1}};
+                    VkCommandBuffer cb = vk_cmd();
+                    vk_full_barrier(cb);
+                    vkCmdCopyImageToBuffer(cb, b->image, VK_IMAGE_LAYOUT_GENERAL, out.buf, 1, &c);
+                    vk_full_barrier(cb);
+                    lazy_probe[nlazy].pass = debug_pass_no; lazy_probe[nlazy].target = i; lazy_probe[nlazy].fmt = b->format;
+                    lazy_probe[nlazy].tex = g_pass_color[i];
+                    LOG("[probe] (lazy #%d) target %d (%p)\n", nlazy, i, (void *)g_pass_color[i]);
+                    nlazy++;
+                    continue;
+                }
                 VkSpan out = vk_readback(64);
                 VkBufferImageCopy c = {.bufferOffset = out.off, .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
                                        .imageOffset = {px, py, 0}, .imageExtent = {1, 1, 1}};
@@ -917,7 +950,7 @@ static void vk_end_pass_at(int line) {
                 LOG("[probe] pass %d target %d (%p fmt %d) at %d,%d: %02x%02x%02x%02x %02x%02x%02x%02x\n", debug_pass_no, i,
                     (void *)g_pass_color[i], b->format, px, py, q[0], q[1], q[2], q[3], q[4], q[5], q[6], q[7]);
             }
-        TexBackend *db = g_debug_frame && px >= 0 && g_pass_depth ? (TexBackend *)g_pass_depth->backend : NULL;
+        TexBackend *db = g_debug_frame && px >= 0 && g_pass_depth && !getenv("LARECOMP_DEBUG_PROBE_LAZY") ? (TexBackend *)g_pass_depth->backend : NULL;
         if (db && db->image && (db->aspect & VK_IMAGE_ASPECT_DEPTH_BIT) && (uint32_t)px < db->width && (uint32_t)py < db->height &&
             (db->format == VK_FORMAT_D32_SFLOAT || db->format == VK_FORMAT_D32_SFLOAT_S8_UINT)) {
             VkSpan out = vk_readback(64);
@@ -2112,6 +2145,27 @@ static bool gmem_import(uint64_t size) {
 
 static uint64_t gmem_tried;  // heap size the import was last attempted for (gmem_info imports / re-imports)
 
+// How far into the import vertex and index data may be read in place: within one allocation of at most
+// maxMemoryAllocationSize and one buffer of at most maxBufferSize. SMM2's heap is 3.2 GB. Mesa's lavapipe allows 2 GB
+// allocations; the whole heap still imports there and shader global memory reads it, but vertex / index fetches from
+// offsets past 2 GB read other memory: the 3D World title's character composite (a box whose vertices sit 2.6 GB into
+// the heap) drew nothing, so Mario was missing from the title. Data past the limit is copied (guest_direct).
+static uint64_t gmem_direct_limit(void) {
+    static uint64_t lim;
+    if (lim) return lim;
+    VkPhysicalDeviceVulkan13Properties p13 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_PROPERTIES};
+    VkPhysicalDeviceVulkan11Properties p11 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES, .pNext = &p13};
+    VkPhysicalDeviceProperties2 p = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, .pNext = &p11};
+    vkGetPhysicalDeviceProperties2(g_vk.phys, &p);
+    lim = HEAP_MAX;
+    if (p11.maxMemoryAllocationSize && p11.maxMemoryAllocationSize < lim) lim = p11.maxMemoryAllocationSize;
+    if (p13.maxBufferSize && p13.maxBufferSize < lim) lim = p13.maxBufferSize;
+    lim &= ~0xFFFFFull;  // (1 MB steps: a multiple of the host pointer import alignment)
+    LOG("[vk] vertex / index data read in place up to %llu MB into the heap (allocation %llu MB, buffer %llu MB)\n", (unsigned long long)(lim >> 20),
+        (unsigned long long)(p11.maxMemoryAllocationSize >> 20), (unsigned long long)(p13.maxBufferSize >> 20));
+    return lim;
+}
+
 static VkDescriptorBufferInfo gmem_info(void) {
     static int off = -1;
     if (off < 0) off = getenv("LARECOMP_VK_NO_GMEM") != NULL || !g_vk.host_import;
@@ -2433,6 +2487,7 @@ static bool guest_direct(uint64_t addr, uint64_t size, VkBuffer *buf, VkDeviceSi
     if (copy || addr < HEAP_BASE) return false;
     if (addr + size > HEAP_BASE + gmem_size && kernel_heap_size() != gmem_tried) { gmem_tried = kernel_heap_size(); gmem_info(); }
     if (!gmem_buf || addr + size > HEAP_BASE + gmem_size) return false;
+    if (addr - HEAP_BASE + size > gmem_direct_limit()) return false;
     gpu_read_mark(addr, size);  // (read when the submission runs: see gpu_read_mark)
     if (vcache_lookup(addr, size, buf, off)) return true;
     *buf = gmem_buf;
@@ -2918,6 +2973,9 @@ static void draw_(CmdRec *r, bool indexed) {
     // ---- rasterizer
     uint8_t cull = st.poly[0];
     if (vkey.flip_x) cull = 0;  // (mirror mode's composite: one full-screen quad, either winding)
+    static int nocull = -1;  // (debug) LARECOMP_VK_NO_CULL=1: no face culling
+    if (nocull < 0) nocull = getenv("LARECOMP_VK_NO_CULL") != NULL;
+    if (nocull) cull = 0;
     VkCullModeFlags cm = cull == 1 ? VK_CULL_MODE_FRONT_BIT : cull == 2 ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE;
     if (ss_need(SS_CULL, ss.cull == cm)) { ss.cull = cm; vkCmdSetCullMode(cb, cm); }
     bool ccw = st.poly[1] == 1;
@@ -3222,6 +3280,21 @@ static void debug_draw(Prog *pr, CmdRec *r, bool indexed) {
             const float *v = (const float *)(uintptr_t)st.vbuf[s].addr;
             LOG("[draw]   vbuf%d %llx size %llu:", s, (unsigned long long)st.vbuf[s].addr, (unsigned long long)st.vbuf[s].size);
             for (int k = 0; k < 16; k++) LOG(" %.4g", v[k]);
+            LOG("\n");
+        }
+        for (int c = 3; c < 21; c++) {  // vertex cbufs
+            Range ub = st.ubuf[0][c - 3];
+            if (!((pr->vi->cbuf_mask >> c) & 1) || !ub.addr) continue;
+            const float *u = (const float *)(uintptr_t)ub.addr;
+            LOG("[draw]   vcb%d %llx size %u:", c, (unsigned long long)ub.addr, (unsigned)ub.size);
+            for (int k = 0; k < 64 && k * 4 < (int)ub.size; k++) LOG(" %.6g", u[k]);
+            LOG("\n");
+        }
+        if (indexed && r->x[3]) {  // the first indices
+            LOG("[draw]   indices (type %llu at %llx):", (unsigned long long)r->x[1], (unsigned long long)r->x[3]);
+            for (uint32_t k = 0; k < 36 && k < (uint32_t)r->x[2]; k++)
+                LOG(" %u", r->x[1] == 1 ? ((const uint16_t *)(uintptr_t)r->x[3])[k] : r->x[1] == 2 ? ((const uint32_t *)(uintptr_t)r->x[3])[k]
+                                                                                   : ((const uint8_t *)(uintptr_t)r->x[3])[k]);
             LOG("\n");
         }
         for (int c = 3; c < 21; c++) {  // (shader cbuf c = bound uniform buffer c - 3, as cbuf_info)
