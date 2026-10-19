@@ -25,3 +25,16 @@ bool framegen_step(FgState *s, const FgFrame *f);
 float framegen_display_hz(struct SDL_Window *w);
 extern uint64_t g_fg_real, g_fg_generated;  // counters for the fps log
 #define FG_HALF_SLOT_NS 8333333ull           // the real frame is shown this long after the generated one
+
+// The passes (framegen_src.c): one shared source, assembled per backend.
+char *framegen_msl(void);                     // malloc'd MSL library: every pass as fragment function <pass>_fs, plus fg_vs
+const char *framegen_glsl(const char *pass);  // GLSL 450 fragment source for "fg_luma.frag" ... "fg_warp.frag" (NULL: unknown)
+
+#ifdef __OBJC__
+#import <Metal/Metal.h>
+// The in-between image of prev and cur (same size and format) at phase t, drawn into out (any colour format, same
+// size). reset: drop the kept luma pyramid and motion (prev's pyramid is then built from prev). false on a shader /
+// pipeline error (logged once; frame generation then stays off).
+bool fgm_encode(id<MTLDevice> dev, id<MTLCommandBuffer> cb, id<MTLTexture> prev, id<MTLTexture> cur, float t, bool reset,
+                id<MTLTexture> out);
+#endif

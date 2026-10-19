@@ -429,8 +429,13 @@ JOBS ?= $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 build/test_framegen_logic: tools/test_framegen_logic.c runtime/nvn/framegen.c runtime/nvn/framegen.h
 	@mkdir -p build
 	clang -O1 -DFG_NO_SDL -I runtime -o $@ tools/test_framegen_logic.c runtime/nvn/framegen.c
-test-framegen: build/test_framegen_logic
+build/test_framegen: tools/test_framegen.m runtime/nvn/framegen_metal.m runtime/nvn/framegen_src.c runtime/nvn/framegen.h
+	@mkdir -p build
+	clang -O1 -fobjc-arc -DFG_NO_SDL -I runtime -framework Metal -framework Foundation -o $@ tools/test_framegen.m \
+	    runtime/nvn/framegen_metal.m runtime/nvn/framegen_src.c
+test-framegen: build/test_framegen_logic build/test_framegen
 	build/test_framegen_logic
+	build/test_framegen
 
 build/test_shaders: tools/test_shaders.m runtime/nvn/maxwell/translate.c runtime/nvn/maxwell/shader.h
 	clang -O1 -fobjc-arc -framework Metal -framework Foundation -o $@ tools/test_shaders.m runtime/nvn/maxwell/translate.c
