@@ -128,7 +128,7 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
       award worth several lives found in a test course (the cap is untested in play)
     - 🔄 SMM1 screens and the ending, host-drawn (`games/smm2/mods/smm1/`: SMCraft's SMM1 layout player
       ported to C, a CPU rasterizer drawn through the overlay on Metal and Vulkan; everything from the
-      player's SMM1 dump, generated into `mods-generated/smm1-ui-v4/`):
+      player's SMM1 dump, generated into `mods-generated/smm1-ui-v5/`):
       - ✅ difficulty select (tabs by unlock, Continue only with a record, OutR/OutL slides), world map
         demos as Block.rpx plays them (MapIn, Telop, the Goombas carrying Peach, AnimB, Mario's jump /
         walk / Go, the castle at the end, lives and n/total counters, A skips to Go), the start card (one
