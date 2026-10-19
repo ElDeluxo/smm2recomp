@@ -22,9 +22,13 @@ static int g_indent;
 static bool g_focus_req, g_take_first;  // (opt_focus_first: requested / this page's first row takes it)
 void opt_focus_first(bool on) { g_focus_req = on; }
 static bool g_held;  // the last row's left / right has been held a while (steppers go faster)
+static bool g_touch;
+void opt_touch(bool on) { g_touch = on; }
 void opt_indent(int step) { g_indent = g_indent + step < 0 ? 0 : g_indent + step; }
 
 void opt_begin(const char *id, float scale) {
+    static std::string page;  // another page: its own first row's description, not the last page's
+    if (page != id) page = id, g_desc_shown.clear();
     g_scale = scale;
     g_take_first = g_focus_req;
     g_focus_req = false;
@@ -34,7 +38,7 @@ void opt_begin(const char *id, float scale) {
     ImVec2 avail = ImGui::GetContentRegionAvail();
     ImGui::PushID(id);
     ImGui::BeginChild("##rows", ImVec2(avail.x * 0.48f, avail.y), ImGuiChildFlags_None, ImGuiWindowFlags_NavFlattened);
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, 4 * scale));  // (rows close)
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, (g_touch ? 8 : 4) * scale));  // (rows close)
     g_desc_first.clear();
 }
 
@@ -52,7 +56,7 @@ static int row(const char *label, const std::string &value, bool changed, const 
     ImGui::PushID(label);
     if (g_indent) ImGui::SetCursorPosX(ImGui::GetCursorPosX() + g_indent * 28 * g_scale);  // (an option of the row above)
     ImVec2 p = ImGui::GetCursorScreenPos();
-    float w = ImGui::GetContentRegionAvail().x, h = ImGui::GetFontSize() * 1.9f;
+    float w = ImGui::GetContentRegionAvail().x, h = ImGui::GetFontSize() * (g_touch ? 2.5f : 1.9f);
     ImGui::PushStyleColor(ImGuiCol_NavCursor, ImVec4(0, 0, 0, 0));  // (the row's own border shows the selection)
     bool clicked = ImGui::InvisibleButton("##row", ImVec2(w, h), ImGuiButtonFlags_EnableNav);
     ImGui::PopStyleColor();
@@ -105,7 +109,7 @@ static int row(const char *label, const std::string &value, bool changed, const 
         dl->AddTriangleFilled(ImVec2(lx, cy), ImVec2(lx + aw, cy - aw * 0.75f), ImVec2(lx + aw, cy + aw * 0.75f), ac);
         dl->AddTriangleFilled(ImVec2(rx + aw, cy), ImVec2(rx, cy - aw * 0.75f), ImVec2(rx, cy + aw * 0.75f), ac);
         if (clicked && !off) {
-            float mx = ImGui::GetIO().MousePos.x, hit = gap;
+            float mx = ImGui::GetIO().MousePos.x, hit = g_touch ? gap * 2.2f : gap;  // (a fingertip: wider)
             if (mx >= lx - hit && mx <= lx + aw + hit) step = -1;
             else if (mx >= rx - hit && mx <= rx + aw + hit) step = 1;
         }
