@@ -966,8 +966,14 @@ static id<MTLLibrary> precompiled_library(char kind, const char *msl) {
 // e.g. on iOS) and at exit, each time into a new file from a new archive: adding to an archive that had been saved
 // or loaded before and saving it again failed on macOS 27 ("Failed to generate machO: ... expecting 'fragment' stage
 // in pipeline no. N", and the archive came out empty), while the same pipelines saved from a fresh archive at once.
+// Each file has its pipelines' descriptions next to it (NNNN.txt: shader names and fixed-function state, no game
+// data beyond what cache/shaders already holds). Archives can't be read back or merged as such, so once there are
+// more than PIPELINE_FILES_MERGE files, the next start-up rebuilds every described pipeline into one new archive on
+// the background queue (the files stay in use meanwhile) and the files it replaces are deleted at the start-up
+// after that: loading stays a few files.
 // LARECOMP_NO_PIPELINE_CACHE=1: off. Delete cache/ to reset.
 #define PIPELINE_FILES_MAX 256
+#define PIPELINE_FILES_MERGE 8
 static NSArray *g_archives;                 // the saved files (read only)
 static dispatch_queue_t g_archive_q;
 static NSMutableArray *g_archive_pending;   // descriptors not saved yet (g_archive_q only)
@@ -975,18 +981,169 @@ static int g_archive_next, g_archive_hits, g_archive_fails;
 static double g_archive_saved, g_archive_added, g_archive_first;  // (last save, last addition, oldest unsaved)
 static NSArray *pipeline_archives(void) { return g_archives.count ? g_archives : nil; }
 static void pipeline_cache_save_now(void);
+
+// A pipeline's description: its shaders' entry-point names (v_/f_/c_<hash>: the source in cache/shaders/, precompiled
+// in cache/metallib/) and the state the draw path sets.
+static NSString *pipeline_spec(id desc) {
+    if ([desc isKindOfClass:[MTLComputePipelineDescriptor class]])
+        return [NSString stringWithFormat:@"C %@", ((MTLComputePipelineDescriptor *)desc).computeFunction.name];
+    MTLRenderPipelineDescriptor *pd = desc;
+    NSMutableString *t = [NSMutableString stringWithFormat:@"R %@ %@ %lu %lu %lu %d", pd.vertexFunction.name, pd.fragmentFunction.name,
+                          (unsigned long)pd.depthAttachmentPixelFormat, (unsigned long)pd.stencilAttachmentPixelFormat,
+                          (unsigned long)pd.rasterSampleCount, pd.alphaToCoverageEnabled];
+    for (int i = 0; i < 8; i++) {
+        MTLRenderPipelineColorAttachmentDescriptor *ca = pd.colorAttachments[i];
+        [t appendFormat:@" %lu/%lu/%d/%lu/%lu/%lu/%lu/%lu/%lu", (unsigned long)ca.pixelFormat, (unsigned long)ca.writeMask,
+                        ca.blendingEnabled, (unsigned long)ca.sourceRGBBlendFactor, (unsigned long)ca.destinationRGBBlendFactor,
+                        (unsigned long)ca.sourceAlphaBlendFactor, (unsigned long)ca.destinationAlphaBlendFactor,
+                        (unsigned long)ca.rgbBlendOperation, (unsigned long)ca.alphaBlendOperation];
+    }
+    MTLVertexDescriptor *vd = pd.vertexDescriptor;
+    for (int i = 0; i < 31; i++)
+        if (vd.attributes[i].format != MTLVertexFormatInvalid)
+            [t appendFormat:@" a%d/%lu/%lu/%lu", i, (unsigned long)vd.attributes[i].format, (unsigned long)vd.attributes[i].offset,
+                            (unsigned long)vd.attributes[i].bufferIndex];
+    for (int i = 0; i < 31; i++)
+        if (vd.layouts[i].stride || vd.layouts[i].stepFunction != MTLVertexStepFunctionPerVertex)
+            [t appendFormat:@" l%d/%lu/%lu/%lu", i, (unsigned long)vd.layouts[i].stride, (unsigned long)vd.layouts[i].stepFunction,
+                            (unsigned long)vd.layouts[i].stepRate];
+    return t;
+}
+static id<MTLFunction> cached_function(NSString *name, NSMutableDictionary *seen) {  // (merging: as the draw path would)
+    id<MTLFunction> f = seen[name];
+    if (f || name.length != 18) return f;
+    for (NSString *dir in @[@"cache/metallib", @"metallib"]) {
+        if (getenv("LARECOMP_NO_PRECOMPILED")) break;
+        NSString *path = [NSString stringWithFormat:@"%@/%@.metallib", dir, name];
+        id<MTLLibrary> l = access(path.fileSystemRepresentation, R_OK) == 0 ? [dev newLibraryWithURL:[NSURL fileURLWithPath:path] error:nil] : nil;
+        if ((f = [l newFunctionWithName:name])) break;
+    }
+    if (!f) {
+        NSString *src = [NSString stringWithContentsOfFile:[NSString stringWithFormat:@"cache/shaders/%@.metal", name]
+                                                  encoding:NSUTF8StringEncoding error:nil];
+        MTLCompileOptions *o = [MTLCompileOptions new];
+        if ([name hasPrefix:@"v"]) o.preserveInvariance = YES;
+        src = [src stringByReplacingOccurrencesOfString:@" main0(" withString:[NSString stringWithFormat:@" %@(", name]];
+        f = src ? [[dev newLibraryWithSource:src options:o error:nil] newFunctionWithName:name] : nil;
+    }
+    if (f) seen[name] = f;
+    return f;
+}
+static id pipeline_from_spec(NSString *line, NSMutableDictionary *seen) {
+    NSArray *w = [line componentsSeparatedByString:@" "];
+    if (w.count == 2 && [w[0] isEqual:@"C"]) {
+        id<MTLFunction> f = cached_function(w[1], seen);
+        if (!f) return nil;
+        MTLComputePipelineDescriptor *cd = [MTLComputePipelineDescriptor new];
+        cd.computeFunction = f;
+        return cd;
+    }
+    if (w.count < 15 || ![w[0] isEqual:@"R"]) return nil;
+    id<MTLFunction> vf = cached_function(w[1], seen), ff = cached_function(w[2], seen);
+    if (!vf || !ff) return nil;
+    MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
+    pd.vertexFunction = vf;
+    pd.fragmentFunction = ff;
+    pd.depthAttachmentPixelFormat = (MTLPixelFormat)[w[3] integerValue];
+    pd.stencilAttachmentPixelFormat = (MTLPixelFormat)[w[4] integerValue];
+    pd.rasterSampleCount = (NSUInteger)[w[5] integerValue];
+    pd.alphaToCoverageEnabled = [w[6] intValue] != 0;
+    for (int i = 0; i < 8; i++) {
+        unsigned long v[9];
+        if (sscanf([w[7 + i] UTF8String], "%lu/%lu/%lu/%lu/%lu/%lu/%lu/%lu/%lu", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &v[6], &v[7], &v[8]) != 9)
+            return nil;
+        MTLRenderPipelineColorAttachmentDescriptor *ca = pd.colorAttachments[i];
+        ca.pixelFormat = v[0]; ca.writeMask = v[1]; ca.blendingEnabled = v[2] != 0;
+        ca.sourceRGBBlendFactor = v[3]; ca.destinationRGBBlendFactor = v[4];
+        ca.sourceAlphaBlendFactor = v[5]; ca.destinationAlphaBlendFactor = v[6];
+        ca.rgbBlendOperation = v[7]; ca.alphaBlendOperation = v[8];
+    }
+    MTLVertexDescriptor *vd = [MTLVertexDescriptor vertexDescriptor];
+    for (NSUInteger k = 15; k < w.count; k++) {
+        const char *x = [w[k] UTF8String];
+        unsigned long i, a, b, c;
+        if (sscanf(x + 1, "%lu/%lu/%lu/%lu", &i, &a, &b, &c) != 4 || i > 30) return nil;
+        if (x[0] == 'a') { vd.attributes[i].format = a; vd.attributes[i].offset = b; vd.attributes[i].bufferIndex = c; }
+        else if (x[0] == 'l') { vd.layouts[i].stride = a; vd.layouts[i].stepFunction = b; vd.layouts[i].stepRate = c; }
+        else return nil;
+    }
+    pd.vertexDescriptor = vd;
+    return pd;
+}
+// (start-up: a merge finished last time - its marker names the files it replaced)
+static void pipeline_cache_merged(void) {
+    int upto, into;
+    FILE *f = fopen("cache/pipelines/merged", "r");
+    if (!f) return;
+    bool ok = fscanf(f, "%d %d", &upto, &into) == 2;
+    fclose(f);
+    char path[64];
+    snprintf(path, sizeof path, "cache/pipelines/%04d.bin", into);
+    if (ok && access(path, R_OK) == 0)
+        for (NSString *n in [[NSFileManager defaultManager] contentsOfDirectoryAtPath:@"cache/pipelines" error:nil])
+            if (([n hasSuffix:@".bin"] || [n hasSuffix:@".txt"]) && n.intValue <= upto)
+                unlink([@"cache/pipelines" stringByAppendingPathComponent:n].fileSystemRepresentation);
+    unlink("cache/pipelines/merged");
+}
+static void pipeline_cache_merge(int upto, int into) {  // (on g_archive_q)
+    double t0 = now_ms();
+    NSMutableOrderedSet *specs = [NSMutableOrderedSet new];
+    for (NSString *n in [[[NSFileManager defaultManager] contentsOfDirectoryAtPath:@"cache/pipelines" error:nil]
+             sortedArrayUsingSelector:@selector(compare:)]) {
+        if (![n hasSuffix:@".txt"] || n.intValue > upto) continue;
+        NSString *t = [NSString stringWithContentsOfFile:[@"cache/pipelines" stringByAppendingPathComponent:n]
+                                                encoding:NSUTF8StringEncoding error:nil];
+        for (NSString *l in [t componentsSeparatedByString:@"\n"]) if (l.length) [specs addObject:l];
+    }
+    int n = 0, lost = 0;
+    NSMutableString *kept = [NSMutableString new];
+    @autoreleasepool {
+        NSMutableDictionary *seen = [NSMutableDictionary new];
+        id<MTLBinaryArchive> a = [dev newBinaryArchiveWithDescriptor:[MTLBinaryArchiveDescriptor new] error:nil];
+        for (NSString *l in specs) {
+            id d = pipeline_from_spec(l, seen);
+            bool ok = d && ([d isKindOfClass:[MTLComputePipelineDescriptor class]] ? [a addComputePipelineFunctionsWithDescriptor:d error:nil]
+                                                                                  : [a addRenderPipelineFunctionsWithDescriptor:d error:nil]);
+            if (ok) { n++; [kept appendFormat:@"%@\n", l]; } else lost++;
+        }
+        char path[64], tmp[72];
+        snprintf(path, sizeof path, "cache/pipelines/%04d.bin", into);
+        snprintf(tmp, sizeof tmp, "%s.tmp", path);
+        NSError *e = nil;
+        if (!n || ![a serializeToURL:[NSURL fileURLWithPath:@(tmp)] error:&e]) {
+            LOG("[shader] pipeline cache not merged: %s\n", n ? e.localizedDescription.UTF8String : "nothing to rebuild");
+            unlink(tmp);
+            return;
+        }
+        snprintf(tmp, sizeof tmp, "cache/pipelines/%04d.txt", into);
+        [kept writeToFile:@(tmp) atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        snprintf(tmp, sizeof tmp, "%s.tmp", path);
+        rename(tmp, path);
+        FILE *f = fopen("cache/pipelines/merged", "w");
+        if (f) { fprintf(f, "%d %d\n", upto, into); fclose(f); }
+    }
+    LOG("[shader] pipeline cache merged: %d pipelines into one file (%d not rebuilt; %.0f ms); the old files go at the next start\n",
+        n, lost, now_ms() - t0);
+}
+
 static void pipeline_cache_open(void) {
     static int done;
     if (done++ || getenv("LARECOMP_NO_PIPELINE_CACHE")) return;
     mkdir("cache", 0755);
     mkdir("cache/pipelines", 0755);
     double t0 = now_ms();
+    pipeline_cache_merged();
     NSMutableArray *got = [NSMutableArray new];
     NSArray *names = [[[NSFileManager defaultManager] contentsOfDirectoryAtPath:@"cache/pipelines" error:nil]
         sortedArrayUsingSelector:@selector(compare:)];
     for (NSString *n in names) {
         if (![n hasSuffix:@".bin"]) continue;
         g_archive_next = MAX(g_archive_next, n.intValue + 1);
+        if (![names containsObject:[[n stringByDeletingPathExtension] stringByAppendingString:@".txt"]]) {
+            // (from before the descriptions: it could never be merged)
+            unlink([@"cache/pipelines" stringByAppendingPathComponent:n].fileSystemRepresentation);
+            continue;
+        }
         if (got.count >= PIPELINE_FILES_MAX) continue;
         MTLBinaryArchiveDescriptor *d = [MTLBinaryArchiveDescriptor new];
         d.url = [NSURL fileURLWithPath:[@"cache/pipelines" stringByAppendingPathComponent:n]];
@@ -1001,6 +1158,11 @@ static void pipeline_cache_open(void) {
     g_archive_pending = [NSMutableArray new];
     g_archive_q = dispatch_queue_create("recomp.pipeline-cache", DISPATCH_QUEUE_SERIAL);
     atexit(pipeline_cache_save_now);
+    int merge_at = getenv("LARECOMP_PIPELINE_MERGE") ? atoi(getenv("LARECOMP_PIPELINE_MERGE")) : PIPELINE_FILES_MERGE;
+    if ((int)got.count > merge_at) {  // (LARECOMP_PIPELINE_MERGE=<n>: tests)
+        int upto = g_archive_next - 1, into = g_archive_next++;
+        dispatch_async(g_archive_q, ^{ pipeline_cache_merge(upto, into); });
+    }
 }
 // (a pipeline from the cache, or nil when it isn't there)
 static id<MTLRenderPipelineState> pipeline_cache_find_render(MTLRenderPipelineDescriptor *pd) {
@@ -1042,9 +1204,12 @@ static void pipeline_cache_save_q(void) {  // (on g_archive_q)
     @autoreleasepool {
         id<MTLBinaryArchive> a = [dev newBinaryArchiveWithDescriptor:[MTLBinaryArchiveDescriptor new] error:nil];
         int n = 0;
-        for (id d in todo)  // (compiles each pipeline once more, here off the game thread)
-            n += [d isKindOfClass:[MTLComputePipelineDescriptor class]] ? [a addComputePipelineFunctionsWithDescriptor:d error:nil]
-                                                                        : [a addRenderPipelineFunctionsWithDescriptor:d error:nil];
+        NSMutableString *specs = [NSMutableString new];
+        for (id d in todo) {  // (compiles each pipeline once more, here off the game thread)
+            bool ok = [d isKindOfClass:[MTLComputePipelineDescriptor class]] ? [a addComputePipelineFunctionsWithDescriptor:d error:nil]
+                                                                             : [a addRenderPipelineFunctionsWithDescriptor:d error:nil];
+            if (ok) { n++; [specs appendFormat:@"%@\n", pipeline_spec(d)]; }
+        }
         if (!n) return;
         char path[64], tmp[72];
         snprintf(path, sizeof path, "cache/pipelines/%04d.bin", g_archive_next);
@@ -1055,6 +1220,9 @@ static void pipeline_cache_save_q(void) {  // (on g_archive_q)
             unlink(tmp);
             return;
         }
+        snprintf(tmp, sizeof tmp, "cache/pipelines/%04d.txt", g_archive_next);
+        [specs writeToFile:@(tmp) atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        snprintf(tmp, sizeof tmp, "%s.tmp", path);
         rename(tmp, path);
         g_archive_next++;
         LOG("[shader] pipeline cache saved: %d new pipelines (%.0f ms)\n", n, now_ms() - t0);
