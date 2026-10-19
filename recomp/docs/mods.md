@@ -154,12 +154,24 @@ the run. `RECOMP_MOD_AUTOPLAY=1` (or `=jump`) plays the courses (right + run [+ 
 scripts the way to the Endless menu. `RECOMP_MOD_UNLOCK_ALL=1` opens every difficulty; `RECOMP_MOD_TRACE=1` logs
 Course World's states and every request the mod doesn't answer.
 
-**Both challenges.** With 100 Mario offered, B on SMM1's difficulty select (`hundred_flow_exit()`) leaves the player
-on SMM2's own Endless menu, which was underneath: runs there use SMM2's rules (5 lives, the start lives are switched
-in the game's run records) until the menu closes towards Course World (its Disappear state, main+0x1a24d30); the
-next visit opens 100 Mario again. **After a win** (Next on the last result screen, SMM2 on its map) the run side
-presses the map's Quit and answers the suspend locally, so SMM2 is back on its Endless menu for the next run;
-`hundred_run_start()` waits until it is.
+**Challenge Modes** (owner, 2026-10-19). With 100 Mario offered, Course World's Endless Challenge button reads
+"Challenge Modes" and opens the mode used last (`challenge_mode=` in smm2mods.ini): SMM1's 100 Mario Challenge or
+SMM2's own Endless Challenge, which runs under SMM2's rules (5 lives: the start lives are switched in the game's run
+records) and SMM2's screens. ZL / ZR or a tap on the header switch: on SMM2's menu its header reads
+"ZL < Endless Challenge > ZR" and the run side opens the flow; on the flow's select the flow draws
+"ZL ◀ 100 Mario Challenge ▶ ZR" and calls `hundred_mode_switch()`. L / R stay the difficulty, B stays back
+(`hundred_flow_exit()`: the run side presses B on SMM2's menu underneath, back to Course World). **After a win**
+the last result screen's Next is turned into its Quit (cPostRatingCheckCan exec, the screen's choice 5 -> 8) while the
+flow plays the ending, so SMM2 goes back to its Endless menu for the next run; `hundred_run_start()` waits until it
+is. **Course start:** a course SMM2 loads underneath the flow's map waits at its first play frame until
+`hundred_flow_ready_to_start()` (the card is up).
+
+**The RomFS overlay** (`romfs_overlay.{h,c}`): the mods' generated game files (the Challenge Modes texts,
+`relabel.c`; costumes; layout edits) come from the player's own dump at the first launch that needs them, into
+`<data>/mods-generated/romfs/` (private), and replace the game's files (`game_romfs_overlay()`). A feature registers
+`ROV_GENERATOR(name, version, fn)`; the folder is generated again when the set of names and versions changes.
+Helpers: files (`rov_read`, `rov_write`), SARC with or without Yaz0 (`rov_sarc_*`), MSBT texts (`rov_msbt_set`),
+BFLYT sections (`rov_flyt_*`).
 **Loading:** a course list may take long (TGRCode upstream: about a minute for a difficulty's first batch); the
 request waits up to 3 minutes and `hundred_run_status().loading` is set meanwhile.
 
