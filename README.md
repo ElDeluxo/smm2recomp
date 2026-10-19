@@ -205,3 +205,17 @@ This is an unofficial fan project, not affiliated with or endorsed by Nintendo. 
 Super Mario Maker 2 and related names are trademarks of Nintendo. No Nintendo code or assets are
 distributed here. You need a legally obtained copy of the game, and you build everything from it
 yourself.
+
+## License
+
+SMM2 Recomp is licensed under the [GNU General Public License v3.0 or later](LICENSE).
+
+It includes code under other licenses, which keep their own terms:
+
+- the recompiler started as a fork of [LAS Recomp](https://github.com/peiikai/LASRecomp) (MIT, [recomp/LICENSE-LASRecomp](recomp/LICENSE-LASRecomp))
+- the third-party libraries in `recomp/third_party/` each have their own license file (Dear ImGui, SMAA, bcdec, Mbed TLS and others)
+
+[recomp/UPSTREAM.md](recomp/UPSTREAM.md) lists each upstream project and its license.
+
+The license covers this project's own code only. It grants no rights to Nintendo's games, code or
+assets, or to anything generated from your dump.
