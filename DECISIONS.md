@@ -1476,3 +1476,16 @@ Boo result screen. This narrows the earlier "SMM1's screens throughout" plan.
   away (as the build did) is wrong.
 - **Course loading** between the card and the course is noticeably slow (the screen visibly changes
   before the course appears); hide or shorten that wait.
+
+## 2026-10-19 — 100 Mario ending credits in SMM2's look (decided)
+
+**Owner (relayed by session mario-maker-c4), tentative:** "we won't have the Miis", so the SMM1-style
+credits (`Nwk_StaffCredit_*` rows with each maker's Mii face) will probably need to change to
+something more in line with SMM2's look. Not final: the SMM1 rescue scene and thank-you stay; only
+the credits roll is in question. Options put to the owner: keep SMM1's rows with another picture
+in the Mii slot; switch to an SMM2-style course list for the credits; or keep SMM1's rows with real
+Miis, if the course source supplies Mii data (TGRCode's course records carry the maker's Mii, which
+SMM2's own Mii renderer could draw). **Decided (owner, option 2):** the credits roll uses SMM2's look: each cleared course as SMM2's
+yellow course-name banner with the maker underneath, like the course card, and no Mii slot. The
+SMM1 rescue scene and Peach's thank-you stay SMM1; the roll ends on THE END / TO BE CONTINUED as
+before.
