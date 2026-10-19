@@ -477,3 +477,26 @@ signature masked) and every request; then go to Course World: its top screen ope
   else is reachable); UDP to arbitrary peers for PIA (today: refused);
 - the rest is the game's own code: NAT check (`nncs1/2`), MatchmakeExtension, PIA peer-to-peer; their gates (a
   verified e-mail, one device at a time) show as login errors.
+
+### Proof 3 (two recomp instances in one Network Play lobby): where this stands (WIP, paused 2026-10-19)
+
+- **Server side built** (`tools/nex_test_server`): the NAT check server (UDP 10025 / 10125, replies from 10026 /
+  10027), server-sent requests (notifications, NAT traversal's InitiateProbe), MatchmakeExtension auto-matchmake
+  (3 / 15 / 40), create / join (6 / 7 / 38 / 39), MatchMaking.GetSessionURLs, NAT traversal (1 / 3 / 4 / 5 / 6 / 7),
+  SecureConnection UpdateURLs / ReplaceURL, MatchmakeExtension's no-answer methods, EndParticipation; sessions
+  matched by game mode (`matchmaking.py`); accounts of several data folders (`--accounts`).
+- **[obs] the application config is Utility.GetIntegerSettings(0)** (keys 0..37 -> the game's config array; the
+  request function main+0x14ce2f0). With an empty map Co-op shows "This service is not active right now"; with every
+  key 1 (now the default, `--config k=v` overrides) Co-op goes on: Network Play menu -> `cInetMultiClear` ->
+  `cGetMyUserInfo` -> `cAutoMatchReadyEx` -> NetAppTask `cStartAutoMatch` -> enl `cAutoMatchReady` ->
+  **MatchmakeExtension.AutoMatchmakeWithParam_Postpone** (game mode 11 for co-op, 6 attributes) arrives at the server.
+- **Where it stops:** the game refuses the server's answer (the new session it creates): enl `cSilentError`,
+  then MatchMaking method 2 and the Network Play error window. Next: check the MatchmakeSession encoding against the
+  game's extractor (structure versions, the MatchmakeParam and later fields), as was done for GetNewNotification.
+- **Still to do:** the NAT check and PIA's UDP (not reached yet); two instances on one Mac probably need a
+  per-instance virtual address for PIA's UDP ports (127.0.0.2 can't be bound without root); the co-op course download
+  (DataStore PrepareGetObject + an HTTPS course file); then both instances in one lobby, a course started, inputs.
+- **Tools** (private, `/Volumes/SSD/smm-work/recomp-net/`): `run2.sh` (server + two instances with their own data
+  folders / accounts), `cycle.sh` (one instance), `RECOMP_NET_TRACE_STATES=<states.txt>` (the enl / Network Play /
+  NetAppTask state names, made from the player's own game by `stategen.py`; never committed) logs each state entered.
+- Machine load matters: with ~28 other game instances on this Mac one instance reaches Network Play in 4-12 min.
