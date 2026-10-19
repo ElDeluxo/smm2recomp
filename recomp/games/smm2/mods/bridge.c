@@ -275,14 +275,17 @@ static void driver_start(void) {
 // Challenge Modes on SMM2's side: on SMM2's Endless menu, ZL / ZR or a tap on its header ("ZL < Endless Challenge >
 // ZR", relabel.c; the header's band at the top left) switch to the 100 Mario Challenge.
 extern bool touch_first(int32_t *x, int32_t *y);     // runtime/hle/touch.c
+// (ZL / ZR or the touch that switched here from the flow count as held: they must be let go first)
+static uint64_t switch_prev_b;
+static bool switch_prev_touch;
 static bool mode_switch_pressed(void) {
-    static uint64_t prev_b;
-    static bool prev_touch;
+    uint64_t prev_b = switch_prev_b;
+    bool prev_touch = switch_prev_touch;
     uint64_t b = input_player_buttons() & (1u << 8 | 1u << 9);  // ZL, ZR
     int32_t x = 0, y = 0;
     bool touch = touch_first(&x, &y) && x >= 90 && x < 760 && y < 90;
     bool hit = (b & ~prev_b) || (touch && !prev_touch);
-    prev_b = b, prev_touch = touch;
+    switch_prev_b = b, switch_prev_touch = touch;
     return hit;
 }
 
@@ -293,6 +296,9 @@ static void select_pending_tab(Cpu *c, uint64_t page) {
     uint64_t save[8];
     memcpy(save, c->x, sizeof save);
     c->x[0] = g64(page + 0x48);  // (the tab buttons' handlers get the page's owner [obs: their this = page+0x48])
+    // (a handler does nothing for the difficulty already shown (main+0x2c3f618): another one first, so the page
+    // redraws the run as the records say now [inf, main+0x1a22260])
+    s32(MAIN_ADDR(0x2c3f618), (uint32_t)(d + 1) % 4);
     if (c->x[0]) guest_call(c, MENU_TAB0 + 0xc0ull * (uint64_t)d);
     memcpy(c->x, save, sizeof save);
     pending_tab = -1;
@@ -627,6 +633,7 @@ void hundred_mode_switch(void) {  // ZL / ZR / the tap on the flow's select: SMM
     set_drv(DRV_IDLE);
     mod_remember_mode(true);
     mod_set_smm2_session(true);
+    switch_prev_b = 1u << 8 | 1u << 9, switch_prev_touch = true;
     uint32_t d = g32(MAIN_ADDR(0x2c3f618));  // (the menu's difficulty: its tab again redraws the run shown)
     pending_tab = d < 4 ? (int)d : 0;
 }
