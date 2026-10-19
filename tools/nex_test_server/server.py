@@ -9,7 +9,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import certs, nex, websocket
+from . import certs, natcheck, nex, websocket
 
 
 class Log:
@@ -31,15 +31,15 @@ class Log:
             self.capture.flush()
 
 
-def account_key(folder: Path) -> bytes | None:
-    """The recomp's local account key (runtime/net/token.c writes net/account.txt), to check its token's signature"""
-    p = folder / "account.txt"
-    if not p.exists():
-        return None
-    for ln in p.read_text().splitlines():
-        if ln.startswith("key "):
-            return bytes.fromhex(ln[4:].strip())
-    return None
+def account_keys(folders: list[Path]) -> list[bytes]:
+    """The recomp's local account keys (runtime/net/token.c writes net/account.txt in each data folder), to check
+    their tokens' signatures"""
+    keys = []
+    for folder in folders:
+        p = folder / "account.txt"
+        if p.exists():
+            keys += [bytes.fromhex(ln[4:].strip()) for ln in p.read_text().splitlines() if ln.startswith("key ")]
+    return keys
 
 
 async def serve(args: argparse.Namespace) -> None:
@@ -56,7 +56,11 @@ async def serve(args: argparse.Namespace) -> None:
         sni[id(sock)] = name or ""
 
     ctx.sni_callback = on_sni
-    server = nex.Server(log, account_key(folder), args.name)
+    folders = [folder] + [Path(f) for f in (args.accounts.split(",") if args.accounts else [])]
+    server = nex.Server(log, account_keys(folders), args.name)
+    for kv in args.config or []:
+        k, v = kv.split("=")
+        server.config[int(k)] = int(v)
     counter = [0]
 
     async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -83,7 +87,7 @@ async def serve(args: argparse.Namespace) -> None:
             writer.write(websocket.upgrade_response(headers))
             await writer.drain()
             log(f"conn {conn} WebSocket upgraded")
-            session = nex.Session(server, conn)
+            session = nex.Session(server, conn, lambda pkt: writer.write(websocket.frame(websocket.OP_BINARY, pkt)))
             buf, msg, msg_op = b"", b"", 0
             while True:
                 data = await reader.read(65536)
@@ -126,6 +130,7 @@ async def serve(args: argparse.Namespace) -> None:
         finally:
             writer.close()
 
+    await natcheck.NatCheck(args.addr, log).start()
     srv = await asyncio.start_server(handle, args.addr, args.port, ssl=ctx)
     log(f"local NEX test server on {args.addr}:{args.port} (TLS; CA {ca}); the recomp: backend=local-nex "
         f"nex_test_server={args.addr}:{args.port}")
@@ -149,6 +154,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--certs", default="recomp/private/smm2/net",
                     help="private folder for the test CA and certificate (default recomp/private/smm2/net: the "
                          "recomp's data folder net/, where it looks for test-ca.pem)")
+    ap.add_argument("--accounts", help="more data folders' net/ (comma-separated) whose account keys check tokens")
+    ap.add_argument("--config", action="append", help="an application config value k=v (GetIntegerSettings(0))")
     ap.add_argument("--name", default="Player", help="the player's name until the game registers one")
     ap.add_argument("--log", help="also append the log here")
     ap.add_argument("--capture", help="append every message (hex) here")
