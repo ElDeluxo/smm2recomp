@@ -23,8 +23,9 @@ PATCHES = {PLAYER_UPDATE: player_update_hook}
 
 # Mods (games/smm2/mods/patches.py): host hooks after single instructions; they change nothing unless a mod is on.
 import importlib.util as _ilu, os as _os
-_spec = _ilu.spec_from_file_location('smm2_mod_patches', _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
-                                                                       'mods', 'patches.py'))
-_mods = _ilu.module_from_spec(_spec)
-_spec.loader.exec_module(_mods)
-PATCHES.update(_mods.PATCHES)
+for _name in ('patches', 'smm1_extras'):  # (smm1_extras: the SMM1 feature settings, games/smm2/mods/smm1_extras.c)
+    _spec = _ilu.spec_from_file_location('smm2_mod_' + _name, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+                                                                            'mods', _name + '.py'))
+    _mods = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_mods)
+    PATCHES.update(_mods.PATCHES)

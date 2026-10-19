@@ -178,7 +178,15 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     Mario in SMB1 courses; in game: the costume on from the start (Peach, Samus), the pickup (Super Mushroom
     → Block costume, its power-up sound), the goal and death sounds, the reward window after the ending;
     ⬜ a hit taking it off (hook in place, not yet seen in a run), jump / taunt sounds, more than one costume per
-    course), mid-air shell jumps, overlapping (overlay) pipes, and more from research/specs/smm1-extras*
+    course); the SMM1 extras (`mods/smm1_extras.c`, all off by default, `recomp/docs/mods.md` "SMM1 extras"):
+    ✅ "Overlapping pipes (SMM1)" (one hook in the game's placement check, main+0xfe827c: SMM2 rejects a
+    course whose pipes overlap and plays a blank one, and its Course Maker snaps a pipe dragged onto another back;
+    with the setting on, both test courses (ours and the pipes of SMM1's sample course 95, read from the SMM1
+    dump) load and play, and a pipe dragged onto another stays; with it off, a replay against Ryujinx is
+    identical in 606 / 606 updates and the whole player object; both switches on screen in the Mods tab: `evidence/smm1-extras/`); 🔄 "Mid-air shell
+    jumps (SMM1)" (hooks in place: SMM1's flat falling stomp window on shells, main+0x1267ce8, and the 5-frame
+    instead of 16-frame no-hit window after a mid-air kick off a wall, main+0x1202c88; ⬜ a test course where
+    the SMM1 jump works with it on); ⬜ more from research/specs/smm1-extras*
   - 🔄 **Our open-source server everywhere the game would reach Nintendo** (`recomp/docs/mods.md`,
     `games/smm2/mods/world.c`): ✅ Course World's course lists (Hot, Popular, New, detailed search, a
     maker's courses) from `/api/courses`, the course page (likes, plays, clear rate, world record, maker
