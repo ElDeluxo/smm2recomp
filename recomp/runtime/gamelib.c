@@ -55,6 +55,13 @@ static bool exists(const char *p) {
 static int candidates(const char *game_dir, char out[3][1100]) {
     int n = 0;
     const char *env = getenv("LARECOMP_GAME_LIB");
+#ifdef __ANDROID__
+    // Android: the library in the APK, by its name (the app's library path finds it; it may stay inside the APK, so
+    // there is no file or id file to look at: its own id decides, as with LARECOMP_GAME_LIB)
+    (void)game_dir;
+    snprintf(out[n++], 1100, "%s", env && *env ? env : GAMELIB_NAME);
+    return n;
+#endif
     if (env && *env) snprintf(out[n++], 1100, "%s", env);
     char exe_side[1024];
     if (rt_resource(GAMELIB_NAME, NULL, exe_side, sizeof exe_side) && exists(exe_side))
@@ -65,6 +72,10 @@ static int candidates(const char *game_dir, char out[3][1100]) {
 
 bool gamelib_present(const char *game_dir) {
     if (g_tables) return true;
+#ifdef __ANDROID__
+    (void)game_dir;
+    return true;  // (packaged with the app)
+#endif
     char c[3][1100];
     int n = candidates(game_dir, c);
     for (int i = 0; i < n; i++)
@@ -102,8 +113,13 @@ bool gamelib_load(const char *game_dir, char *why, size_t why_size) {
         int n = candidates(game_dir, c);
         const char *env = getenv("LARECOMP_GAME_LIB");
         for (int i = 0; i < n && !g_tables; i++) {
+#ifdef __ANDROID__
+            bool given = true;  // (a name for the dynamic linker, not a path: candidates())
+            (void)env;
+#else
             if (!exists(c[i])) continue;
             bool given = i == 0 && env && *env;  // LARECOMP_GAME_LIB: loaded as given, the library's own id decides
+#endif
             if (!given && !id_matches(c[i])) {
                 snprintf(g_error, sizeof g_error, "%s was built for another version", c[i]);
                 continue;

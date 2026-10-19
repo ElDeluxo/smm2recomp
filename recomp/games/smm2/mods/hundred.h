@@ -35,6 +35,7 @@ enum {
     HUNDRED_SKIP,         // the skip finished (SMM1: free, the next course)
     HUNDRED_GIVEUP_SAVE,  // Save & Quit done
     HUNDRED_ERROR,        // the course could not be fetched or loaded
+    HUNDRED_NEXT,         // after a clear: the player left SMM2's result screen with Next (the run goes on, or is won)
 };
 
 // ---- the flow's (mods/smm1/flow.c), called by the mod
@@ -44,6 +45,9 @@ bool hundred_flow_overlay(void);         // an SMM1 overlay is up over the cours
 void hundred_flow_pause(void);           // the player paused during a run (the mod keeps SMM2's own pause from opening)
 void hundred_flow_course_started(void);  // the course is on screen and playing (the start card may go)
 void hundred_course_result(int outcome);
+bool hundred_flow_ready_to_start(void);  // the course may start playing (the card is up, or no SMM1 screen is): SMM2
+                                         // loads underneath the map and holds the course's first play frame until
+                                         // this is true (asked every frame; the mod's stand-in says yes)
 
 // ---- the mod's, called by the flow
 bool hundred_run_status(struct hundred_status *out);        // any time (unlocks / continue data with no run)
@@ -55,7 +59,14 @@ void hundred_play_retry(void);     // the same course again (after a miss with l
 void hundred_play_skip(void);      // SMM1's skip (held button): end this course, the next one comes
 void hundred_run_save_quit(void);  // Save & Quit: keep the continue data, leave the course
 void hundred_run_finish(void);     // the run is over (won, or game over): clear its continue data
-void hundred_flow_exit(void);      // B on the difficulty select: back to SMM2's Course World
+void hundred_flow_exit(void);      // B on the difficulty select: back to SMM2's Course World (the flow closes)
+
+// Challenge Modes (owner, 2026-10-19): Course World's "Challenge Modes" button opens the mode used last; ZL / ZR (or a
+// tap on the header) switch between the 100 Mario Challenge and SMM2's own Endless Challenge; L / R stay the
+// difficulty, B stays back. The flow draws "ZL ◀ 100 Mario Challenge ▶ ZR" on its select; the mod does SMM2's side.
+bool hundred_modes_available(void);  // true: show the header and take ZL / ZR / the tap on the select
+void hundred_mode_switch(void);      // ZL / ZR / the tap on the select: to SMM2's Endless Challenge (remembered); the
+                                     // flow closes its screens after calling it (SMM2's Endless menu is underneath)
 
 // ---- the earlier ending-only interface (kept for the mod's first calls): the ending alone, with these credits
 void hundred_ending_show(int difficulty, int n, const struct hundred_credit *credits);

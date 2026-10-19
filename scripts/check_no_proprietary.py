@@ -5,7 +5,8 @@ Checks these things for every file git knows about:
   1. extension   - container/asset/executable/key formats used by the Wii U and Switch, and
                    native binaries / translated shaders (the recomp builds those locally)
   2. magic bytes - catches renamed files (e.g. a SARC saved as .dat, an AArch64 ELF, a Mach-O)
-  3. key lines   - lines shaped like Switch prod.keys / title.keys entries
+  3. key lines   - lines shaped like Switch prod.keys / title.keys entries, and PEM private keys or certificates
+                   (from any console, or the recomp's local test CA: those are made locally into private/)
   4. recomp      - nothing under recomp/private/ or recomp/generated/ (derived from the dump),
                    and no text that looks like AArch64 disassembly or recompiled game code
 
@@ -43,12 +44,16 @@ BLOCKED_EXTENSIONS = {
     ".bcd",
     # keys
     ".keys",
+    # private keys and certificates (the local NEX test CA lives in recomp/private/, never in git)
+    ".pem", ".key", ".crt", ".der", ".p12", ".pfx", ".csr",
     # opaque archives (could hold anything)
     ".7z", ".rar",
     # native binaries and translated shaders: the recomp generates these locally from the dump
     ".elf", ".o", ".obj", ".a", ".lib", ".so", ".dylib", ".dll", ".exe", ".spv", ".nss", ".kip",
     # the Metal back-end's shader / pipeline cache (the game's shaders, translated and compiled: data folder cache/)
     ".metal", ".metallib", ".air",
+    # app packages built from the dump (they carry its recompiled code) and their signing keys
+    ".apk", ".aab", ".dex", ".ipa", ".keystore", ".jks",
 }
 BLOCKED_NAMES = {"prod.keys", "title.keys", "dev.keys", "otp.bin", "seeprom.bin", "common.key", "game.key"}
 
@@ -91,8 +96,9 @@ MAGICS = [
     # per-frame player traces (recomp games/smm2/trace.c, the Ryujinx trace build): snapshots of game memory
     (0, b"TRC1", "player state trace (game memory)"),
 ]
-# Paths that hold files derived from the dump (recompiled code, translated shaders, extracted data)
-BLOCKED_PATH_PARTS = ("/recomp/private/", "/recomp/generated/", "/recomp/build/")
+# Paths that hold files derived from the dump (recompiled code, translated shaders, extracted data), and the
+# player packages (recomp/dist: built locally, published only as release assets)
+BLOCKED_PATH_PARTS = ("/recomp/private/", "/recomp/generated/", "/recomp/build/", "/recomp/dist/")
 # AArch64 disassembly lines ("71000123c0: f9400420  ldr x0, [x1, #8]" or "ldr x0, [x1]")
 ASM_LINE = re.compile(
     r"\b(ldr|str|ldp|stp|ldrb|strb|ldrh|strh|adrp|movz|movk|blr|cbz|cbnz|tbz|tbnz|ldaxr|stlxr)"
@@ -111,6 +117,11 @@ KEY_LINE = re.compile(
 # "<key>", "label: <key>", "<key> label" - lines that are just a key and a short label
 BARE_KEY_LINE = re.compile(
     r"^(?:[\w .:-]{0,40}[:=\s])?\s*(?:[0-9a-f]{32}|[0-9a-f]{64})\s*(?:[#;]?[\w .:-]{0,40})?$", re.IGNORECASE
+)
+# a PEM block with its base64 body: a private key or a certificate (the bare header text alone, as in TLS library
+# sources that parse PEM, is fine)
+PEM_BLOCK = re.compile(
+    r"-----BEGIN (?:[A-Z0-9]+ )*(?:PRIVATE KEY|CERTIFICATE|CERTIFICATE REQUEST)-----\s*\n\s*[A-Za-z0-9+/=]{40,}"
 )
 KEY_FILENAME = re.compile(r"keys?\b|otp|seeprom", re.IGNORECASE)
 MAX_BYTES = 5 * 1024 * 1024
@@ -170,6 +181,8 @@ def check_file(path: Path) -> list[str]:
             text = ""
         if KEY_LINE.search(text):
             problems.append("contains lines shaped like console key entries")
+        if PEM_BLOCK.search(text):
+            problems.append("contains a PEM private key or certificate")
         if len(ASM_LINE.findall(text)) > ASM_LIMIT:
             problems.append("content looks like AArch64 disassembly")
         if len(RECOMP_LINE.findall(text)) > RECOMP_LIMIT:

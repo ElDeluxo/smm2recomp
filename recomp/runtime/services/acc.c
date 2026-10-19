@@ -4,7 +4,9 @@
 
 #include "../hle.h"
 #include "../ipc.h"
+#include "../net/netcfg.h"
 #include "../net/online.h"
+#include "../net/token.h"
 
 const uint8_t g_user_id[16] = {0x4c, 0x41, 0x52, 0x65, 0x63, 0x6f, 0x6d, 0x70, 0x01, 0, 0, 0, 0, 0, 0, 0x01};
 
@@ -34,7 +36,9 @@ static void profile(Service *s, IpcReq *req, IpcResp *resp) {
 }
 
 // Pretend online (runtime/net/online.h): the user has a network service account whose ID token is ready. The token
-// is a local placeholder (no Nintendo service is asked; mods answer the game's online calls themselves).
+// is a local placeholder (no Nintendo service is asked; mods answer the game's online calls themselves). With the
+// game's own network stack on (backend local-nex) the account ID and the token are the local account's
+// (runtime/net/token.h): a JWT the local NEX test server can check.
 static void async_context(Service *s, IpcReq *req, IpcResp *resp) {
     (void)s;
     switch (req->cmd) {
@@ -58,11 +62,15 @@ static bool online_manager(IpcReq *req, IpcResp *resp) {
         return true;
     case 3: case 142: {  // LoadIdTokenCache -> buffer, u32 size
         IpcBuf *b = out_buf(req, 0);
+        static char jwt[2048];
+        const char *t = token;
         uint32_t n = sizeof token - 1;
+        if (net_real_sockets() && (n = (uint32_t)net_id_token(jwt, sizeof jwt))) t = jwt;
+        else n = sizeof token - 1;
         if (b && b->size) {
-            if (n > b->size) n = (uint32_t)b->size;
+            if (n > b->size) LOG("[acc] the ID token (%u bytes) does not fit the game's buffer (%llu)\n", n, (unsigned long long)b->size), n = (uint32_t)b->size;
             memset((void *)(uintptr_t)b->addr, 0, b->size);
-            memcpy((void *)(uintptr_t)b->addr, token, n);
+            memcpy((void *)(uintptr_t)b->addr, t, n);
         }
         OUT(uint32_t, 0) = n;
         resp_size(resp, 4);
@@ -85,10 +93,13 @@ static bool online_manager(IpcReq *req, IpcResp *resp) {
 
 static void manager(Service *s, IpcReq *req, IpcResp *resp) {
     (void)s;
-    if (net_pretend_online() && online_manager(req, resp)) return;
+    if (net_online() && online_manager(req, resp)) return;
     switch (req->cmd) {
     case 0: break;  // CheckAvailability
-    case 1: OUT(uint64_t, 0) = 0x1234567890abcdefull; resp_size(resp, 8); break;  // GetAccountId
+    case 1:  // GetAccountId (the network service account)
+        OUT(uint64_t, 0) = net_real_sockets() ? net_nsa_id() : 0x1234567890abcdefull;
+        resp_size(resp, 8);
+        break;
     default: LOG("[acc] IManagerForApplication cmd %u (ok)\n", req->cmd); resp_size(resp, 0x10);
     }
 }

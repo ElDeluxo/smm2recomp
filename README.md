@@ -1,81 +1,173 @@
 # SMM2 Recomp
 
-A native port of **Super Mario Maker 2 v3.0.3**, built by **static recompilation** of your own
-dump: the game's AArch64 code is translated to C ahead of time on your machine and compiled for
-it, its system calls run on a native runtime, and its graphics run on Metal (macOS, iOS) or Vulkan
-(Windows, Linux). SMM1's **100 Mario Challenge** (exactly as in SMM1, with SMM1's screens and ending, against
-our open-source course server instead of Nintendo's) and **Mystery Mushroom costumes** come as mods.
+A native port of **Super Mario Maker 2** (v3.0.3) for macOS, iOS / iPadOS, Windows, Linux and
+Android, made by **static recompilation**. The game's AArch64 code is translated to C ahead of time
+and compiled for your platform. A native runtime stands in for the Switch's system services, and
+the game's graphics run on Metal or Vulkan. Nothing is emulated at run time.
 
-**Nothing from the game is in this repository**: no code, assets, text, keys or recompiled output.
-You supply your own dump; everything made from it is generated on your machine into gitignored
-folders, and `scripts/check_no_proprietary.py` blocks it in CI and in a pre-commit hook.
+On top of the original game it adds:
 
-**Status** (evidence per platform in [PROGRESS.md](PROGRESS.md)): on macOS (Apple Silicon) the game
-boots and renders its title screen at 60 fps; title frames are within 2.5–4.8 % of pixels of
-Ryujinx's. Playing courses with input replays checked frame by frame against Ryujinx, the 100
-Mario mod, the Windows / Linux builds, iOS and costumes are in progress. Approach and the projects
-it builds on (a fork of [LAS Recomp](https://github.com/peiikai/LASRecomp), MIT): the recomp entry
-in [DECISIONS.md](DECISIONS.md).
+- **The 100 Mario Challenge from Super Mario Maker 1**, with SMM1's difficulty select, world map,
+  start card and ending, next to SMM2's own Endless Challenge
+- **Course World without Nintendo's servers**, through a self-hostable open-source course server,
+  or courses from [TGRCode](https://tgrcode.com/mm2)'s public archive
+- **SMM1 features as mods**, each with its own switch (in progress: Mystery Mushroom costumes,
+  mid-air shell jumps, overlapping pipes)
+
+> **You need your own copy of the game.** This repository and its downloads contain no code,
+> assets, text, keys or recompiled output from Super Mario Maker 2 or Super Mario Maker. You point
+> the program at your own dump, and everything made from it is generated on your machine.
+
+## Play it
+
+A download is a **launcher plus the recompiler**, not the game: on first start it takes your dump,
+checks it, recompiles the game code on your computer, and then runs it.
+
+> No release has been published yet. The packages are built by GitHub Actions when a release is
+> tagged; until the first one, build it yourself ([Building](#building)).
+
+1. **Download** the package for your system from
+   [Releases](https://github.com/smm2recomp/smm2recomp/releases):
+
+   | System | Package | Also needs |
+   |---|---|---|
+   | Windows 10 / 11, x64 | `SMM2Recomp-windows-x86_64.zip` | a CPU with AVX2, a Vulkan 1.3 graphics driver ([docs/windows.md](docs/windows.md)) |
+   | Linux, x64 or arm64 | `SMM2Recomp-linux-x86_64.tar.gz`, `-linux-aarch64.tar.gz` | SDL3 3.2+ and a Vulkan 1.3 driver from your distribution (Debian 13, Ubuntu 25.04, Fedora 41, Arch or newer); x64: AVX2 |
+   | macOS 15+, Apple silicon | `SMM2Recomp-macos-arm64.zip` (`SMM2Recomp.app`) | nothing; the app isn't notarized: right-click > Open the first time |
+
+2. **Unpack it and start it** (`smm2recomp.exe`, `./smm2recomp` or `SMM2Recomp.app`). Windows
+   keeps everything in the unpacked folder, so put it somewhere writable.
+3. **Point it at your dump.** The setup screen asks for:
+   - **Super Mario Maker 2 with the 3.0.3 update:** the game's NSP or XCI and the update's NSP,
+     or folders with their extracted ExeFS and RomFS. The version is checked against the known
+     3.0.3 files (build ids and hashes of your own files).
+   - **Your console's `prod.keys` and firmware** (the folder of its system `.nca` files): the
+     game's fonts come from there. If an emulator already has them, they're filled in. They're
+     read where they are, never copied, and key values are never shown or logged.
+   - Optionally **Super Mario Maker (Wii U)**, for the SMM1 mods.
+4. **Set up and play.** The first time it extracts and lays out your files, copies the fonts and
+   recompiles the game code with the bundled compiler: a few minutes to half an hour. Then the
+   game starts, and later starts go straight to it.
+
+The setup screen tells you when a newer release is out and links to it; nothing is downloaded by
+itself. Android and iOS / iPadOS have no download: they're built yourself from source
+([recomp/README.md](recomp/README.md)); iOS needs a Mac to build, sign and install the app.
 
 ## Screenshots
-
-Captured from the macOS build, running from the owner's own dump.
 
 | Title screen | Playing the title course | Make / Play |
 |---|---|---|
 | ![Title screen](docs/screenshots/title.jpg) | ![Mario running the title course](docs/screenshots/title-course.jpg) | ![Make and Play menu](docs/screenshots/menu.jpg) |
 
-**100 Mario Challenge mod** (in progress): SMM1's own screens, drawn from the player's SMM1 dump
-over the recomp, with courses from our open-source server playing in SMM2's own course play.
-Runs end after Easy 8 / Normal 16 / Expert 16 / Super Expert 6 clears with SMM1's ending; a full
-Super Expert run plays from the select screen to THE END. (Course names in the credits come from a
-test server.)
+**100 Mario Challenge**
 
-| Difficulty select | Super Expert map, 2 of 6 cleared | Start card, ×100 |
+| Difficulty select | World map | Start card |
 |---|---|---|
 | ![100 Mario Challenge difficulty select](docs/screenshots/100mario-select.jpg) | ![Super Expert world map with Bowser's castle](docs/screenshots/100mario-map.jpg) | ![Start card with 100 little Marios](docs/screenshots/100mario-card.jpg) |
 
-| The win: Peach's Super Expert thank-you | Credits: each cleared course and its maker |
+| Ending | Credits |
 |---|---|
-| ![SMM1 ending: Peach thanks Mario](docs/screenshots/100mario-ending.jpg) | ![SMM1 ending credits](docs/screenshots/100mario-credits.jpg) |
+| ![Peach thanks Mario](docs/screenshots/100mario-ending.jpg) | ![Credits listing each cleared course and its maker](docs/screenshots/100mario-credits.jpg) |
 
-## Layout
+## Status
 
-| Path | What |
+**Early development.** No release has been published yet; the release packages build, and you can
+build it yourself from source.
+
+| Platform | Graphics | Status |
+|---|---|---|
+| **macOS** (Apple Silicon) | Metal | Plays courses. Input replays stay frame-for-frame in sync with the game running in Ryujinx, and in-course frames are pixel-identical in 71 of 90 style × theme combinations. The reference platform. The player app goes from an empty data folder through its setup screen and the first-launch recompile to the title screen. |
+| **iOS / iPadOS** (arm64) | Metal | Plays at 60 fps on iPad Pro, with an on-screen controller and touch. Built on a Mac and installed on your own device. |
+| **Windows** (x64) | Vulkan | The player package (setup screen, recompiler) builds; not yet tested on real hardware. See [docs/windows.md](docs/windows.md). |
+| **Linux** (x64, arm64) | Vulkan | The player packages build; arm64 boots to the title screen in a VM. |
+| **Android** (arm64, Android 13+) | Vulkan | Builds an APK on your computer from your dump; boots and plays the title course in the Android emulator. Not yet tested on a real device. |
+
+| Feature | Status |
 |---|---|
-| `recomp/` | the recompiler (`tools/`), the runtime (`runtime/`: kernel, services, NVN on Metal / Vulkan), SMM2's glue (`games/smm2/`) — see [recomp/README.md](recomp/README.md) |
-| `core/` | the open-source course server (`mmk server`) the mods talk to: accounts, courses, leaderboards, Endless / 100 Mario runs, online-play relay |
-| `smmfmt/`, `tests/` | Python reference for the course formats (`python -m smmfmt course.bcd`) |
-| `docs/` | course formats, toolchain, self-hosting the server, Windows |
-| `research/` | private reverse-engineering notes (gitignored; prose and tables, no game code) |
+| Title, menus, course play, Course Maker test play | Working; fidelity work ongoing |
+| 100 Mario Challenge (SMM1) | Playable start to finish, ending included |
+| Endless Challenge (SMM2) | Playable against the course server |
+| Course World (lists, search, download, play, leaderboards) | Working against the course server; likes, comments and uploads in progress |
+| Edit any course (as in SMM1) | In progress |
+| SMM1 feature switches | In progress |
+| Online multiplayer | Planned; network groundwork in progress |
 
-## Build and play (macOS, Apple Silicon)
+[PROGRESS.md](PROGRESS.md) has the detailed checklist and the evidence behind each item, and
+[DECISIONS.md](DECISIONS.md) records the design decisions and why they were made.
 
-Requirements: Xcode command line tools, Homebrew `sdl3` and `ffmpeg`, Python 3.12+, and your own
-extracted dump (base RomFS, v3.0.3 update ExeFS and RomFS). About 2 GB of disk.
+## How it works
+
+1. **Recompile.** The recompiler (`recomp/tools/`, Python) reads the game's executable from your
+   dump and translates every function to C.
+2. **Build.** That C is compiled together with the runtime (`recomp/runtime/`, C and
+   Objective-C), which implements the Switch's kernel, system services, audio, input and the NVN
+   graphics API on Metal or Vulkan.
+3. **Play.** The result is an ordinary native app that loads the game's assets straight from your
+   dump.
+
+Mods hook into the recompiled game at chosen functions. The course server (`core/`, Rust) answers
+the requests the game would normally send to Nintendo.
+
+The recompiler is a fork of [LAS Recomp](https://github.com/peiikai/LASRecomp) (MIT).
+
+## Building
+
+### What you need
+
+- A dump of **Super Mario Maker 2**: the base game RomFS plus the **v3.0.3 update** ExeFS and
+  RomFS, extracted
+- For the 100 Mario Challenge, a dump of **Super Mario Maker** (Wii U)
+- macOS on Apple Silicon with the Xcode command-line tools, Homebrew `sdl3` and `ffmpeg`, and
+  Python 3.12 or newer
+- About 2 GB of free disk space
+
+### macOS
 
 ```sh
 make -C recomp venv        # once: the recompiler's Python environment
-make -C recomp smm2        # check the dump, recompile it to C on this machine, build (10–20 min the first time)
+make -C recomp smm2        # verify the dump, recompile it to C, build (10–20 min the first time)
 make -C recomp run-smm2    # play
 ```
 
-Keyboard: WASD stick, arrows d-pad, K / J / L / I = A / B / X / Y, Q / E = L / R, 1 / 3 = ZL / ZR,
-Enter / Backspace = + / −; F1 or Esc opens the overlay menu (video, audio, controls), F11 full
-screen. Controllers work too. Details and options: [recomp/README.md](recomp/README.md).
+**Controls:** a controller works out of the box. On the keyboard:
 
-## Windows
+| Keys | Switch button |
+|---|---|
+| WASD | left stick |
+| arrow keys | D-pad |
+| K / J / L / I | A / B / X / Y |
+| Q / E | L / R |
+| 1 / 3 | ZL / ZR |
+| Enter / Backspace | + / − |
+| F1 or Esc | settings menu |
+| F11 | full screen |
 
-The SMM2 Recomp builds for Windows 10/11 x64 on Vulkan: `smm2recomp.exe`, cross-compiled from macOS with zig, and a
-player package (`make -C recomp TARGET=windows-x86_64 GAME=smm2 DEPS=<deps> all package` ->
-`dist/SMM2Recomp-windows-x86_64.zip`, nothing from the game in it). On first launch it recompiles the game code from
-your own dump on your PC. **It has not been run on Windows yet.** [docs/windows.md](docs/windows.md) has the
-requirements, the build, the first-launch dump setup and recompile, how to play, and troubleshooting.
+### Other platforms
+
+- **Windows:** cross-compiled from macOS into a package that recompiles the game from your dump on
+  first launch. See [docs/windows.md](docs/windows.md).
+- **iOS / iPadOS, Linux, Android:** see [recomp/README.md](recomp/README.md).
+
+### The player packages
+
+```sh
+make -C recomp GAME=smm2 app-macos                                  # dist/SMM2Recomp-macos-arm64.zip
+recomp/tools/fetch_zig.sh && recomp/tools/fetch_deps.sh windows-x86_64
+make -C recomp TARGET=windows-x86_64 GAME=smm2 DEPS="$PWD/recomp/build/deps-windows-x86_64" package
+```
+
+Each package is checked for anything from a game dump before it is archived
+(`scripts/check_package.py`). `.github/workflows/release.yml` builds all of them when a `v*` tag
+is pushed and attaches them to the release; details in [recomp/README.md](recomp/README.md).
 
 ## The course server
 
-Self-hostable; it never talks to Nintendo's network. The recomp's 100 Mario mod uses it for
-courses, runs and leaderboards (or a local one over your own course folder).
+Course World, the Endless Challenge and the 100 Mario Challenge talk to a self-hostable
+open-source server instead of Nintendo's. The server holds accounts, courses, leaderboards and
+challenge runs, and can also pull courses from TGRCode's archive. On iOS a copy runs inside the
+app, so no setup is needed.
+
+To run your own:
 
 ```sh
 cd core
@@ -84,25 +176,32 @@ cargo run --release -p mmk-cli -- register Ada --server http://localhost:8640   
 cargo run --release -p mmk-cli -- upload --token <token> courses/*.bcd --keys <course key table>
 ```
 
-[docs/self-hosting.md](docs/self-hosting.md) covers ports, HTTPS, accounts and moderation; the API
-is at the top of `core/crates/server/src/lib.rs`.
+[docs/self-hosting.md](docs/self-hosting.md) covers ports, HTTPS, accounts and moderation. The API
+is documented at the top of `core/crates/server/src/lib.rs`.
 
-## Development
+## Repository layout
+
+| Path | Contents |
+|---|---|
+| `recomp/` | the recompiler, the runtime and SMM2's game-specific code and mods ([recomp/README.md](recomp/README.md)) |
+| `core/` | the course server and shared course logic (Rust) |
+| `smmfmt/`, `tests/` | a Python reference implementation of the course file formats |
+| `docs/` | course file formats, toolchain, self-hosting, Windows |
+
+## Contributing
 
 ```sh
-scripts/install-hooks.sh     # pre-commit guard against proprietary files
-scripts/check.sh             # the gates CI runs: server fmt / clippy / tests, recomp compile check, guard
+scripts/install-hooks.sh     # pre-commit check that blocks proprietary files
+scripts/check.sh             # everything CI runs: server fmt / clippy / tests, recomp compile check, proprietary-file check
 ```
 
-Commits never contain game files; generated output stays in `recomp/private`, `recomp/generated`
-and `recomp/build` (which may be symlinks to another disk).
+Never commit game files or anything generated from them. Generated output stays in the gitignored
+`recomp/private/`, `recomp/generated/` and `recomp/build/`. `scripts/check_no_proprietary.py` runs
+in CI and in the pre-commit hook to enforce this.
 
-## History and SMCraft (archived)
+## Legal
 
-This repository started from a snapshot of
-[aksmith-git/MarioMaker](https://github.com/aksmith-git/MarioMaker), which has the earlier
-history. Before the recomp, that repository held **SMCraft**, a clean-room engine that played SMM2
-courses with its own Rust core, a Swift app for macOS / iOS, a portable and web build, the SMM2
-menus, a Course Maker and its own 100 Mario Challenge. It is kept, complete and building, on its
-[`smcraft-archive`](https://github.com/aksmith-git/MarioMaker/tree/smcraft-archive) branch (tag
-`smcraft-final`); mentions of that branch elsewhere in this repository mean that one.
+This is an unofficial fan project, not affiliated with or endorsed by Nintendo. Super Mario Maker,
+Super Mario Maker 2 and related names are trademarks of Nintendo. No Nintendo code or assets are
+distributed here. You need a legally obtained copy of the game, and you build everything from it
+yourself.

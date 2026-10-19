@@ -3,8 +3,8 @@
 #ifdef __APPLE__
 #include <TargetConditionals.h>
 #endif
-#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
-#include <SDL3/SDL_main.h>  // (iOS: SDL starts the app and calls main() inside it)
+#if (defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE) || defined(__ANDROID__)
+#include <SDL3/SDL_main.h>  // (iOS, Android: SDL starts the app and calls main() inside it - SDL_main in libmain.so)
 #endif
 #include <stdbool.h>
 #include <stdlib.h>
@@ -43,10 +43,11 @@ static void rtld_init_main(Cpu *c) { module_init(c, &g_modules[0]); }
 
 // Claim the guest address range before anything else can map there. The host allocator places
 // regions at random addresses in the same window; on a collision, re-exec for a fresh layout.
-static bool g_guest_unreserved;  // (iOS: no re-exec - main() says why and stops)
+// (Android: when libmain.so is loaded, before SDL_main)
+static bool g_guest_unreserved;  // (iOS, Android: no re-exec - main() says why and stops)
 __attribute__((constructor(101))) static void reserve_guest_space(void) {
     if (plat_reserve_guest(GUEST_LO, GUEST_HI)) return;
-#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
+#if (defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE) || defined(__ANDROID__)
     g_guest_unreserved = true;
     return;
 #endif
@@ -132,6 +133,9 @@ static void teardown(void) {
     LOG("[reboot] game torn down in %llums (%d reset hooks)\n", (unsigned long long)((plat_now_ns() - t0) / 1000000), n);
 }
 
+// (iOS and Android: the game code comes with the app, built on the Mac; nothing to build on the device)
+#if !defined(GAMELIB_STATIC) && !defined(__ANDROID__)
+#define RT_FIRST_LAUNCH_BUILD 1
 static void build_progress(double fraction, const char *step) {
     static int last = -100;
     int pct = (int)(fraction * 100);
@@ -163,6 +167,7 @@ static void first_launch_build(const char *root) {
     if (!gamebuild_run(root, &o, why, sizeof why)) FATAL("building the game code failed: %s (details above)\n", why);
     LOG("[gamebuild] done\n");
 }
+#endif
 
 static void boot(const char *root) {
     char exefs[1024], romfs[1024], npdm_path[1024];
@@ -172,7 +177,7 @@ static void boot(const char *root) {
     if (!g_romfs_dir) g_romfs_dir = strdup(romfs);
 
     char why[512];
-#ifndef GAMELIB_STATIC
+#ifdef RT_FIRST_LAUNCH_BUILD
     if (!gamelib_present(root)) first_launch_build(root);
 #endif
     if (!gamelib_load(root, why, sizeof why)) FATAL("%s\n", why);
@@ -207,17 +212,29 @@ static void boot(const char *root) {
 int main(int argc, char **argv) {
     plat_init();
     if (g_guest_unreserved) {  // iOS without the extended virtual addressing entitlement (tools/make_ios_app.sh)
-#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
-        extern void plat_guest_report(uint64_t lo, uint64_t hi);  // runtime/platform/macos.c
+#if (defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE) || defined(__ANDROID__)
+        extern void plat_guest_report(uint64_t lo, uint64_t hi);  // runtime/platform/macos.c, linux.c
         plat_guest_report(GUEST_LO, GUEST_HI);
 #endif
         char msg[400];
+#ifdef __ANDROID__  // (something else already maps there: the Makefile's Android GUEST_ORIGIN would have to move)
+        snprintf(msg, sizeof msg, "This copy of " GAME_TITLE " can't reserve the game's memory window (%#llx-%#llx) on this "
+                 "device: something else is mapped there (details in the log).", GUEST_LO, GUEST_HI);
+        fprintf(stderr, "FATAL: %s\n", msg);
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, GAME_TITLE, msg, NULL);
+        return 1;
+#endif
         snprintf(msg, sizeof msg, "This copy of " GAME_TITLE " can't reserve the game's memory window (%#llx-%#llx): it "
                  "must be signed with the Extended Virtual Addressing and Increased Memory Limit entitlements.", GUEST_LO, GUEST_HI);
         fprintf(stderr, "FATAL: %s\n", msg);
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, GAME_TITLE, msg, NULL);
         return 1;
     }
+#ifdef __ANDROID__
+    { extern void plat_guest_report(uint64_t lo, uint64_t hi); plat_guest_report(GUEST_LO, GUEST_HI); }  // (the log: the address space)
+    SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
+    SDL_SetHint(SDL_HINT_ANDROID_TRAP_BACK_BUTTON, "1");  // (Back opens the overlay menu, as Esc: runtime/ui/menu.mm)
+#endif
 #ifdef _WIN32
     setvbuf(stderr, NULL, _IONBF, 0);  // the Windows CRT treats _IOLBF as full buffering
 #else
@@ -225,17 +242,28 @@ int main(int argc, char **argv) {
 #endif
     const char *root = "extracted";  // (in the data root)
     static char arg_root[1024];
+    bool setup = false;  // --setup: the setup screen even when everything is there
     for (int i = 1; i < argc; i++) {
-        if (!strcmp(argv[i], "--play")) continue;  // (LAS Recomp's start screen isn't part of the shared runtime: the
-                                                   // game always starts straight away; the flag is accepted as before)
+        if (!strcmp(argv[i], "--play")) continue;  // (no setup screen unless something is missing, as before)
+        else if (!strcmp(argv[i], "--setup")) setup = true;
         else if (argv[i][0] != '-' && !realpath(argv[i], arg_root)) root = argv[i];  // (relative to where we started)
         else if (argv[i][0] != '-') root = arg_root;
     }
     rt_paths_init();  // the data root becomes the working directory (runtime/paths.h)
+    // The setup screen (runtime/ui/launcher.mm): in place of the game until the player's files are set up, and after
+    // Quit to Start Screen. Then the game boots in its window.
+    extern bool launcher_needed(const char *root, bool asked);
+    extern void launcher_run(const char *root);
+    extern void launcher_boot_env(void);
+    extern void launcher_update_check_start(void);
+    launcher_update_check_start();  // (notifies only: the setup screen and the overlay menu's Mods tab)
     for (;;) {
+        if (launcher_needed(root, setup)) launcher_run(root);
+        else launcher_boot_env();
+        setup = false;
         boot(root);
         int kind = ui_run();  // window and input on the main thread; returns when a reboot is requested
         teardown();
-        if (kind == RT_REBOOT_TITLE) LOG("[reboot] no start screen: booting the game again\n");
+        if (kind == RT_REBOOT_TITLE) setup = true;  // (Quit to Start Screen: the setup screen)
     }
 }

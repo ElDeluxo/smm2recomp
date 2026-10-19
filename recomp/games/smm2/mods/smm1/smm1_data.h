@@ -10,3 +10,7 @@ uint8_t *smm1_read_file(const char *path, size_t *n);
 uint8_t *smm1_common_msbt(const char *group_and_name, size_t *n);  // "Network/Nwk_Message" -> CommonMsg table
 uint8_t *smm1_model(const char *name, size_t *n);  // "M1_Object_peach" -> its BFRES (malloc'd)
 uint8_t *smm1_sound_file(const char *name, size_t *n);  // "BGM_100MarioMap" -> its BFSTM (or BARS archive)
+// The dump itself (finds it on first use): a file under content/ (newest title first), and the names in a content/
+// folder that start with a prefix (every title; malloc'd, count returned)
+uint8_t *smm1_dump_read(const char *rel, size_t *n);
+int smm1_dump_list(const char *reldir, const char *prefix, char (**names)[96]);

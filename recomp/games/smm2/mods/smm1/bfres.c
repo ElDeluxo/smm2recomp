@@ -90,7 +90,9 @@ static int ftex(const B *b, size_t o, char *name) {
             uint8_t *p = px + i * 4, c[4] = {p[0], p[1], p[2], p[3]};
             for (int k = 0; k < 4; k++) p[k] = sel[k] < 4 ? c[sel[k]] : sel[k] == 4 ? 0 : 255;
         }
-    return lyt_tex_add((int)w, (int)h, px);
+    int id = lyt_tex_add((int)w, (int)h, px);
+    if (lyt_format_srgb(cafe)) lyt_tex_srgb(id);
+    return id;
 }
 
 // ---------------------------------------------------------------- models
@@ -139,6 +141,15 @@ static int attr_read(const B *b, size_t p, uint32_t fmt, float out[4]) {
     case 0x10a: for (int k = 0; k < 4; k++) out[k] = u8(b, p + (size_t)k); return 4;                   // 8_8_8_8 uint
     case 0x20a: for (int k = 0; k < 4; k++) out[k] = (int8_t)u8(b, p + (size_t)k) / 127.0f; return 4;  // 8_8_8_8 snorm
     case 0x207: for (int k = 0; k < 2; k++) out[k] = (int16_t)u16(b, p + 2 * (size_t)k) / 32767.0f; return 2;
+    case 0x20b: {  // 10_10_10_2 snorm (x in the low bits)
+        uint32_t v = u32(b, p);
+        for (int k = 0; k < 3; k++) {
+            int c = (int)(v >> (10 * k) & 0x3FF);
+            if (c & 0x200) c -= 0x400;
+            out[k] = c / 511.0f;
+        }
+        return 3;
+    }
     default: return 0;
     }
 }
@@ -168,9 +179,12 @@ static void read_shape(const B *b, size_t o, size_t *fvtx_list, int nfvtx, BShap
             uint32_t stride = u16(b, buf + 0xC);
             size_t data = rel(b, buf + 0x14);
             if (!data) continue;
-            bool p0 = !strcmp(an, "_p0"), u0 = !strcmp(an, "_u0"), i0 = !strcmp(an, "_i0");
-            if (!p0 && !u0 && !i0) continue;
+            bool p0 = !strcmp(an, "_p0"), u0 = !strcmp(an, "_u0"), i0 = !strcmp(an, "_i0"), n0 = !strcmp(an, "_n0");
+            bool w0 = !strcmp(an, "_w0");
+            if (!p0 && !u0 && !i0 && !n0 && !w0) continue;
+            if (w0) s->w0 = zalloc(sizeof(float) * 4 * nv);
             if (i0) s->idx0 = zalloc(4 * nv);
+            if (n0) s->nrm = zalloc(sizeof(float) * 3 * nv);
             for (uint32_t v = 0; v < nv; v++) {
                 float f[4];
                 if (!attr_read(b, data + boff + (size_t)v * stride, fmt, f)) {
@@ -179,6 +193,8 @@ static void read_shape(const B *b, size_t o, size_t *fvtx_list, int nfvtx, BShap
                 }
                 if (p0) s->pos[v][0] = f[0], s->pos[v][1] = f[1], s->pos[v][2] = f[2];
                 if (u0) s->uv[v][0] = f[0], s->uv[v][1] = f[1];
+                if (n0) s->nrm[v][0] = f[0], s->nrm[v][1] = f[1], s->nrm[v][2] = f[2];
+                if (w0) for (int k = 0; k < 4; k++) s->w0[v][k] = f[k];
                 if (i0) for (int k = 0; k < 4; k++) s->idx0[v][k] = (uint8_t)f[k];
             }
         }
@@ -430,7 +446,10 @@ static float curve_eval(const BFCurve *c, float f) {
     float v = c->type == 1 ? q[0] + q[1] * t : q[0] + q[1] * t + q[2] * t * t + q[3] * t * t * t;
     return v * c->scale + c->offset;
 }
-void bfres_pose(const BModel *m, const BSkelAnim *a, float frame, float (*world)[3][4]) {
+static void pose(const BModel *m, const BSkelAnim *a, float frame, float (*world)[3][4], bool retarget);
+void bfres_pose(const BModel *m, const BSkelAnim *a, float frame, float (*world)[3][4]) { pose(m, a, frame, world, false); }
+void bfres_pose_retarget(const BModel *m, const BSkelAnim *a, float frame, float (*world)[3][4]) { pose(m, a, frame, world, true); }
+static void pose(const BModel *m, const BSkelAnim *a, float frame, float (*world)[3][4], bool retarget) {
     for (int i = 0; i < m->nbones; i++) {
         const BBone *bn = &m->bones[i];
         float s[3], r[4], t[3];
@@ -449,6 +468,12 @@ void bfres_pose(const BModel *m, const BSkelAnim *a, float frame, float (*world)
                 if (tg >= 0x4 && tg <= 0xC) s[(tg - 4) / 4] = v;
                 else if (tg >= 0x10 && tg <= 0x18) t[(tg - 0x10) / 4] = v;
                 else if (tg >= 0x20 && tg <= 0x2C) r[(tg - 0x20) / 4] = v, euler = a->euler;
+            }
+            if (retarget) {
+                float rl = sqrtf(bn->t[0] * bn->t[0] + bn->t[1] * bn->t[1] + bn->t[2] * bn->t[2]);
+                float al = sqrtf(ba->base_t[0] * ba->base_t[0] + ba->base_t[1] * ba->base_t[1] + ba->base_t[2] * ba->base_t[2]);
+                if (i == 0 && al > 1e-4f) for (int k = 0; k < 3; k++) t[k] *= rl / al;
+                else if (i != 0) memcpy(t, bn->t, sizeof t);
             }
         }
         float local[3][4];

@@ -42,3 +42,5 @@ jobs:
       # Corpus tests skip automatically: CI has no game data or key table.
       - run: python -m unittest discover -s tests -t . -v
       - run: python scripts/test_check_no_proprietary.py -v
+      # release packages' game-content check and the launcher's dump setup (synthetic files)
+      - run: python scripts/test_check_package.py -v

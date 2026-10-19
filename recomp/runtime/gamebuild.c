@@ -125,14 +125,41 @@ static bool file_exists(const char *p) {
     return stat(p, &st) == 0;
 }
 
+static void env_put(const char *k, const char *v) {
+#ifdef _WIN32
+    _putenv_s(k, v ? v : "");
+#else
+    if (v) setenv(k, v, 1);
+    else unsetenv(k);
+#endif
+}
+
+bool gamebuild_python(char *out, size_t n) {
+#ifdef _WIN32
+    const char *bundled = "python" SEP "python.exe";
+#else
+    const char *bundled = "python" SEP "bin" SEP "python3";
+#endif
+    // the package's own Python (tools/fetch_python.sh), else a venv: tools/venv next to the program or in the source
+    if (!rt_resource(bundled, NULL, out, n) && !rt_resource("tools" SEP PLAT_VENV_PYTHON, "tools/" PLAT_VENV_PYTHON, out, n))
+        return false;
+    env_put("PYTHONHOME", NULL);  // (the player's own Python settings don't apply to ours)
+    env_put("PYTHONPATH", NULL);
+    env_put("PYTHONNOUSERSITE", "1");
+    env_put("PYTHONDONTWRITEBYTECODE", "1");  // (nothing written next to the scripts: the .app stays as signed)
+    env_put("PYTHONUTF8", "1");
+    env_put("PYTHONUNBUFFERED", "1");
+    return true;
+}
+
 static bool find_tools(Tools *t) {
     memset(t, 0, sizeof *t);
     const char *e = getenv("LARECOMP_GEN");
     if (e && *e) snprintf(t->gen, sizeof t->gen, "%s", e);
     else if (!rt_resource("lasgen" SEP "lasgen" PLAT_EXE_SUFFIX, NULL, t->gen, sizeof t->gen) &&
-             !(rt_resource("tools" SEP PLAT_VENV_PYTHON, "tools/" PLAT_VENV_PYTHON, t->gen, sizeof t->gen) &&
+             !(gamebuild_python(t->gen, sizeof t->gen) &&
                rt_resource("tools" SEP "gen.py", "tools/gen.py", t->gen_script, sizeof t->gen_script)))
-        // (packages: tools/ next to the program, its venv made by the player - docs/windows.md, recomp/README.md)
+        // (packages: python/ and tools/ next to the program, or tools/venv made by the player - recomp/README.md)
         return false;
     e = getenv("LARECOMP_CC");
     if (e && *e) snprintf(t->cc, sizeof t->cc, "%s", e);
