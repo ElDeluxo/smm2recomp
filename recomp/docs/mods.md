@@ -258,6 +258,55 @@ every difficulty draws from all of them.
   which the runtime doesn't have).
 - No SMM2 Mii-costume rewards (the server sends no notifications).
 
+## SMM1 extras: one setting per SMM1 feature
+
+Each setting turns on one SMM1 behaviour in the otherwise exact SMM2 game. All are **off by default**: with every one
+off, the game is SMM2's (an input replay against Ryujinx stays identical, below). They are switches in the overlay
+menu's Mods tab (always shown), kept in `smm2mods.ini`; an environment variable wins over the ini.
+
+| Setting (Mods tab) | ini key | Variable | When |
+|---|---|---|---|
+| Overlapping pipes (SMM1) | `smm1_overlap_pipes=1` | `RECOMP_SMM1_PIPES=1` | from the next course load / placement |
+| Mid-air shell jumps (SMM1) | `smm1_shell_jumps=1` | `RECOMP_SMM1_SHELL_JUMPS=1` | immediately |
+
+`RECOMP_SMM1_LOG=1` logs every decision the hooks see (`[smm1] ...`), on or off.
+
+How: host code after single instructions of the game (`games/smm2/mods/smm1_extras.py` lists them with the
+instruction word each expects; `smm1_extras.c` acts on them). With a setting off its hooks change nothing.
+
+**Overlapping pipes.** SMM1 let a pipe overlap another pipe: Nintendo's own SMM1 sample courses have six such
+overlaps (elbows, T joints, a pipe inside a pipe) [obs, the course files]; none of the 550 sample SMM2 courses has one.
+SMM2 forbids it in one place, its placement check (the course analyzer the Course Maker and the course loader both
+run): for each part with an overlap rule it collects the parts in the cells it covers and asks, per pair, whether the
+other part is "solid" (main+0xfe8490: pipes count); a solid part whose shape overlaps is a conflict [obs].
+- Course Maker: a pipe dragged onto another turns red and goes back where it was [obs].
+- Course load: a course with overlapping pipes counts as broken and a blank course plays instead [obs].
+- With the setting on, the hook after that call (main+0xfe827c) answers "not solid" for a pipe against a pipe, so
+  both accept it; pipes against anything else are checked as before. In play, overlapping pipes are two pipes:
+  each draws and collides as itself [obs: in the test course Mario walks into one, stands on the short one and
+  jumps up onto the tall one it overlaps].
+- A course saved with overlapping pipes needs the setting to load (SMM2, and the setting off, treat it as broken).
+
+**Mid-air shell jumps** (in progress: hooks in place, the test course is not done). SMM1's shell code is SMM2's (the
+kicks, the mid-air kick off a wall with its 3.52 hop, the speeds) except two rules [obs, Block.rpx v208 against
+SMM2]; on a shell the setting applies SMM1's:
+- the stomp window when the player is falling onto an ordinary-size target: SMM1 a flat 10 px; SMM2 3 px less plus
+  the player's fall this frame (main+0x1267ce8: the "falling?" compare before that step reads "no");
+- the kicker's no-hit time after a mid-air kick off a wall: SMM1 5 frames (the contact's own minimum), SMM2 16
+  (main+0x1202c88: the 16 becomes 0, so the 5 applies). The shell coming back off the wall can be landed on sooner.
+
+SMM1 applied the flat window to every small enemy; the setting limits it to shells.
+
+**Test courses.** Made at run time from the player's own data, never in the repository: our pipe courses are built
+from SMCraft's flat test course, the SMM1 one copies the pipes, ground and blocks of SMM1's sample course 95 from the
+player's SMM1 dump into an SMM2 SMB1-style course. Installed as the title course (`RECOMP_MOD_DIR`) they play straight
+away; the Course Maker is reached with `LARECOMP_HOST_INPUT` (L + R, A, then taps; `frame:drag:x0/y0/x1/y1:frames`
+moves a finger across the touch screen).
+
+**Off-case check.** The same input session on a course with side-by-side pipes, played in the recomp (settings off)
+and in the Ryujinx trace build (`tools/replay_sync.py`'s comparison): 606 of 606 player updates identical, the whole
+12 KB player object and the input block too.
+
 ## The game's own network stack (backend local-nex): groundwork for Nextendo and a local NEX server
 
 The mod above *fakes* being online: nifm / acc / friends / mii answer locally, the enl session logs in without NEX,

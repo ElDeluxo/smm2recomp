@@ -8,6 +8,7 @@
 // The behaviour comes from the game's own code: host hooks after single instructions (games/smm2/mods/smm1_extras.py
 // lists them) change a register or the flags while a setting is on, and do nothing otherwise. What SMM1 does was
 // read from SMM1's own code (Block.rpx v208); both are described in docs/mods.md ("SMM1 extras").
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -29,10 +30,7 @@ static const struct Setting {
 
 static const char *ini_path(void) { return getenv("RECOMP_MOD_INI") ? getenv("RECOMP_MOD_INI") : "smm2mods.ini"; }
 
-static void load(void) {
-    static int done;
-    if (done) return;
-    done = 1;
+static void load_once(void) {
     FILE *f = fopen(ini_path(), "r");
     if (f) {
         char line[512];
@@ -50,26 +48,12 @@ static void load(void) {
         if (*settings[i].value) LOG("[mod] SMM1 extras: %s on\n", settings[i].key);
     }
 }
-
-static void save(const char *key, bool on) {  // replace or add one key=value line in smm2mods.ini
-    char lines[64][512];
-    int n = 0;
-    bool done = false;
-    size_t kl = strlen(key);
-    FILE *f = fopen(ini_path(), "r");
-    if (f) {
-        while (n < 64 && fgets(lines[n], sizeof lines[n], f)) {
-            if (!strncmp(lines[n], key, kl) && lines[n][kl] == '=') snprintf(lines[n], sizeof lines[n], "%s=%d\n", key, on), done = true;
-            n++;
-        }
-        fclose(f);
-    }
-    if (!done && n < 64) snprintf(lines[n++], sizeof lines[0], "%s=%d\n", key, on);
-    if ((f = fopen(ini_path(), "w"))) {
-        for (int i = 0; i < n; i++) fputs(lines[i], f);
-        fclose(f);
-    }
+static void load(void) {  // (the game's threads and the menu: once)
+    static pthread_once_t once = PTHREAD_ONCE_INIT;
+    pthread_once(&once, load_once);
 }
+
+void mod_ini_set(const char *key, const char *val);  // (settings.c: replace or add one key=value line)
 
 // ---- the Mods tab (settings.c appends these to its own)
 static bool shown[NSETTINGS];  // what the tab last showed, to see which one changed
@@ -99,7 +83,7 @@ void smm1_extras_toggles_changed(void) {
     for (size_t i = 0; i < NSETTINGS; i++) {
         if (shown[i] == *settings[i].value) continue;
         *settings[i].value = shown[i];
-        save(settings[i].key, shown[i]);
+        mod_ini_set(settings[i].key, shown[i] ? "1" : "0");
         LOG("[mod] SMM1 extras: %s %s\n", settings[i].key, shown[i] ? "on" : "off");
     }
 }
