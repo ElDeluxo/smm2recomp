@@ -41,12 +41,18 @@ cp tools/gen.py tools/lifter.py tools/analyze.py tools/nso.py tools/passes.py to
 cp games/smm2/setup.py games/smm2/sysdata.py "$OUT/tools/games/smm2/"
 cp LICENSE-LASRecomp "$OUT/" 2>/dev/null || true
 cp third_party/imgui/LICENSE.txt "$OUT/LICENSE-imgui.txt" 2>/dev/null || true
+cp third_party/mbedtls/LICENSE "$OUT/LICENSE-mbedtls.txt"
+cp third_party/zstd/LICENSE "$OUT/LICENSE-zstd.txt"
+cp third_party/bcdec/LICENSE "$OUT/LICENSE-bcdec.txt"
 {
     echo "Third-party components in this package and their licenses:"
     echo "- LAS Recomp (the recompiler and runtime this is forked from): MIT, LICENSE-LASRecomp"
     echo "- Dear ImGui: MIT, LICENSE-imgui.txt"
     echo "- zig (zig/): MIT, zig/LICENSE; its clang / lld: Apache-2.0 with LLVM exception"
     echo "- SMAA (built in): MIT-style (third_party/smaa in the source)"
+    echo "- Mbed TLS (built in, the game's TLS client): Apache-2.0, LICENSE-mbedtls.txt"
+    echo "- Zstandard decoder (built in, the costume models): BSD-3-Clause, LICENSE-zstd.txt"
+    echo "- bcdec (built in, BC texture decoding): MIT / Unlicense, LICENSE-bcdec.txt"
     if [ "$OS" = windows ]; then
         echo "- SDL3 (SDL3.dll): zlib license"
         echo "- shaderc, glslang, SPIRV-Tools (libshaderc_shared.dll): Apache-2.0 / BSD-3-Clause"
@@ -86,6 +92,6 @@ SMM2 Recomp ($TARGET) - Super Mario Maker 2 v3.0.3 recompiled from YOUR OWN dump
 Keys: WASD stick, arrows d-pad, K/J/L/I = A/B/X/Y, Q/E = L/R, Enter = +, F1 menu. Full instructions and troubleshooting:
 docs/windows.md (Windows) and recomp/README.md (Linux) in the source repository.
 EOF
-if [ "$OS" = windows ]; then for f in README.txt THIRD-PARTY.txt; do sed -i.bak 's/$/\r/' "$OUT/$f" && rm -f "$OUT/$f.bak"; done; fi
+if [ "$OS" = windows ]; then for f in README.txt THIRD-PARTY.txt LICENSE-mbedtls.txt LICENSE-zstd.txt LICENSE-bcdec.txt; do sed -i.bak 's/$/\r/' "$OUT/$f" && rm -f "$OUT/$f.bak"; done; fi
 (cd dist && rm -f "$NAME.zip" && zip -qr -9 "$NAME.zip" "$NAME")
 echo "dist/$NAME.zip: $(du -h "dist/$NAME.zip" | cut -f1) ($(du -sh "$OUT" | cut -f1) unpacked)"
