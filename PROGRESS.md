@@ -179,6 +179,12 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     → Block costume, its power-up sound), the goal and death sounds, the reward window after the ending;
     ⬜ a hit taking it off (hook in place, not yet seen in a run), jump / taunt sounds, more than one costume per
     course), mid-air shell jumps, overlapping (overlay) pipes, and more from research/specs/smm1-extras*
+  - 🔄 **Edit any course** (`games/smm2/mods/edit.c`, `recomp/docs/mods.md` "Edit any course"; WIP, paused):
+    ✅ Course World's Download into the Coursebot against our server (stand-in thumbnail); ✅ SMM2's Make in the
+    Coursebot window of a downloaded course (SMM1's Edit placement), the Course Maker opens with the course, an edit
+    saved to My Courses and played (screens private); ⬜ d-pad cursor onto Make (touch works), ⬜ the copy's
+    "uploaded" mark cleared (fix not yet checked), ⬜ upload credit in game (server `based_on` done and tested),
+    ⬜ Edit on the course card / Endless (proposed)
   - 🔄 **Our open-source server everywhere the game would reach Nintendo** (`recomp/docs/mods.md`,
     `games/smm2/mods/world.c`): ✅ Course World's course lists (Hot, Popular, New, detailed search, a
     maker's courses) from `/api/courses`, the course page (likes, plays, clear rate, world record, maker

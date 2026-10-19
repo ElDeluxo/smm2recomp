@@ -107,10 +107,71 @@ calls (read from the client vtable slot it uses):
 | PostRatingInfo (104): like / boo | 0x14e6b90 | `POST /api/courses/<code>/like` or `/boo` |
 | PostPlayResult (96) | 0x14e30e0 | `POST /api/courses/<code>/play`, and `/clear {time_ms}` on a clear (not for Endless courses: those are counted by the Endless reports) |
 | SearchComments (94 / 95), PostCommentText (91) | 0x14e8ec0, 0x14e96b0 | `GET` / `POST /api/courses/<code>/comments` (text) |
-| CanPostCourse (60), the course upload (66 + upload + 67), DeleteObject | 0x14e0d40, 0x14de3f0, 0x14e0c50 | allowed; the game's own course (header "SCDL", not yet encrypted) to `POST /api/courses` as the signed-in maker, its code back as the upload's data id; `DELETE /api/courses/<code>` |
+| CanPostCourse (60), the course upload (66 + upload + 67), DeleteObject | 0x14e0d40, 0x14de3f0, 0x14e0c50 | allowed; the game's own course (header "SCDL", not yet encrypted) to `POST /api/courses` as the signed-in maker (`?based_on=` for an edited copy, below), its code back as the upload's data id; `DELETE /api/courses/<code>` |
+| GetReqGetInfoHeadersInfo (134) + HTTP: thumbnails ("relation objects") | 0x14e0e70 (`edit.c`) | none on our server; the course being downloaded gets a stand-in (below), the lists keep the game's placeholder |
 
 Course World courses download and play exactly like the Endless ones (the same GetObject). Not served: thumbnails
 (the game shows its placeholder), Super Worlds, Ninji speedruns, notifications, follows, Network Play.
+
+**Download** (the course page's Download, into the Coursebot's Downloaded Courses) works: SMM2 waits for the
+course's thumbnail before it hands the download to the Coursebot (cDownload, main+0x17661f0, needs a valid entry in
+the thumbnail cache) and keeps a course only with a thumbnail it can check (JPEG size 1..0x1bf9c, HMAC-SHA256 under a
+key from four seed words, main+0x1698a80; otherwise "Corrupt data was found so the course has been deleted."). Our
+server has no thumbnails, so `edit.c` answers the thumbnail request with a stand-in for the course being downloaded:
+a 640 x 360 one-colour JPEG encoded by the mod (grey-blue [inf]), signed with the game's own functions as its blank
+thumbnail is. [obs] the course is saved (`course_data_120.bcd` + `course_thumb_120.btl`) and shows in Downloaded
+Courses after a restart, with the stand-in thumbnail.
+
+### Edit any course (`games/smm2/mods/edit.c`)
+
+Any downloaded course opens in SMM2's own Course Maker (DECISIONS.md "Edit any course"). The placement is SMM1's:
+SMM1's Course World offers **Download** (`Nwk_CourseListFrame_01/02` "Download"), and its Coursebot window of a
+downloaded or sample course has **Edit** above **Play** (`Lcl_CourseInfoWindow_00` `N_SampleDataWin_00`:
+`L_EditBtn_01`, `L_PlayBtn_01`; the own-course window adds Upload, Change Name, Delete) [obs SMM1 v208 layouts]; the
+pause menu of a Coursebot course has "Edit Course". SMM1's 100 Mario and course clear offer no edit [obs layouts].
+SMM2's window of a downloaded course has only Play, Play Together and Delete, so the mod gives it SMM2's own
+**Make** button:
+
+- **The button.** The window is one layout for both lists (`TypeMode`: My Courses' `N_MyDataBtn_00` or the
+  downloaded course's `N_DLData_00`), and main+0x1891880 switches off every button but the shown list's. In a
+  downloaded course's window the mod shows My Courses' Make (`L_Edit_00`) alone, at the top of the button column where
+  My Courses has it (a little smaller: it fits between the header and the stats [inf]), and switches it on
+  (main+0x761190) after the info window machine's Appear / Disp (main+0x188c980 / +0x188cb10) each frame; for a My
+  Courses slot everything goes back. Touch reaches it; the d-pad cursor does not yet [obs] (below).
+- **The press** (UI event 0x130, read in the Downloaded list's cCourseInfoWindow, main+0x16e2db0) sends the list
+  to its cToPlay (main+0x16e33c0), which the mod turns into My Courses' Make: the slot is prepared as for Play
+  (main+0x16e44e0) and the scene change goes to the Course Maker (reason 3, cRoboToEdit, with the slot's course
+  number), as main+0x16e5c10 does for My Courses. The Course Maker loads any Coursebot slot the same way.
+- **The copy** is the player's own course: upload id 0, management flags 1 and 4 cleared, no clear check yet, a
+  fresh creation id (so it can be uploaded as a new course). Name and description stay. The editor's Save is "Save
+  As" into My Courses (the download stays as it was).
+- **The original** (code and maker name from the downloaded-course record: save buffer +0xc010 + slot · 0x2a8, +0x08
+  data id, +0x16c maker) is kept in `smm2edit.txt` in the data folder under the copy's creation id. When the copy is
+  uploaded, `world.c` posts it as `POST /api/courses?based_on=<code>&based_on_maker=<name>`; the server credits a
+  course it holds to its own maker (otherwise the given name), and Course World shows "Based on <code> by <maker>"
+  under the description (`edit_listing_description`). The original's record on the server is not touched.
+- `RECOMP_MOD_EDIT=0` turns it off.
+
+**Where this stands (2026-10-19, WIP, paused):**
+- [obs] Download from Course World into the Coursebot; the downloaded course's window shows Make; a tap on it opens
+  the Course Maker with that course; an edit (a row of ? blocks) saved with Save As into My Courses
+  (`course_data_001.bcd`), the download untouched; the saved copy opens in My Courses and plays with the edit.
+  Screens in `private/smm2/build/` of the test data folder (`e1_*`, `e2_*`, `s19_*`; private).
+- Not yet: the d-pad cursor doesn't stop on Make (touch does): the window's cursor targets seem fixed before the
+  mod switches Make on [?]. The saved copy still showed the "uploaded" mark and a greyed Upload in My Courses in the
+  first test; the reset now also covers the Coursebot's "current course" copy (save manager +0x58), not yet checked
+  in game, and the current course was 182 (the title course) in that run, so where the Course Maker takes the
+  upload id from is still [?]. The upload with `based_on` hasn't been run in game (the server side is tested:
+  `edited_copies_credit_the_original`). Typed course names arrive garbled: runtime/hle/swkbd.c answers in UTF-8,
+  SMM2 reads UTF-16 (not this mod's file).
+- Proposed, not built: an Edit on Course World's course card (Download, then straight into the Course Maker when
+  the Coursebot has saved it); in Endless / 100 Mario, "save to Coursebot for later" from SMM2's result screen
+  (SMM1 offers no edit there).
+
+Tests: `RECOMP_EDIT_CTL=<file>` (`edit_ctl.c`) reads commands appended to the file while the game runs (`tap x y
+[frames]`, `btn A+B [frames]`, `shot <name>`, `wait <frames>`, `peek <addr> [len]`, `poke <addr> <byte>`, `find <addr>
+<name> [depth]`); test input must be on (`LARECOMP_INPUT=999999:A:1`). `LARECOMP_KBD_AUTO=<name>` answers the
+course-name keyboard of Save As. `RECOMP_EDIT_TRACE=1` logs the window's UI events.
 
 ### The bridge (100 Mario)
 

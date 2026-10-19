@@ -168,6 +168,17 @@ const char *edit_listing_description(Json *m, char *buf, size_t cap) {
     return buf;
 }
 
+// A course file (plain) made the player's own: a new creation id, management flags 1 and 4 cleared, no clear check,
+// upload id 0, the CRC again.
+static void make_own(uint64_t file, uint32_t creation) {
+    uint64_t hdr = file + 0x10;
+    s32(hdr + 0x24, creation);
+    s32(hdr + 0x18, g32(hdr + 0x18) & ~0x12u);
+    s32(hdr + 0x1c, 0), s32(hdr + 0x20, 0xffffffffu);
+    s64(hdr + 0x28, 0);
+    s32(file + 8, crc32_of((const uint8_t *)(uintptr_t)hdr, COURSE_BODY));
+}
+
 static void prepare_copy(int32_t slot) {
     uint64_t save = g64(SAVE_MGR) ? g64(g64(SAVE_MGR) + 0x20) : 0;
     if (!save) return;
@@ -188,11 +199,14 @@ static void prepare_copy(int32_t slot) {
     LOG("[mod] edit: %s by %s (creation id %08x -> %08x, upload id %llu, flags %#x) -> a course of your own\n",
         code[0] ? code : "?", maker[0] ? maker : "?", g32(hdr + 0x24), creation, (unsigned long long)g64(hdr + 0x28),
         g32(hdr + 0x18));
-    s32(hdr + 0x24, creation);
-    s32(hdr + 0x18, g32(hdr + 0x18) & ~0x12u);  // management flags: bits 1 and 4
-    s32(hdr + 0x1c, 0), s32(hdr + 0x20, 0xffffffffu);  // clear check: attempts, time
-    s64(hdr + 0x28, 0);  // upload id
-    s32(file + 8, crc32_of((const uint8_t *)(uintptr_t)hdr, COURSE_BODY));
+    make_own(file, creation);
+    // the Coursebot also keeps the selected slot's whole data (course, thumbnail, replay: 0xe0000) at save manager
+    // +0x58 for its "current course" (+0x60); the loader takes that copy when the number is the current one
+    uint64_t mgr = g64(SAVE_MGR), cur = mgr ? g64(mgr + 0x58) : 0;
+    bool current = cur && (int32_t)g32(mgr + 0x60) == slot && g32(cur) == 1 &&
+                   !memcmp((const void *)(uintptr_t)(cur + 0xc), "SCDL", 4);
+    if (current) make_own(cur, creation);
+    MLOG("edit: current course %d%s\n", mgr ? (int32_t)g32(mgr + 0x60) : -1, current ? " (its copy too)" : "");
     if (code[0]) remember_origin(creation, code, maker);
 }
 
