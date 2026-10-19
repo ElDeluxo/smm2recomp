@@ -167,7 +167,8 @@ bool menu_handle_event(const SDL_Event *e) {
     switch (e->type) {
     case SDL_EVENT_KEY_DOWN:
         if (!e->key.repeat && (e->key.scancode == SDL_SCANCODE_F1 ||
-                               (e->key.scancode == SDL_SCANCODE_ESCAPE && !g_open.load()))) {
+                               ((e->key.scancode == SDL_SCANCODE_ESCAPE || e->key.scancode == SDL_SCANCODE_AC_BACK) &&
+                                !g_open.load()))) {  // (AC_BACK: Android's Back)
             if (!typing) set_open(!g_open.load());  // (Esc with the menu open goes to ImGui below: it cancels a field)
             return true;
         }
@@ -183,7 +184,7 @@ bool menu_handle_event(const SDL_Event *e) {
     case SDL_EVENT_KEY_UP: {
         if (!capturing()) return false;
         bool down = e->type == SDL_EVENT_KEY_DOWN;
-        if (down && e->key.scancode == SDL_SCANCODE_ESCAPE) {  // Esc: back out of popups, else close
+        if (down && (e->key.scancode == SDL_SCANCODE_ESCAPE || e->key.scancode == SDL_SCANCODE_AC_BACK)) {  // Esc: back out of popups, else close
             QEvent q = {};
             q.kind = QEvent::KEY; q.key = ImGuiKey_Escape; q.down = true; push(q);
             q.down = false; push(q);
@@ -263,8 +264,9 @@ void menu_apply_window_requests(void *win) {
     SDL_Window *w = (SDL_Window *)win;
     g_pixel_density = SDL_GetWindowPixelDensity(w);
     static bool text_input;
-#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
-    // (iOS: text input brings up the system keyboard - only for a text field or the name entry, not the whole menu)
+#if (defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE) || defined(__ANDROID__)
+    // (iOS, Android: text input brings up the system keyboard - only for a text field or the name entry, not the whole
+    // menu)
     bool want_text = (g_open.load() && g_text_busy.load()) || (g_kbd.load() == 1 && !g_last_pad.load());
 #else
     bool want_text = capturing();
@@ -277,7 +279,7 @@ void menu_apply_window_requests(void *win) {
     static bool first = true;
     if (first || g_want_fullscreen_apply.exchange(false)) {
         first = false;
-#if !(defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE)  // (iOS: always the whole screen, runtime/nvn/metal.m)
+#if !(defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE) && !defined(__ANDROID__)  // (iOS, Android: always the whole screen)
         SDL_SetWindowFullscreen(w, g_settings.fullscreen);
 #endif
     }

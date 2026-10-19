@@ -77,6 +77,9 @@ WEAK void hundred_run_save_quit(void) {
 }
 WEAK void hundred_run_finish(void) { fake.used = true; fake.saved[fake.d] = false, fake.playing = 0; }
 WEAK void hundred_flow_exit(void) { fake.used = true; }
+// Challenge Modes (the mod): SMM2's Endless as the other mode on Course World's "Challenge Modes" button
+WEAK bool hundred_modes_available(void) { return getenv("RECOMP_HUNDRED_TEST_MODES") != NULL; }
+WEAK void hundred_mode_switch(void) { fake.used = true; }
 
 // ================================================================ queue (mod -> flow)
 enum { Q_OPEN = 1, Q_PAUSE, Q_STARTED, Q_RESULT, Q_ENDING };
@@ -103,6 +106,10 @@ static struct {
     struct hundred_status st;
     unsigned prev;
     int intro_ticks, peek, last_hb, koopa_next;
+    bool fetched;  // the run side was already asked for this intro's course
+    bool card_up;        // (for the run side's thread) the intro's card is up
+    bool tap, touching;  // a touch lifted this frame (at tap_x, tap_y: game pixels); a touch is down
+    int tap_x, tap_y;
     char test[64];
     long test_at;
 } F;
@@ -173,6 +180,7 @@ static void to_intro(int entry) {
     ov_hide(&F.ov);
     F.intro = in;
     F.intro_ticks = 0;
+    F.fetched = false;
     F.state = in ? S_INTRO : S_CLOSED;
     if (entry == ENTRY_AFTER_CLEAR) map_music(F.d);
     if (entry == ENTRY_NEW) {
@@ -193,9 +201,9 @@ static void to_ending(int d, int lives, int n, const struct hundred_credit *cr) 
     F.end = e;
     F.state = S_ENDING;
     int len = ending_length(e);  // (credits_end: the last line of the roll, before the costume window)
-    const int t[] = {200, 450, 950, 1500, len > 260 ? len - 260 : 1};
-    static const char *w[] = {"ending_walk", "ending_text", "credits", "credits_scroll", "credits_end"};
-    shots_at(5, t, w);
+    const int t[] = {200, 450, 950, 1500, len > 260 ? len - 260 : 1, len + 90};
+    static const char *w[] = {"ending_walk", "ending_text", "credits", "credits_scroll", "credits_end", "reward"};
+    shots_at(6, t, w);
 }
 
 static bool open_data(void) {
@@ -250,7 +258,13 @@ static void on_result(int outcome) {
         break;
     case HUNDRED_NEXT:
         if (F.st.cleared >= (F.st.total ? F.st.total : RUN_LENGTHS[F.d])) to_ending(F.d, F.st.lives, F.st.ncredits, F.st.credits);
-        else to_intro(ENTRY_AFTER_CLEAR);
+        else {
+            // the next course loads under the map (SMM2 shows nothing of it: the map and card are full screen), so
+            // most of the load is over by the time the card comes; the card stays up until the course plays
+            to_intro(ENTRY_AFTER_CLEAR);
+            F.fetched = true;
+            if (!hundred_play_next()) LOGF("the run side did not take the next course\n");
+        }
         break;
     case HUNDRED_MISS:  // SMM2's retry; with no life left, SMM2's game over, then its Endless menu reopens the select
         if (F.st.lives > 0) F.state = S_PLAYING;
@@ -372,7 +386,9 @@ static void tick(unsigned buttons) {
             if (t == 240) in.pressed |= BT_A, auto_started = true;
         }
         int ev = select_step(F.sel, &in, &F.st, &resume);
+        if (ev == EV_NONE && F.tap && select_header_hit(F.sel, F.tap_x, F.tap_y)) smm1_se("SE_PageNext1"), ev = EV_MODE;
         if (ev == EV_TAB) smm1_bgm_track(track_for(F.sel->d));
+        if (ev == EV_MODE) { hundred_mode_switch(); close_scenes(); F.state = S_CLOSED; smm1_bgm(NULL, false); }
         if (ev == EV_EXIT) { close_scenes(); F.state = S_CLOSED; smm1_bgm(NULL, false); hundred_flow_exit(); }
         else if (ev == EV_START) {
             F.d = F.sel->d;
@@ -382,10 +398,12 @@ static void tick(unsigned buttons) {
     }
     case S_INTRO: {
         int iev = intro_step(F.intro, &in);
-        // the card is up: the run side fetches the course and SMM2 starts it under the card (SMM2 starts it as soon
-        // as it can, so not earlier: SMM1's map plays while the course downloads, SMM2's would be playing hidden);
-        // after a skip SMM2 starts the next course by itself
-        if (iev == EV_FETCH && !hundred_play_next()) LOGF("the run side did not take the next course\n");
+        // the card is up: the run side fetches the course and SMM2 starts it under the card (at the run's start; after
+        // a clear it was asked for when the map began, HUNDRED_NEXT); after a skip SMM2 starts the next course itself
+        if (iev == EV_FETCH && !F.fetched) {
+            F.fetched = true;
+            if (!hundred_play_next()) LOGF("the run side did not take the next course\n");
+        }
         if (iev == EV_DONE) {
             intro_free(F.intro), F.intro = NULL;
             F.state = S_PLAYING;
@@ -426,6 +444,7 @@ static void tick(unsigned buttons) {
     }
     F.full = F.state == S_SELECT || (F.state == S_INTRO && F.intro && intro_full(F.intro)) || F.state == S_GAMEOVER ||
              F.state == S_ENDING;
+    F.card_up = F.state == S_INTRO && F.intro && intro_card_up(F.intro);
     smm1_game_sound(!F.full);  // SMM1's screens have their own sound
     F.captured = F.full;
 }
@@ -559,6 +578,10 @@ static void *worker(void *arg) {
 extern uint64_t renderer_present_count(void);
 
 bool game_overlay_captured(void) { return F.captured; }
+// the run side may start a course: the card is up, or none of the full screens is
+bool hundred_flow_ready_to_start(void) {
+    return !F.full || F.card_up;
+}
 uint64_t game_input_mask(void) { return ~0ull; }  // (in a course every button is the game's: SMM2's own skip)
 extern uint64_t input_player_buttons(void);  // runtime/hle/input.c: keyboard and controllers only
 
@@ -611,6 +634,14 @@ const uint8_t *game_overlay_image(int *w, int *h, int *full, uint64_t *seq) {
         return NULL;
     }
     unsigned b = (unsigned)input_player_buttons() | test_input(renderer_present_count());
+    {  // taps (the select's mode header): a touch that lifts, at its last place
+        extern bool touch_first(int32_t *x, int32_t *y);  // runtime/hle/touch.c
+        int32_t x = F.tap_x, y = F.tap_y;
+        bool down = touch_first(&x, &y);
+        F.tap = !down && F.touching;
+        F.touching = down;
+        if (down) F.tap_x = x, F.tap_y = y;
+    }
     tick(b);
     LQuads *q = &g_last;
     uint8_t bg[4];

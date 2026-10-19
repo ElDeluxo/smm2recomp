@@ -145,6 +145,18 @@ int input_pad_family(void) {
 
 bool input_gamepad_connected(void) { return pad_connected; }
 
+// (Android: the emulator's own keyboard, "qwerty2", has gamepad keys and SDL lists it as a gamepad; it would hide
+// the on-screen controller)
+static bool real_gamepad(SDL_JoystickID id) {
+#ifdef __ANDROID__
+    const char *n = SDL_GetGamepadNameForID(id);
+    if (n && !strcmp(n, "qwerty2")) return false;
+#else
+    (void)id;
+#endif
+    return true;
+}
+
 void input_handle_event(const SDL_Event *e) {
     extern bool touchpad_handle_event(const SDL_Event *e);  // runtime/ui/touchpad.mm (the on-screen controller)
     extern bool touch_handle_event(const SDL_Event *e);  // runtime/hle/touch.c (touches, the mouse as a finger)
@@ -154,7 +166,7 @@ void input_handle_event(const SDL_Event *e) {
         scanned = true;
         int n = 0;
         SDL_JoystickID *ids = SDL_GetGamepads(&n);
-        if (n > 0 && !pad) { pad = SDL_OpenGamepad(ids[0]); LOG("[input] gamepad: %s\n", SDL_GetGamepadName(pad)); note_family(); }
+        if (n > 0 && !pad && real_gamepad(ids[0])) { pad = SDL_OpenGamepad(ids[0]); LOG("[input] gamepad: %s\n", SDL_GetGamepadName(pad)); note_family(); }
         SDL_free(ids);
     }
     switch (e->type) {
@@ -164,7 +176,7 @@ void input_handle_event(const SDL_Event *e) {
         recompute_keyboard();
         break;
     case SDL_EVENT_GAMEPAD_ADDED:
-        if (!pad) { pad = SDL_OpenGamepad(e->gdevice.which); LOG("[input] gamepad: %s\n", SDL_GetGamepadName(pad)); note_family(); }
+        if (!pad && real_gamepad(e->gdevice.which)) { pad = SDL_OpenGamepad(e->gdevice.which); LOG("[input] gamepad: %s\n", SDL_GetGamepadName(pad)); note_family(); }
         break;
     case SDL_EVENT_GAMEPAD_REMOVED:
         if (pad && SDL_GetGamepadID(pad) == e->gdevice.which) { SDL_CloseGamepad(pad); pad = NULL; note_family(); }
@@ -207,6 +219,9 @@ static void push_key(SDL_Scancode sc, SDL_Keymod mod, bool down) {
     e.key.key = SDL_GetKeyFromScancode(sc, mod, false);
     SDL_PushEvent(&e);
 }
+// a real key event by SDL key name, as a player's ("Left", "K"): for a mod's tests that act on what is on screen
+void input_test_key(const char *name, bool down) { push_key(SDL_GetScancodeFromName(name), SDL_KMOD_NONE, down); }
+
 static void test_push(uint64_t frame, unsigned long start, unsigned long len, const char *dev, const char *arg) {
     SDL_Event e;
     memset(&e, 0, sizeof e);

@@ -15,6 +15,9 @@
 #elif defined(__APPLE__)
 #define GAMELIB_NAME GAME_ID "game.dylib"
 #define GAMELIB_EXPORT __attribute__((visibility("default")))
+#elif defined(__ANDROID__)
+#define GAMELIB_NAME "lib" GAME_ID "game.so"  // (an APK's native libraries are lib*.so; loaded by this name)
+#define GAMELIB_EXPORT __attribute__((visibility("default")))
 #else
 #define GAMELIB_NAME GAME_ID "game.so"
 #define GAMELIB_EXPORT __attribute__((visibility("default")))

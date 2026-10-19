@@ -80,7 +80,7 @@ build it yourself from source.
 | **iOS / iPadOS** (arm64) | Metal | Plays at 60 fps on iPad Pro, with an on-screen controller and touch. Built on a Mac and installed on your own device. |
 | **Windows** (x64) | Vulkan | The player package (setup screen, recompiler) builds; not yet tested on real hardware. See [docs/windows.md](docs/windows.md). |
 | **Linux** (x64, arm64) | Vulkan | The player packages build; arm64 boots to the title screen in a VM. |
-| **Android** (arm64) | Vulkan | In progress: boots to the title screen in the emulator. |
+| **Android** (arm64, Android 13+) | Vulkan | Builds an APK on your computer from your dump; boots and plays the title course in the Android emulator. Not yet tested on a real device. |
 
 | Feature | Status |
 |---|---|

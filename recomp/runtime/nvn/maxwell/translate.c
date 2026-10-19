@@ -1896,8 +1896,12 @@ static const char glsl_prelude[] =
     // MSL semantics: saturate(NaN) = 0, fmin/fmax return the non-NaN operand
     "float saturate(float x) { return isnan(x) ? 0.0f : clamp(x, 0.0f, 1.0f); }\n"
     "vec2 saturate(vec2 x) { return vec2(saturate(x.x), saturate(x.y)); }\n"
-    "float fmin(float a, float b) { return isnan(a) ? b : (isnan(b) ? a : min(a, b)); }\n"
-    "float fmax(float a, float b) { return isnan(a) ? b : (isnan(b) ? a : max(a, b)); }\n"
+    // (named nv_fmin / nv_fmax in the SPIR-V: MoltenVK - the Android emulator's Vulkan on a Mac - turns SPIR-V back
+    // into MSL, where functions called fmin / fmax clash with Metal's own and the pipeline fails to build)
+    "float nv_fmin(float a, float b) { return isnan(a) ? b : (isnan(b) ? a : min(a, b)); }\n"
+    "float nv_fmax(float a, float b) { return isnan(a) ? b : (isnan(b) ? a : max(a, b)); }\n"
+    "#define fmin nv_fmin\n"
+    "#define fmax nv_fmax\n"
     "uint clz(uint v) { return v == 0u ? 32u : uint(31 - findMSB(v)); }\n"
     "uint popcount(uint v) { return uint(bitCount(v)); }\n"
     "uint mulhi(uint a, uint b) { uint hi, lo; umulExtended(a, b, hi, lo); return hi; }\n"
