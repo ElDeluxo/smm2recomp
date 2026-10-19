@@ -212,15 +212,16 @@ void smm1_se_bank(const char *bank) {
     lyt_sarc_close(&s);
     free(d);
 }
-void smm1_se(const char *name) {
+bool smm1_se(const char *name) {
     for (int i = 0; i < g_nsfx; i++)
         if (!strcmp(g_sfx[i].name, name)) {
             pthread_mutex_lock(&g_mx);
             for (int k = 0; k < 8; k++)
                 if (!g_se[k].on) { g_se[k] = (Voice){g_sfx[i].p, 0, 1, 0, false, true, 0}; break; }
             pthread_mutex_unlock(&g_mx);
-            return;
+            return true;
         }
+    return false;
 }
 
 

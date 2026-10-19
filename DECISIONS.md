@@ -1543,7 +1543,7 @@ before.
 research/specs/recomp-mods.md §3. At the first start with the switch on, the costume models are built
 from the player's own dumps: SMM2's small SMB1 Mario model with each SMM1 costume's 24x24 frames
 (`Model/M1_Player_Chara_<res>.szs` of the SMM1 dump), written into a rebuilt `Pack/M1_Model.pack`
-(a zstd frame of stored blocks) by the mods' shared RomFS overlay (generator "costumes",
+(zstd level 3, about 8 MB for 100 costumes against the game's 5 MB; stored blocks made it 38 MB) by the mods' shared RomFS overlay (generator "costumes",
 `<data>/mods-generated/romfs/`), which lays it over the game's.
 Nothing of either game is in the repository.
 
@@ -1560,7 +1560,11 @@ Nothing of either game is in the repository.
 - A hit takes the costume off through the Super → small power-down (hook point 0x15a50a4 reads the
   form as 1), as a costume absorbs one hit in SMM1.
 - Sound: the costume's power-up, goal and death sounds from SMM1's `Sound/CharaMario` banks on the
-  host mixer; SMM2's goal and death fanfares give way to them.
+  host mixer; SMM2's goal and death fanfares give way to them. Jump (`jump` / `jump2`, half and half),
+  landing (`ground`) and the taunt (`appeal`: Up held 8 frames standing still) come from the player's
+  motion each frame (on-ground bit, vertical speed); SMM2's own player sounds still play under them,
+  since they are action triggers in the sound links [inf: muting them needs the links' play call]. The
+  taunt has no pose: SMM2's small-Mario model has no slot for SMM1's `appeal` frame.
 - Reward: after a won 100 Mario run the ending shows SMM1's costume window (`Cmn_CMListWindow_01`)
   with one random costume not owned yet, from SMM1's pools by difficulty (smm1-100mario-code.md §7);
   owned costumes are kept in `costumes-owned.txt` (category 0 always owned).
