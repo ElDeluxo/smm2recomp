@@ -1484,3 +1484,14 @@ SMM2's own Mii renderer could draw). **Decided (owner, option 2):** the credits 
 yellow course-name banner with the maker underneath, like the course card, and no Mii slot. The
 SMM1 rescue scene and Peach's thank-you stay SMM1; the roll ends on THE END / TO BE CONTINUED as
 before.
+
+## 2026-10-19 — 100 Mario gets its own Course World button; Endless stays exactly SMM2's
+
+**Owner:** separate menu entries. The **100 Mario Challenge** gets its own button in Course World,
+and SMM2's **Endless Challenge** button behaves exactly as in SMM2 (it no longer opens the 100 Mario
+select, and nothing relies on pressing B there). Replaces the interim "B on the SMM1 select leads to
+SMM2's Endless" route. The new button comes from a Course World layout overlay generated on the
+player's machine from their own dump, plus a hook on its press; both screens are checked on the
+iPad with the Mods tab.
+
+**Android:** the owner has no Android device; Android is tested on the emulator.
