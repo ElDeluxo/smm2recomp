@@ -46,21 +46,29 @@ bool hundred_modes_available(void);
 void hundred_mode_switch(void);
 Select *select_new(int d, const struct hundred_status *st);
 void select_free(Select *s);
-// EV_START (*resume set), EV_EXIT (after the map's Out), EV_TAB (difficulty changed: s->d), EV_FOCUS, EV_MODE (ZL / ZR)
+// EV_START (*resume set), EV_BACK (B: the map's Out begins), EV_EXIT (after the map's Out), EV_TAB (difficulty
+// changed: s->d), EV_FOCUS, EV_MODE (ZL / ZR)
 int select_step(Select *s, const UiIn *in, const struct hundred_status *st, bool *resume);
 bool select_header_hit(Select *s, int x, int y);  // a tap at game pixels x, y on the mode header
 void select_draw(Select *s, LQuads *out);
 
 enum { ENTRY_NEW, ENTRY_RESUME, ENTRY_AFTER_CLEAR, ENTRY_DIRECT };
 typedef struct Intro Intro;
-// takes the select screen's map and title bar (same difficulty) for the MapIn that follows
-Intro *intro_new(int entry, int d, const CardInfo *info, int cleared, bool had_continue, Select *handoff);
+// takes the select screen's map and title bar (same difficulty) for the MapIn that follows. smm2_card: the course's
+// card is SMM2's own (owner, 2026-10-20): after Mario's Go and the iris the screen stays black until SMM2's course
+// scene has begun (intro_course_in), which then shows its course-in card (lives, loading); SMM1's card (the
+// "SMM1 course card" setting) comes up after the iris otherwise.
+Intro *intro_new(int entry, int d, const CardInfo *info, int cleared, bool had_continue, Select *handoff, bool smm2_card);
 void intro_free(Intro *s);
 void intro_card(Intro *s, const CardInfo *info);  // the course's details as they become known
 void intro_started(Intro *s);                     // the course has started: the card may go (Out)
+void intro_course_in(Intro *s);                   // (SMM2's card) SMM2's course scene has begun
 bool intro_full(const Intro *s);                  // covers the game (false during the card's Out)
-bool intro_card_up(const Intro *s);               // the card is in (or coming in): the course may start under it
-int intro_step(Intro *s, const UiIn *in);         // EV_DONE when the card's Out has finished
+bool intro_card_up(const Intro *s);               // the course may come: the card is in (or coming in), or with
+                                                  // SMM2's card, Mario's Go has begun
+// EV_FETCH when the course may come (see intro_card_up), EV_DONE when the card's Out has finished (with SMM2's card:
+// when SMM2's course scene has begun, the screen black)
+int intro_step(Intro *s, const UiIn *in);
 void intro_draw(Intro *s, LQuads *out);
 Lay *intro_map_layout(Intro *s);  // the map being shown (NULL once the card is up)
 int intro_tick(const Intro *s);
@@ -100,3 +108,6 @@ void ov_card_started(Overlay *o);                 // then OutMiss
 bool ov_card_out(Overlay *o);                     // OutMiss is playing (the game shows through)
 bool ov_card_done(Overlay *o);
 void ov_hide(Overlay *o);
+
+// black over the whole screen at opacity a (0..1): the flow's fades
+void fade_quad(LQuads *out, float a);
