@@ -11,7 +11,9 @@
 // Written once, by the mods' shared RomFS overlay (mods/romfs_overlay.h: generator "costumes"), as Pack/M1_Model.pack
 // (the original pack's files plus Model/M1_Player_Chara_<res>{,_2,_3,_4}.Nin_NX_NVN.zs, one data blob under four
 // names), which replaces the game's. The .zs files are zstd frames of raw blocks (no compressor needed).
-#define _XOPEN_SOURCE 700  // (glibc: nftw and FTW_* are X/Open)
+#ifndef SMM1UI_STANDALONE
+#include "../../../../runtime/platform.h"  // (mkdir with a mode and plat_remove_tree on every host)
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -269,14 +271,9 @@ static bool mkdirs(const char *path) {
     return true;
 }
 #ifndef SMM1UI_STANDALONE
-#include <ftw.h>
-static int rm_entry(const char *p, const struct stat *sb, int flag, struct FTW *ftw) {
-    (void)sb, (void)flag, (void)ftw;
-    return remove(p);
-}
 static void remove_old(void) {  // (the folder of the first version, before the shared overlay)
     struct stat st;
-    if (!stat("mods-generated/costume-romfs", &st)) nftw("mods-generated/costume-romfs", rm_entry, 8, FTW_DEPTH | FTW_PHYS);
+    if (!stat("mods-generated/costume-romfs", &st)) plat_remove_tree("mods-generated/costume-romfs");
 }
 #endif
 static __attribute__((unused)) bool write_file(const char *path, const uint8_t *d, size_t n) {
