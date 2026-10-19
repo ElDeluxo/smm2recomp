@@ -118,8 +118,9 @@ bool fgm_encode(id<MTLDevice> dev, id<MTLCommandBuffer> cb, id<MTLTexture> prev,
         pass(cb, pipes[P_MOTION], mot[i], in, a, b);
     }
     {
-        id<MTLTexture> in[4] = {mot[0], dummy, dummy, dummy};
-        pass(cb, pipes[P_MEDIAN], med[k], in, z, z);
+        id<MTLTexture> in[4] = {mot[0], pyr[k][0], pyr[k ^ 1][0], dummy};
+        float ma[4] = {(float)lv[0][0], (float)lv[0][1]};
+        pass(cb, pipes[P_MEDIAN], med[k], in, ma, z);
         id<MTLTexture> ri[4] = {med[k], dummy, dummy, dummy};
         float ra[4] = {(float)med[k].width};
         pass(cb, pipes[P_ROWS], rows, ri, ra, z);

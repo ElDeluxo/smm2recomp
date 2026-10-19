@@ -4,6 +4,7 @@
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "nvn/framegen.h"
@@ -88,6 +89,19 @@ static int maxdiff(const uint8_t *x, const uint8_t *y, int x0, int y0, int x1, i
     return m;
 }
 
+// FG_TEST_DUMP=<dir>: write a test's output and expected images there (PPM) for a look
+static void dump(const char *name, const uint8_t *px) {
+    const char *dir = getenv("FG_TEST_DUMP");
+    if (!dir) return;
+    char path[512];
+    snprintf(path, sizeof path, "%s/%s.ppm", dir, name);
+    FILE *f = fopen(path, "wb");
+    if (!f) return;
+    fprintf(f, "P6\n%d %d\n255\n", W, H);
+    for (int i = 0; i < W * H; i++) { fputc(px[i * 4 + 2], f); fputc(px[i * 4 + 1], f); fputc(px[i * 4], f); }
+    fclose(f);
+}
+
 static int fails;
 static void report(const char *name, bool ok, const char *fmt, ...) {
     char v[128] = "";
@@ -141,6 +155,36 @@ static void test_hud(void) {
     report("test_hud", m <= 2, "max diff in the box %d", m);
 }
 
+// a 24 x 24 sprite (its own pattern, seed 9) at (x, 120) over the still pattern
+static void sprite(uint8_t *px, int x) {
+    static uint8_t spr[W * H * 4];
+    pattern(spr, 0, 9);
+    for (int y = 0; y < 24; y++)
+        for (int i = 0; i < 24; i++) memcpy(&px[((120 + y) * W + x + i) * 4], &spr[(y * W + i) * 4], 4);
+}
+
+static void test_sprite(void) {  // a small object moving 6 px over a still background lands 3 px along
+    pattern(A, 0, 1);
+    pattern(B, 0, 1);
+    pattern(E, 0, 1);
+    sprite(A, 200);
+    sprite(B, 206);
+    sprite(E, 203);
+    if (!generate(A, B, O)) { report("test_sprite", false, "fgm_encode failed"); return; }
+    dump("sprite_out", O);
+    dump("sprite_expected", E);
+    double se = 0;
+    int n = 0;
+    for (int y = 112; y < 152; y++)
+        for (int x = 192; x < 238; x++)
+            for (int c = 0; c < 3; c++) {
+                double d = O[(y * W + x) * 4 + c] - E[(y * W + x) * 4 + c];
+                se += d * d, n++;
+            }
+    double psnr = se > 0 ? 10 * log10(255.0 * 255.0 / (se / n)) : 99;
+    report("test_sprite", psnr >= 30, "PSNR %.1f dB around the sprite, need 30", psnr);
+}
+
 int main(void) {
     @autoreleasepool {
         dev = MTLCreateSystemDefaultDevice();
@@ -149,6 +193,7 @@ int main(void) {
         test_static();
         test_cut();
         test_hud();
+        test_sprite();
     }
     return fails ? 1 : 0;
 }

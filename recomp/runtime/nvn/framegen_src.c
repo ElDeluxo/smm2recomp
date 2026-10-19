@@ -20,7 +20,7 @@
 
 static const char framegen_src[] =
     // tuned against tools/test_framegen.m and real scrolling / running captures (LARECOMP_FRAMEGEN_SHOT)
-    "#define FG_ZERO_BIAS 0.02\n"  // the still vector's head start (mean abs luma per texel): a HUD and backgrounds stay put
+    "#define FG_ZERO_BIAS 0.003\n"  // the still vector's head start (mean abs luma per texel): a HUD and backgrounds stay put
     "#define FG_MATCH 0.08\n"      // max rgb difference for two samples to count as the same thing
     "#define FG_CUT_COST 0.03\n"   // mean best match cost above which it is a cut: show prev (synthetic: matched 0.002, cut 0.05)
     "float fg_lum(float3 c) { return dot(c, float3(0.299, 0.587, 0.114)); }\n"
@@ -70,9 +70,23 @@ static const char framegen_src[] =
     "        if (k < bestk) { bestk = k; bestc = k; best = m; }\n"
     "      }\n"
     "  }\n"
+    // the finest level: +-1 texel around the best in quarter-texel (1 px) steps, so small objects that move a few px
+    // a frame get their own motion rather than the nearest 4-px step
+    "  if (L < 5.0) {\n"
+    "    float2 base = best;\n"
+    "    for (int dy = -4; dy <= 4; dy++)\n"
+    "      for (int dx = -4; dx <= 4; dx++) {\n"
+    "        float2 m = base + float2(float(dx), float(dy)) * (L * 0.25);\n"
+    "        if ((dx == 0 && dy == 0) || (m.x == 0.0 && m.y == 0.0)) continue;\n"
+    "        float k = fg_cost(lc, lp, o, m, L, lsize);\n"
+    "        if (k < bestk) { bestk = k; bestc = k; best = m; }\n"
+    "      }\n"
+    "  }\n"
     "  return float4(best.x, best.y, bestc, 1.0);\n"
     "}\n"
-    // per-component median of the 3 x 3 vectors around p (b, the cost, from p)
+    // per-component median of the 3 x 3 vectors around block p, as a candidate: it replaces the block's own vector
+    // only where it matches at least as well (lc / lp: the 1/4 luma, lsize its size) - a plain median would hand a
+    // sprite a block or two wide its still neighbours' vector
     "float fg_med9(float v0, float v1, float v2, float v3, float v4, float v5, float v6, float v7, float v8) {\n"
     "  float v[9];\n"
     "  v[0] = v0; v[1] = v1; v[2] = v2; v[3] = v3; v[4] = v4; v[5] = v5; v[6] = v6; v[7] = v7; v[8] = v8;\n"
@@ -80,12 +94,16 @@ static const char framegen_src[] =
     "    for (int j = i + 1; j < 9; j++) { float lo = min(v[i], v[j]), hi = max(v[i], v[j]); v[i] = lo; v[j] = hi; }\n"
     "  return v[4];\n"
     "}\n"
-    "float4 fg_median(FG_TEX m, int2 p) {\n"
+    "float4 fg_median(FG_TEX m, FG_TEX lc, FG_TEX lp, int2 p, float2 lsize) {\n"
+    "  float4 n4 = FG_LOAD(m, p);\n"
     "  float4 n0 = FG_LOAD(m, p + int2(-1, -1)), n1 = FG_LOAD(m, p + int2(0, -1)), n2 = FG_LOAD(m, p + int2(1, -1));\n"
-    "  float4 n3 = FG_LOAD(m, p + int2(-1, 0)),  n4 = FG_LOAD(m, p),                n5 = FG_LOAD(m, p + int2(1, 0));\n"
+    "  float4 n3 = FG_LOAD(m, p + int2(-1, 0)),  n5 = FG_LOAD(m, p + int2(1, 0));\n"
     "  float4 n6 = FG_LOAD(m, p + int2(-1, 1)),  n7 = FG_LOAD(m, p + int2(0, 1)),  n8 = FG_LOAD(m, p + int2(1, 1));\n"
-    "  return float4(fg_med9(n0.x, n1.x, n2.x, n3.x, n4.x, n5.x, n6.x, n7.x, n8.x),\n"
-    "                fg_med9(n0.y, n1.y, n2.y, n3.y, n4.y, n5.y, n6.y, n7.y, n8.y), n4.z, 1.0);\n"
+    "  float2 md = float2(fg_med9(n0.x, n1.x, n2.x, n3.x, n4.x, n5.x, n6.x, n7.x, n8.x),\n"
+    "                     fg_med9(n0.y, n1.y, n2.y, n3.y, n4.y, n5.y, n6.y, n7.y, n8.y));\n"
+    "  if (md.x == n4.x && md.y == n4.y) return n4;\n"
+    "  float k = fg_cost(lc, lp, p * 4, md, 4.0, lsize);\n"
+    "  return k <= n4.z ? float4(md, k, 1.0) : n4;\n"
     "}\n"
     "float4 fg_cost_rows(FG_TEX m, int y, int w) {\n"
     "  float s = 0.0;\n"
@@ -97,15 +115,25 @@ static const char framegen_src[] =
     "  for (int y = 0; y < h; y++) s += FG_LOAD(rows, int2(0, y)).r;\n"
     "  return float4(s / float(h), 0.0, 0.0, 1.0);\n"
     "}\n"
-    // pix: the output pixel's centre (full-res px); motion has one texel per 16 x 16 px, read bilinear
+    // pix: the output pixel's centre (full-res px); motion has one texel per 16 x 16 px. Each pixel tries its block's
+    // vector and its four neighbours' and keeps the one whose two samples agree best: a block holding the edge of a
+    // moving sprite over a still background has the background's vector, its neighbour the sprite's.
     "float4 fg_warp(FG_TEX prev, FG_TEX cur, FG_TEX mot, FG_TEX cost, float2 pix, float t, float2 size) {\n"
     "  float3 z0 = FG_SAMPLE(prev, pix / size).rgb;\n"
     "  if (FG_LOAD(cost, int2(0, 0)).r > FG_CUT_COST) return float4(z0, 1.0);\n"
     "  float3 z1 = FG_SAMPLE(cur, pix / size).rgb;\n"
-    "  float2 m = FG_SAMPLE(mot, pix / (16.0 * float2(FG_SIZE(mot)))).rg;\n"
-    "  float3 a = FG_SAMPLE(prev, (pix - t * m) / size).rgb;\n"
-    "  float3 b = FG_SAMPLE(cur, (pix + (1.0 - t) * m) / size).rgb;\n"
-    "  float dm = fg_maxabs(a - b), dz = fg_maxabs(z0 - z1);\n"
+    "  int2 q = int2(pix / 16.0);\n"
+    "  float3 a = z0, b = z1;\n"
+    "  float dm = 1e9;\n"
+    "  for (int i = 0; i < 5; i++) {\n"
+    "    int2 d = i == 0 ? int2(0, 0) : i == 1 ? int2(-1, 0) : i == 2 ? int2(1, 0) : i == 3 ? int2(0, -1) : int2(0, 1);\n"
+    "    float2 m = FG_LOAD(mot, q + d).rg;\n"
+    "    float3 ai = FG_SAMPLE(prev, (pix - t * m) / size).rgb;\n"
+    "    float3 bi = FG_SAMPLE(cur, (pix + (1.0 - t) * m) / size).rgb;\n"
+    "    float di = fg_maxabs(ai - bi);\n"
+    "    if (di < dm) { dm = di; a = ai; b = bi; }\n"
+    "  }\n"
+    "  float dz = fg_maxabs(z0 - z1);\n"
     "  if (dz <= dm && dz < FG_MATCH) return float4(mix(z0, z1, t), 1.0);\n"
     "  if (dm < FG_MATCH) return float4(mix(a, b, t), 1.0);\n"
     "  return float4(t < 0.5 ? a : b, 1.0);\n"
@@ -131,7 +159,7 @@ static const char msl_tail[] =
     "fragment float4 fg_luma_fs(FG_IN) { return fg_luma(t0, int2(in.pos.xy), pc.a.xy); }\n"
     "fragment float4 fg_down_fs(FG_IN) { return fg_down(t0, int2(in.pos.xy), pc.a.xy); }\n"
     "fragment float4 fg_motion_fs(FG_IN) { return fg_motion(t0, t1, t2, t3, int2(in.pos.xy), pc.a, pc.b); }\n"
-    "fragment float4 fg_median_fs(FG_IN) { return fg_median(t0, int2(in.pos.xy)); }\n"
+    "fragment float4 fg_median_fs(FG_IN) { return fg_median(t0, t1, t2, int2(in.pos.xy), pc.a.xy); }\n"
     "fragment float4 fg_cost_rows_fs(FG_IN) { return fg_cost_rows(t0, int(in.pos.y), int(pc.a.x)); }\n"
     "fragment float4 fg_cost_total_fs(FG_IN) { return fg_cost_total(t0, int(pc.a.x)); }\n"
     "fragment float4 fg_warp_fs(FG_IN) { return fg_warp(t0, t1, t2, t3, in.pos.xy, pc.a.x, pc.a.yz); }\n";
@@ -164,7 +192,7 @@ static const struct { const char *name, *main; } glsl_mains[] = {
     {"fg_luma.frag", "void main() { o = fg_luma(t0, ivec2(gl_FragCoord.xy), pc.a.xy); }\n"},
     {"fg_down.frag", "void main() { o = fg_down(t0, ivec2(gl_FragCoord.xy), pc.a.xy); }\n"},
     {"fg_motion.frag", "void main() { o = fg_motion(t0, t1, t2, t3, ivec2(gl_FragCoord.xy), pc.a, pc.b); }\n"},
-    {"fg_median.frag", "void main() { o = fg_median(t0, ivec2(gl_FragCoord.xy)); }\n"},
+    {"fg_median.frag", "void main() { o = fg_median(t0, t1, t2, ivec2(gl_FragCoord.xy), pc.a.xy); }\n"},
     {"fg_cost_rows.frag", "void main() { o = fg_cost_rows(t0, int(gl_FragCoord.y), int(pc.a.x)); }\n"},
     {"fg_cost_total.frag", "void main() { o = fg_cost_total(t0, int(pc.a.x)); }\n"},
     {"fg_warp.frag", "void main() { o = fg_warp(t0, t1, t2, t3, gl_FragCoord.xy, pc.a.x, pc.a.yz); }\n"},
