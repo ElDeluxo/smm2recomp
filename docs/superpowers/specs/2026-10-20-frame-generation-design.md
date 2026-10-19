@@ -62,7 +62,9 @@ The game thread must not sleep for the half-slot (that would halve its CPU time 
   submits and presents go through one mutex. The thread joins on swapchain recreation and shutdown. The swapchain
   needs at least 3 images while frame generation is on. On Android, `ANativeWindow_setFrameRate(120)` while on.
 
-Shared by both backends: the menu (`menu_render`) is drawn fresh onto each presented image, never interpolated.
+Shared by both backends: the menu is drawn onto each presented image, never interpolated. Its ImGui frame is built
+once per real frame (`menu_render`, which also takes its input), and the same draw data is drawn again onto the
+second image (`menu_redraw`), so menu input and animations stay on the 60 Hz frame.
 `backend_represent` (the game held in a host dialog) presents the last real frame only, with no generation.
 
 ## Interpolation pass
@@ -74,8 +76,9 @@ source string like `smaa_hlsl_src`, translated per backend as SMAA is). Inputs: 
    so each real frame builds one.
 2. **Block motion.** At 1/16 size, 8x8 blocks search ±4 texels (sum of absolute differences). The vector is
    refined at 1/8 and 1/4 with ±2 searches around the upsampled coarse vector. Candidates at every level: the
-   zero vector (with a bias, so a static HUD and backgrounds stay put), the coarse vector, and the frame's global
-   vector (the most common block vector from the previous frame, standing in for the camera scroll). Output:
+   zero vector (with a bias, so a static HUD and backgrounds stay put), the coarse vector, and (at the coarsest
+   level) the previous frame's final vector at the same block, which carries the camera scroll from frame to frame
+   without a CPU readback. Output:
    a motion texture (RG16F, prev → cur, in full-size pixels) and a per-block match cost.
 3. **Clean-up.** A 3x3 median filter on the motion texture.
 4. **Warp and blend** (at drawable size). For output pixel `p` with motion `m` looked up at `p`:
@@ -95,6 +98,8 @@ and Mario-running captures.
 - the gap since the previous real frame isn't about 16.7 ms (under 12 ms or over 22 ms), which covers hitches,
   the game's own 30 fps mode, and Vulkan's `vk_pace_frame` slow mode
 - after `backend_represent`, or after the iOS app returns from the background
+- the window's display refreshes below 100 Hz (`SDL_GetCurrentDisplayMode(...)->refresh_rate`): two presents per
+  60 Hz refresh would only make `nextDrawable` / acquire block and slow the game, so nothing is generated there
 
 ## Interaction with existing systems
 
