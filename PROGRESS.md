@@ -132,8 +132,10 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
       - ✅ difficulty select (tabs by unlock, Continue only with a record, OutR/OutL slides), world map
         demos as Block.rpx plays them (MapIn, Telop, the Goombas carrying Peach, AnimB, Mario's jump /
         walk / Go, the castle at the end, lives and n/total counters, A skips to Go), the start card (one
-        little Mario per life, AnimA/AnimB by case, held until the course starts, Out over it), pause,
-        clear, hold-to-skip countdown, the card after a miss, game over
+        little Mario per life, AnimA/AnimB by case, held until the course plays, Out over it; "Loading
+        courses..." while the server gathers them); between courses SMM2's own screens (course-in, pause,
+        skip, retry, clear and its Next / Like / Boo result), then SMM1's map and card after each clear
+        (`HUNDRED_NEXT` from the run side)
       - ✅ the ending from the binary: the rescue scene in the cleared course's style (SMB1, SMB3, SMW
         sprites; NSMBU's 3-D Mario posed with its walk), Peach (Toad on Easy), the Thank-you line by
         difficulty, credits `Nwk_StaffCredit_01/00/03` with each course and maker, TO BE CONTINUED... /
@@ -144,9 +146,10 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
         clear … (skips, misses) → the ending with the run's courses and makers in the credits → back on
         the select (`RECOMP_HUNDRED_AUTO`, `RECOMP_HUNDRED_SHOTS`; evidence in
         `recomp/private/smm2/evidence/e2e5_sx/`, private); pause, Save & Quit and Continue through the run side
-      - ⬜ a New Game straight after an ending (SMM2 isn't back on its Endless menu after a win: run side),
+      - ⬜ `HUNDRED_NEXT` from the run side (until then SMM1's map and card show only at the run's start),
         per-frame sound triggers (SLink database not decoded: sounds are placed by name [inf]), the
-        NSMBU ending's perspective camera, Cemu side-by-side (no Cemu installed)
+        NSMBU ending's perspective camera; 🔄 Cemu side-by-sides (Cemu runs the owner's SMM1 here, frames
+        captured; reaching the ending scene in progress)
   - 🔄 **Settings, one toggle per SMM1 feature** (overlay menu's Mods tab, kept in `smm2mods.ini`):
     ✅ "100 Mario Challenge (SMM1)" (on screen in the Mods tab: `evidence/mods/mods_tab.png`); ⬜ Mystery Mushroom costumes (model, sounds, physics
     swaps), mid-air shell jumps, overlapping (overlay) pipes, and more from research/specs/smm1-extras*
