@@ -176,9 +176,35 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
   - 🔄 **Settings, one toggle per SMM1 feature** (overlay menu's Mods tab, kept in `smm2mods.ini`):
     ✅ "100 Mario Challenge (SMM1)" (on screen in the Mods tab: `evidence/mods/mods_tab.png`); 🔄 "Mystery Mushroom costumes" (`mods/costume.c`: models generated from both dumps, worn as small
     Mario in SMB1 courses; in game: the costume on from the start (Peach, Samus), the pickup (Super Mushroom
-    → Block costume, its power-up sound), the goal and death sounds, the reward window after the ending;
-    ⬜ a hit taking it off (hook in place, not yet seen in a run), jump / taunt sounds, more than one costume per
-    course), mid-air shell jumps, overlapping (overlay) pipes, and more from research/specs/smm1-extras*
+    → Block costume, its power-up sound), the goal and death sounds, the reward window after the ending
+    (`evidence/reward/006_reward.png`, private), jump / landing / taunt sounds from the player's motion;
+    ⬜ SMM2's own jump sound muted under the costume's, the taunt pose, more than one costume per course).
+    **Where this stands (WIP, paused 2026-10-19):** in game (cos9, private log): costume worn, Super Mushroom
+    pickup keeps it, jump sounds, goal and death sounds play. ⬜ A hit taking the costume off is still unseen:
+    every test death so far was a pit (the hook at 0x15a50a4 is in place). ⬜ The taunt fired once right after a
+    goal (the Up byte at player +0x560 is [inf]: check it). ⬜ The reward window's lower-right frame looks cut off
+    (`evidence/reward/006_reward.png`). **Crash ("Pure virtual function called", WorkerMgr, main+0x4d2f50: a
+    queued object destroyed while its request was pending)** seen twice with costumes on (entering Course World;
+    a course start). The costume pack was 38 MB against the game's 5 MB (stored zstd blocks); it is now
+    compressed (8.4 MB, generator "costumes" v2). Since then 5 of 5 runs with costumes on entered Course World
+    and started a course without the crash (before: 2 crashes in about 6 such runs; logs `crash1-3.log`,
+    `cos8.log`, `cos9.log`, private). Likely fixed by the smaller pack [inf: consistent, not proven; the SMM1
+    audio mix is host-only and touches no guest object]. Paused by the owner: the hit test, the reward frame,
+    the sounds; the SMM1 extras (`mods/smm1_extras.c`, all off by default, `recomp/docs/mods.md` "SMM1 extras"):
+    ✅ "Overlapping pipes (SMM1)" (one hook in the game's placement check, main+0xfe827c: SMM2 rejects a
+    course whose pipes overlap and plays a blank one, and its Course Maker snaps a pipe dragged onto another back;
+    with the setting on, both test courses (ours and the pipes of SMM1's sample course 95, read from the SMM1
+    dump) load and play, and a pipe dragged onto another stays; with it off, a replay against Ryujinx is
+    identical in 606 / 606 updates and the whole player object; both switches on screen in the Mods tab: `evidence/smm1-extras/`); 🔄 "Mid-air shell
+    jumps (SMM1)" (hooks in place: SMM1's flat falling stomp window on shells, main+0x1267ce8, and the 5-frame
+    instead of 16-frame no-hit window after a mid-air kick off a wall, main+0x1202c88; ⬜ a test course where
+    the SMM1 jump works with it on); ⬜ more from research/specs/smm1-extras*
+  - 🔄 **Edit any course** (`games/smm2/mods/edit.c`, `recomp/docs/mods.md` "Edit any course"; WIP, paused):
+    ✅ Course World's Download into the Coursebot against our server (stand-in thumbnail); ✅ SMM2's Make in the
+    Coursebot window of a downloaded course (SMM1's Edit placement), the Course Maker opens with the course, an edit
+    saved to My Courses and played (screens private); ⬜ d-pad cursor onto Make (touch works), ⬜ the copy's
+    "uploaded" mark cleared (fix not yet checked), ⬜ upload credit in game (server `based_on` done and tested),
+    ⬜ Edit on the course card / Endless (proposed)
   - 🔄 **Our open-source server everywhere the game would reach Nintendo** (`recomp/docs/mods.md`,
     `games/smm2/mods/world.c`): ✅ Course World's course lists (Hot, Popular, New, detailed search, a
     maker's courses) from `/api/courses`, the course page (likes, plays, clear rate, world record, maker
@@ -204,10 +230,44 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     no mod override involved (`evidence/proof2/`, private); ✅ UDP port parking for PIA; ⬜ course lists, downloads
     and the rest of DataStore on the local NEX server; ⬜ Nextendo (owner's go-ahead, app registration, sign-in)
 
-- ⬜ **Releases (melee-pc style, owner-approved)**: per-platform launcher + recompiler, no game code;
-  dump picker with v3.0.3 hash check, the player's prod.keys, extraction, first-launch recompile with
-  bundled zig, optional SMM1 dump, update check. Windows / Linux / macOS first, then Android / iOS
-  build-it-yourself (iOS via a desktop build-sign-install helper). GitHub Actions on release only.
+- 🔄 **Releases (melee-pc style, owner-approved)**: per-platform launcher + recompiler, no game code
+  (`recomp/README.md` "Player packages and the setup screen", DECISIONS.md "How it's built")
+  - ✅ **Setup screen** in the runtime (`runtime/ui/launcher.mm`, SDL3 + ImGui, Metal / Vulkan) in place of the game
+    until it's set up: the dump (NSP / XCI or extracted folders), prod.keys + firmware (suggested from Ryujinx /
+    yuzu), optional SMM1 dump; then the v3.0.3 check + layout (`games/smm2/setup.py --source`), fonts and system
+    data (`sysdata.py`), the first-launch recompile with progress (`runtime/gamebuild.c`, bundled Python + zig),
+    and the game in the same window. Errors per step with what to do; keys read in place, values never shown or
+    logged (hactool's output masked). Back to it: Quit to Start Screen, Mods > Game files, `--setup`
+  - ✅ **Known-good v3.0.3 table** (`games/smm2/versions.py`): build ids, SHA-256 of the 4 ExeFS files, title
+    versions (3.0.3 = update v458752), program NCA ids - hashes of the owner's files only
+  - ✅ **Update check**: GitHub's latest release vs the build's tag, notice + link only (setup screen and the
+    overlay menu's Mods tab, "Check for updates" switch); `RECOMP_UPDATE_TAGS=v0.2.0` shows it offline
+  - ✅ **Packages** (`make app-macos`, `make TARGET=... package`; each checked by `scripts/check_package.py`,
+    which fails on anything from a dump - names, magics, the known ExeFS hashes, key lines, recompiled code):
+    macOS `.app` 320 MB → zip 96 MB (macOS 15+, ad hoc signed); Windows zip 113 MB (425 MB);
+    Linux x86-64 tar.gz 113 MB (373 MB); Linux arm64 tar.gz 104 MB (341 MB). Runtime exes: macOS 2.6 MB, Windows 2.7 MB,
+    Linux 13.7 / 14.3 MB; the bulk is zig (241-308 MB unpacked) and Python (73-115 MB)
+  - ✅ **Release workflow** `.github/workflows/release.yml`: only on `v*` tags; Windows + Linux cross-built in a
+    Debian 13 container, macOS on a macOS runner, every package re-checked, attached to the release (a draft if
+    none) - ⬜ not run yet (no tag)
+  - ✅ **macOS end to end** (2026-10-19, the .app from `make app-macos`, a fresh data folder): the setup screen
+    filled in with the owner's extracted dump folders (keys and firmware found in Ryujinx's folder by the screen
+    itself, SMM1 dump given) → layout + v3.0.3 check (6 s; build ids and hashes match, RomFS 3,805 files) → fonts
+    and system data from the firmware with the bundled hactool (9 s) → recompile with the bundled Python + zig
+    (41 min, 8 jobs, the machine loaded by other agents) → the game in the same window → title screen
+    (seed 4, frame 2400, "Ver. 3.0.3"). No 32-hex value in any log. Captures (private):
+    `recomp/private/evidence/releases/` (setup screen, steps, progress, title). The first start of a freshly signed
+    .app waited ~5 min in dyld while macOS checked the bundle (once per build)
+  - 🔄 **Where this stands (2026-10-19, paused at the owner's call):** launcher flow ~90 % (NSP / XCI extraction
+    through the screen untested end to end: the owner's NSPs' metadata, tickets and versions read correctly with
+    the bundled hactool, the extraction itself not run - ~6 GB); packages ~90 % (all four build and pass the check;
+    none run on Windows / Linux); release workflow ~80 % (written, YAML checked, never run: needs a tag); docs ~95 %
+  - ⬜ Windows / Linux packages not run on their systems yet; Linux AppImage (bundled SDL3); notarized macOS app
+    (needs a Developer ID); Android / iOS stay build-it-yourself (iOS: a desktop build-sign-install helper)
+
+- ⬜ **Bug (owner, 2026-10-19):** sound effects when opening a course and during course loading are
+  slightly off (timing). Probably tied to the SLink sound trigger table not being decoded (sounds are
+  placed by name, not frame-exact). Not started.
 
 | Platform | Builds | Boots to title | Plays courses | Frames match Ryujinx | Input replays in sync |
 |---|---|---|---|---|---|

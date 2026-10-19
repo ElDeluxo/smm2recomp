@@ -499,7 +499,9 @@ static void fill_course(uint64_t e, Json *m, uint32_t data_id, uint32_t difficul
     note_course(data_id, json_str(json_get(m, "name"), ""), maker, style_index(json_str(json_get(m, "style"), "")));
     s64(e + 0x030, maker_pid(json_str(json_get(m, "maker_id"), ""), maker));
     put_utf16(g64(e + 0x040), g32(e + 0x048), json_str(json_get(m, "name"), ""));
-    put_utf16(g64(e + 0x098), g32(e + 0x0a0), json_str(json_get(m, "description"), ""));
+    char desc[400];  // (an edited copy of someone else's course: the credit line, edit.c)
+    extern const char *edit_listing_description(Json *m, char *buf, size_t cap);
+    put_utf16(g64(e + 0x098), g32(e + 0x0a0), edit_listing_description(m, desc, sizeof desc));
     s8(e + 0x170, (uint8_t)style_index(json_str(json_get(m, "style"), "")));
     s8(e + 0x171, (uint8_t)json_num(json_get(m, "theme"), 0));
     s64(e + 0x178, (uint64_t)json_num(json_get(m, "uploaded"), 0));

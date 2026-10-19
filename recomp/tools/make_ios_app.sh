@@ -62,6 +62,35 @@ cat > "$APP/Info.plist" <<EOF
 EOF
 plutil -lint "$APP/Info.plist" >/dev/null
 printf 'APPL????' > "$APP/PkgInfo"
+# The app icon (docs/branding, tools/make_icons.sh): an asset catalog compiled by actool (Xcode's command line tools:
+# Assets.car plus the home-screen PNGs and the Info.plist keys) from the 1024 master size; without actool the PNGs
+# alone, named in CFBundleIcons.
+icons="$(cd "$(dirname "$0")/../.." && pwd)/docs/branding/ios"
+if xcrun --find actool >/dev/null 2>&1; then
+    work=$(mktemp -d)
+    aset=$work/Assets.xcassets/AppIcon.appiconset
+    mkdir -p "$aset"
+    cp "$icons/AppIcon1024x1024.png" "$aset/icon-1024.png"
+    printf '%s\n' '{"images":[{"filename":"icon-1024.png","idiom":"universal","platform":"ios","size":"1024x1024"}],' \
+        '"info":{"author":"xcode","version":1}}' > "$aset/Contents.json"
+    printf '%s\n' '{"info":{"author":"xcode","version":1}}' > "$work/Assets.xcassets/Contents.json"
+    xcrun actool --compile "$APP" --platform "$sdk" --minimum-deployment-target 17.0 --target-device iphone \
+        --target-device ipad --app-icon AppIcon --output-partial-info-plist "$work/icon.plist" \
+        --output-format human-readable-text "$work/Assets.xcassets" > "$work/actool.log" 2>&1 ||
+        { cat "$work/actool.log" >&2; exit 1; }
+    /usr/libexec/PlistBuddy -c "Merge $work/icon.plist" "$APP/Info.plist" >/dev/null
+    rm -rf "$work"
+else
+    cp "$icons"/AppIcon*.png "$APP/"
+    /usr/libexec/PlistBuddy -c 'Add :CFBundleIcons dict' -c 'Add :CFBundleIcons:CFBundlePrimaryIcon dict' \
+        -c 'Add :CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconFiles array' \
+        -c 'Add :CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconFiles:0 string AppIcon60x60' \
+        -c 'Add :CFBundleIcons~ipad dict' -c 'Add :CFBundleIcons~ipad:CFBundlePrimaryIcon dict' \
+        -c 'Add :CFBundleIcons~ipad:CFBundlePrimaryIcon:CFBundleIconFiles array' \
+        -c 'Add :CFBundleIcons~ipad:CFBundlePrimaryIcon:CFBundleIconFiles:0 string AppIcon60x60' \
+        -c 'Add :CFBundleIcons~ipad:CFBundlePrimaryIcon:CFBundleIconFiles:1 string AppIcon76x76' \
+        -c 'Add :CFBundleIcons~ipad:CFBundlePrimaryIcon:CFBundleIconFiles:2 string AppIcon83.5x83.5' "$APP/Info.plist"
+fi
 # RECOMP_IOS_DATA=<data folder> (e.g. private/smm2): the game files go into the app as data/ (extracted/exefs and
 # romfs, fonts, sysdata; runtime/paths.c links them into Documents), so a device needs nothing copied by hand - for
 # your own device only: such an app holds the game. Staged next to the app once (rsync), then cloned into each new
@@ -73,6 +102,16 @@ if [ -n "${RECOMP_IOS_DATA:-}" ]; then
         mkdir -p "$stage/$d"
         rsync -aL --delete "$RECOMP_IOS_DATA/$d/" "$stage/$d/"
     done
+    # The shaders that data folder's runs met (and RECOMP_IOS_SHADERS="<dir>:<dir>...", other data folders'
+    # cache/shaders), precompiled for the device: their first use there loads them instead of compiling the source.
+    # RECOMP_IOS_NO_SHADERS=1: leave them out.
+    if [ -z "${RECOMP_IOS_NO_SHADERS:-}" ]; then
+        dirs=("$RECOMP_IOS_DATA/cache/shaders")
+        IFS=: read -r -a more <<< "${RECOMP_IOS_SHADERS:-}"
+        [ ${#more[@]} -eq 0 ] || dirs+=("${more[@]}")
+        "$(dirname "$0")/precompile_shaders.sh" "$stage/metallib" ios "${dirs[@]}" ||
+            echo "make_ios_app: shaders not precompiled (they compile on the device instead)" >&2
+    fi
     cp -Rc "$stage" "$APP/data" 2>/dev/null || cp -R "$stage" "$APP/data"
 fi
 if [ "$PLAT" = iossim ]; then

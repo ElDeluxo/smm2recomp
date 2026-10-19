@@ -534,7 +534,12 @@ static void post_course(Cpu *c) {
     char code[16] = "?";
     if (src && g32(src + 0xc) == 0x4c444353 && g32(src) == 1) {  // "SCDL", version 1
         int st = 0;
-        Json *j = srv_post_bytes("/api/courses", (const void *)(uintptr_t)(src + 0x10), 0x5bfc0, &st);
+        char path[256], based_on[200];  // an edited copy of someone else's course credits the original (edit.c)
+        extern void edit_upload_query(const uint8_t *course, char *out, size_t cap);
+        edit_upload_query((const uint8_t *)(uintptr_t)(src + 0x10), based_on, sizeof based_on);
+        snprintf(path, sizeof path, "/api/courses%s", based_on);
+        if (based_on[0]) LOG("[mod] course upload: an edited copy (%s)\n", based_on + 1);
+        Json *j = srv_post_bytes(path, (const void *)(uintptr_t)(src + 0x10), 0x5bfc0, &st);
         uint32_t id;
         if (j && code_to_data_id(json_str(json_get(j, "code"), ""), &id)) {
             snprintf(code, sizeof code, "%s", json_str(json_get(j, "code"), ""));

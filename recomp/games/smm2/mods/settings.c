@@ -162,7 +162,7 @@ void mod_remember_mode(bool endless) {
     mod_ini_set("challenge_mode", endless ? "endless" : "hundred");
 }
 
-int game_mod_toggles(const GameModToggle **out) {
+static int mod_toggles(const GameModToggle **out) {
     static const GameModToggle toggles[] = {
         {"100 Mario Challenge (SMM1)",
          "Course World's Endless Challenge opens SMM1's 100 Mario Challenge: 100 lives, 8 / 16 / 16 / 6 courses, "
@@ -196,7 +196,7 @@ int game_mod_toggles(const GameModToggle **out) {
     return (int)(sizeof toggles / sizeof *toggles);
 }
 
-void game_mod_toggles_changed(void) {
+static void mod_toggles_changed(void) {
     snprintf(g_mod.ruleset, sizeof g_mod.ruleset, "%s", t_hundred ? "hundred" : "smm2");
     mod_ini_set("ruleset", g_mod.ruleset);
     LOG("[mod] 100 Mario Challenge (SMM1) %s\n", t_hundred ? "on" : "off");
@@ -208,6 +208,26 @@ void game_mod_toggles_changed(void) {
     if (t_local_nex != (net_backend_setting() == NET_BACKEND_LOCAL_NEX))
         net_backend_select(t_local_nex ? NET_BACKEND_LOCAL_NEX : NET_BACKEND_OURS);  // (saved; the next start)
     costumes_set_setting(t_costumes);
+}
+
+// The tab: the switches above (when there is something to switch), then the SMM1 extras' (smm1_extras.c: one per SMM1
+// feature, always there).
+int smm1_extras_toggles(GameModToggle *out, int room);
+void smm1_extras_toggles_changed(void);
+static int own_shown;  // (the tab showed the switches above: apply them on a change)
+int game_mod_toggles(const GameModToggle **out) {
+    static GameModToggle all[16];
+    const GameModToggle *own;
+    int n = own_shown = mod_toggles(&own);
+    for (int i = 0; i < n; i++) all[i] = own[i];
+    n += smm1_extras_toggles(all + n, (int)(sizeof all / sizeof *all) - n);
+    *out = n ? all : NULL;
+    return n;
+}
+
+void game_mod_toggles_changed(void) {
+    if (own_shown) mod_toggles_changed();
+    smm1_extras_toggles_changed();
 }
 
 // Overrides are registered before the game's first instruction runs (dispatch reads them on every first call). Each

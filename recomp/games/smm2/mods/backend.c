@@ -45,3 +45,49 @@ bool game_net_config(const char *key, char *out, size_t cap) {
 }
 
 void game_net_config_set(const char *key, const char *val) { mod_ini_set(key, val); }
+
+// RECOMP_NET_TRACE_STATES=<file>: log the states the game's state machines enter (the enl session, Network Play's
+// menus ...) while its own NEX client runs. The file (made privately from the player's own game, never shipped) has
+// one line per state: "<main offset hex> <0 exec | 1 enter> <label>". Enter functions are logged when called; exec
+// functions (called every frame) when a machine's state changes. They are reached through pointers, so overrides
+// see them.
+#define MAX_TRACED 512
+static struct { uint64_t addr; char label[64]; bool enter; } traced[MAX_TRACED];
+static int ntraced;
+static struct { uint64_t self, pc; } last_exec[64];
+
+static void trace_state(Cpu *c) {
+    uint64_t pc = c->pc, self = c->x[0];
+    for (int i = 0; i < ntraced; i++) {
+        if (traced[i].addr != pc) continue;
+        if (traced[i].enter) LOG("[state] %s\n", traced[i].label);
+        else {
+            int j = 0;
+            while (j < 64 && last_exec[j].self && last_exec[j].self != self) j++;
+            if (j == 64) j = (int)(self >> 4) & 63;
+            if (last_exec[j].self != self || last_exec[j].pc != pc) LOG("[state] %s\n", traced[i].label);
+            last_exec[j].self = self, last_exec[j].pc = pc;
+        }
+        break;
+    }
+    guest_call_orig(c, pc);
+}
+
+__attribute__((constructor)) static void backend_trace_start(void) {
+    const char *path = getenv("RECOMP_NET_TRACE_STATES");
+    FILE *f = path ? fopen(path, "r") : NULL;
+    if (!f) return;
+    char line[160];
+    while (ntraced < MAX_TRACED && fgets(line, sizeof line, f)) {
+        unsigned long long off;
+        int enter, n = 0;
+        if (sscanf(line, "%llx %d %n", &off, &enter, &n) < 2 || !n) continue;
+        char *e = line + strlen(line);
+        while (e > line && (e[-1] == '\n' || e[-1] == '\r')) *--e = 0;
+        traced[ntraced].addr = MAIN_ADDR(off), traced[ntraced].enter = enter != 0;
+        snprintf(traced[ntraced].label, sizeof traced[ntraced].label, "%s", line + n);
+        hle_override(traced[ntraced].addr, trace_state, "net: state trace");
+        ntraced++;
+    }
+    fclose(f);
+}

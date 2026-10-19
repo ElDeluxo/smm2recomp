@@ -107,10 +107,71 @@ calls (read from the client vtable slot it uses):
 | PostRatingInfo (104): like / boo | 0x14e6b90 | `POST /api/courses/<code>/like` or `/boo` |
 | PostPlayResult (96) | 0x14e30e0 | `POST /api/courses/<code>/play`, and `/clear {time_ms}` on a clear (not for Endless courses: those are counted by the Endless reports) |
 | SearchComments (94 / 95), PostCommentText (91) | 0x14e8ec0, 0x14e96b0 | `GET` / `POST /api/courses/<code>/comments` (text) |
-| CanPostCourse (60), the course upload (66 + upload + 67), DeleteObject | 0x14e0d40, 0x14de3f0, 0x14e0c50 | allowed; the game's own course (header "SCDL", not yet encrypted) to `POST /api/courses` as the signed-in maker, its code back as the upload's data id; `DELETE /api/courses/<code>` |
+| CanPostCourse (60), the course upload (66 + upload + 67), DeleteObject | 0x14e0d40, 0x14de3f0, 0x14e0c50 | allowed; the game's own course (header "SCDL", not yet encrypted) to `POST /api/courses` as the signed-in maker (`?based_on=` for an edited copy, below), its code back as the upload's data id; `DELETE /api/courses/<code>` |
+| GetReqGetInfoHeadersInfo (134) + HTTP: thumbnails ("relation objects") | 0x14e0e70 (`edit.c`) | none on our server; the course being downloaded gets a stand-in (below), the lists keep the game's placeholder |
 
 Course World courses download and play exactly like the Endless ones (the same GetObject). Not served: thumbnails
 (the game shows its placeholder), Super Worlds, Ninji speedruns, notifications, follows, Network Play.
+
+**Download** (the course page's Download, into the Coursebot's Downloaded Courses) works: SMM2 waits for the
+course's thumbnail before it hands the download to the Coursebot (cDownload, main+0x17661f0, needs a valid entry in
+the thumbnail cache) and keeps a course only with a thumbnail it can check (JPEG size 1..0x1bf9c, HMAC-SHA256 under a
+key from four seed words, main+0x1698a80; otherwise "Corrupt data was found so the course has been deleted."). Our
+server has no thumbnails, so `edit.c` answers the thumbnail request with a stand-in for the course being downloaded:
+a 640 x 360 one-colour JPEG encoded by the mod (grey-blue [inf]), signed with the game's own functions as its blank
+thumbnail is. [obs] the course is saved (`course_data_120.bcd` + `course_thumb_120.btl`) and shows in Downloaded
+Courses after a restart, with the stand-in thumbnail.
+
+### Edit any course (`games/smm2/mods/edit.c`)
+
+Any downloaded course opens in SMM2's own Course Maker (DECISIONS.md "Edit any course"). The placement is SMM1's:
+SMM1's Course World offers **Download** (`Nwk_CourseListFrame_01/02` "Download"), and its Coursebot window of a
+downloaded or sample course has **Edit** above **Play** (`Lcl_CourseInfoWindow_00` `N_SampleDataWin_00`:
+`L_EditBtn_01`, `L_PlayBtn_01`; the own-course window adds Upload, Change Name, Delete) [obs SMM1 v208 layouts]; the
+pause menu of a Coursebot course has "Edit Course". SMM1's 100 Mario and course clear offer no edit [obs layouts].
+SMM2's window of a downloaded course has only Play, Play Together and Delete, so the mod gives it SMM2's own
+**Make** button:
+
+- **The button.** The window is one layout for both lists (`TypeMode`: My Courses' `N_MyDataBtn_00` or the
+  downloaded course's `N_DLData_00`), and main+0x1891880 switches off every button but the shown list's. In a
+  downloaded course's window the mod shows My Courses' Make (`L_Edit_00`) alone, at the top of the button column where
+  My Courses has it (a little smaller: it fits between the header and the stats [inf]), and switches it on
+  (main+0x761190) after the info window machine's Appear / Disp (main+0x188c980 / +0x188cb10) each frame; for a My
+  Courses slot everything goes back. Touch reaches it; the d-pad cursor does not yet [obs] (below).
+- **The press** (UI event 0x130, read in the Downloaded list's cCourseInfoWindow, main+0x16e2db0) sends the list
+  to its cToPlay (main+0x16e33c0), which the mod turns into My Courses' Make: the slot is prepared as for Play
+  (main+0x16e44e0) and the scene change goes to the Course Maker (reason 3, cRoboToEdit, with the slot's course
+  number), as main+0x16e5c10 does for My Courses. The Course Maker loads any Coursebot slot the same way.
+- **The copy** is the player's own course: upload id 0, management flags 1 and 4 cleared, no clear check yet, a
+  fresh creation id (so it can be uploaded as a new course). Name and description stay. The editor's Save is "Save
+  As" into My Courses (the download stays as it was).
+- **The original** (code and maker name from the downloaded-course record: save buffer +0xc010 + slot · 0x2a8, +0x08
+  data id, +0x16c maker) is kept in `smm2edit.txt` in the data folder under the copy's creation id. When the copy is
+  uploaded, `world.c` posts it as `POST /api/courses?based_on=<code>&based_on_maker=<name>`; the server credits a
+  course it holds to its own maker (otherwise the given name), and Course World shows "Based on <code> by <maker>"
+  under the description (`edit_listing_description`). The original's record on the server is not touched.
+- `RECOMP_MOD_EDIT=0` turns it off.
+
+**Where this stands (2026-10-19, WIP, paused):**
+- [obs] Download from Course World into the Coursebot; the downloaded course's window shows Make; a tap on it opens
+  the Course Maker with that course; an edit (a row of ? blocks) saved with Save As into My Courses
+  (`course_data_001.bcd`), the download untouched; the saved copy opens in My Courses and plays with the edit.
+  Screens in `private/smm2/build/` of the test data folder (`e1_*`, `e2_*`, `s19_*`; private).
+- Not yet: the d-pad cursor doesn't stop on Make (touch does): the window's cursor targets seem fixed before the
+  mod switches Make on [?]. The saved copy still showed the "uploaded" mark and a greyed Upload in My Courses in the
+  first test; the reset now also covers the Coursebot's "current course" copy (save manager +0x58), not yet checked
+  in game, and the current course was 182 (the title course) in that run, so where the Course Maker takes the
+  upload id from is still [?]. The upload with `based_on` hasn't been run in game (the server side is tested:
+  `edited_copies_credit_the_original`). Typed course names arrive garbled: runtime/hle/swkbd.c answers in UTF-8,
+  SMM2 reads UTF-16 (not this mod's file).
+- Proposed, not built: an Edit on Course World's course card (Download, then straight into the Course Maker when
+  the Coursebot has saved it); in Endless / 100 Mario, "save to Coursebot for later" from SMM2's result screen
+  (SMM1 offers no edit there).
+
+Tests: `RECOMP_EDIT_CTL=<file>` (`edit_ctl.c`) reads commands appended to the file while the game runs (`tap x y
+[frames]`, `btn A+B [frames]`, `shot <name>`, `wait <frames>`, `peek <addr> [len]`, `poke <addr> <byte>`, `find <addr>
+<name> [depth]`); test input must be on (`LARECOMP_INPUT=999999:A:1`). `LARECOMP_KBD_AUTO=<name>` answers the
+course-name keyboard of Save As. `RECOMP_EDIT_TRACE=1` logs the window's UI events.
 
 ### The bridge (100 Mario)
 
@@ -276,6 +337,68 @@ every difficulty draws from all of them.
   which the runtime doesn't have).
 - No SMM2 Mii-costume rewards (the server sends no notifications).
 
+## SMM1 extras: one setting per SMM1 feature
+
+Each setting turns on one SMM1 behaviour in the otherwise exact SMM2 game. All are **off by default**: with every one
+off, the game is SMM2's (an input replay against Ryujinx stays identical, below). They are switches in the overlay
+menu's Mods tab (always shown), kept in `smm2mods.ini`; an environment variable wins over the ini.
+
+| Setting (Mods tab) | ini key | Variable | When |
+|---|---|---|---|
+| Overlapping pipes (SMM1) | `smm1_overlap_pipes=1` | `RECOMP_SMM1_PIPES=1` | from the next course load / placement |
+| Mid-air shell jumps (SMM1) | `smm1_shell_jumps=1` | `RECOMP_SMM1_SHELL_JUMPS=1` | immediately |
+
+`RECOMP_SMM1_LOG=1` logs every decision the hooks see (`[smm1] ...`), on or off.
+
+How: host code after single instructions of the game (`games/smm2/mods/smm1_extras.py` lists them with the
+instruction word each expects; `smm1_extras.c` acts on them). With a setting off its hooks change nothing.
+
+**Overlapping pipes.** SMM1 let a pipe overlap another pipe: Nintendo's own SMM1 sample courses have six such
+overlaps (elbows, T joints, a pipe inside a pipe) [obs, the course files]; none of the 550 sample SMM2 courses has one.
+SMM2 forbids it in one place, its placement check (the course analyzer the Course Maker and the course loader both
+run): for each part with an overlap rule it collects the parts in the cells it covers and asks, per pair, whether the
+other part is "solid" (main+0xfe8490: pipes count); a solid part whose shape overlaps is a conflict [obs].
+- Course Maker: a pipe dragged onto another turns red and goes back where it was [obs].
+- Course load: a course with overlapping pipes counts as broken and a blank course plays instead [obs].
+- With the setting on, the hook after that call (main+0xfe827c) answers "not solid" for a pipe against a pipe, so
+  both accept it; pipes against anything else are checked as before. In play, overlapping pipes are two pipes:
+  each draws and collides as itself [obs: in the test course Mario walks into one, stands on the short one and
+  jumps up onto the tall one it overlaps].
+- A course saved with overlapping pipes needs the setting to load (SMM2, and the setting off, treat it as broken).
+
+**Mid-air shell jumps** (in progress: hooks in place, the test course is not done). SMM1's shell code is SMM2's (the
+kicks, the mid-air kick off a wall with its 3.52 hop, the speeds) except two rules [obs, Block.rpx v208 against
+SMM2]; on a shell the setting applies SMM1's:
+- the stomp window when the player is falling onto an ordinary-size target: SMM1 a flat 10 px; SMM2 3 px less plus
+  the player's fall this frame (main+0x1267ce8: the "falling?" compare before that step reads "no");
+- the kicker's no-hit time after a mid-air kick off a wall: SMM1 5 frames (the contact's own minimum), SMM2 16
+  (main+0x1202c88: the 16 becomes 0, so the 5 applies). The shell coming back off the wall can be landed on sooner.
+
+SMM1 applied the flat window to every small enemy; the setting limits it to shells.
+
+**Test courses.** Made at run time from the player's own data, never in the repository: our pipe courses are built
+from SMCraft's flat test course, the SMM1 one copies the pipes, ground and blocks of SMM1's sample course 95 from the
+player's SMM1 dump into an SMM2 SMB1-style course. Installed as the title course (`RECOMP_MOD_DIR`) they play straight
+away; the Course Maker is reached with `LARECOMP_HOST_INPUT` (L + R, A, then taps; `frame:drag:x0/y0/x1/y1:frames`
+moves a finger across the touch screen).
+
+**Where this stands (2026-10-19).**
+- Overlapping pipes: done. It covers the Course Maker drag, the course load and play, and the off-case replay.
+- Mid-air shell jumps: the hooks are in, and `RECOMP_SMM1_LOG=1` shows both windows at every shell stomp test. No
+  test course yet shows a mid-air shell jump that works with the setting on and fails with it off. The candidate is
+  a ledge course: Mario drops off a 2-tile start onto a shell sliding back from a wall, and the frame he walks off
+  is swept.
+  - [obs] Dropping at updates 441-447, the shell meets him while he falls at 1.5-2.5 px a frame. SMM2's window
+    there is 8.5-9.5 px against SMM1's 10.
+  - Left: the same sweep with the setting off, to find the frame where the outcome differs.
+  - Left: an off-case replay with shell contacts. The replay so far has pipes but no enemy contact.
+- More SMM1 behaviours from research/specs/smm1-extras* are not started: pipe spawn rates per enemy, spawn caps,
+  Clown Car weights, attack reactions. They are EnemyDB data changes.
+
+**Off-case check.** The same input session on a course with side-by-side pipes, played in the recomp (settings off)
+and in the Ryujinx trace build (`tools/replay_sync.py`'s comparison): 606 of 606 player updates identical, the whole
+12 KB player object and the input block too.
+
 ## The game's own network stack (backend local-nex): groundwork for Nextendo and a local NEX server
 
 The mod above *fakes* being online: nifm / acc / friends / mii answer locally, the enl session logs in without NEX,
@@ -342,7 +465,7 @@ calls, in this order and all at boot (about frame 280, long before Course World 
 | DataStore.GetUserNameNgType (65) | 0 (the name is fine) |
 | DataStore.SyncUserProfile (49) {name, Mii (the console's CharInfo), region, country ...} | the profile back |
 | DataStore.GetMiiClothes (63) | none |
-| DataStore.GetNewNotification (125) | four zero bytes [inf: the request function reads one 4-byte field] (an error here crashed the game's network worker later: "Pure virtual function called") |
+| DataStore.GetNewNotification (125) | a structure of three bools, all false [obs: its response extractor, main+0x5ef890, reads the structure header and three bools] (an error answer here crashed the game's network worker later: "Pure virtual function called") |
 
 [obs] The Mii in a UserInfo is the 0x58-byte `nn::mii::CharInfo`: the GetUsers converter (main+0x14d0a60) copies
 the buffer into the user entry as it is.
@@ -372,3 +495,26 @@ signature masked) and every request; then go to Course World: its top screen ope
   else is reachable); UDP to arbitrary peers for PIA (today: refused);
 - the rest is the game's own code: NAT check (`nncs1/2`), MatchmakeExtension, PIA peer-to-peer; their gates (a
   verified e-mail, one device at a time) show as login errors.
+
+### Proof 3 (two recomp instances in one Network Play lobby): where this stands (WIP, paused 2026-10-19)
+
+- **Server side built** (`tools/nex_test_server`): the NAT check server (UDP 10025 / 10125, replies from 10026 /
+  10027), server-sent requests (notifications, NAT traversal's InitiateProbe), MatchmakeExtension auto-matchmake
+  (3 / 15 / 40), create / join (6 / 7 / 38 / 39), MatchMaking.GetSessionURLs, NAT traversal (1 / 3 / 4 / 5 / 6 / 7),
+  SecureConnection UpdateURLs / ReplaceURL, MatchmakeExtension's no-answer methods, EndParticipation; sessions
+  matched by game mode (`matchmaking.py`); accounts of several data folders (`--accounts`).
+- **[obs] the application config is Utility.GetIntegerSettings(0)** (keys 0..37 -> the game's config array; the
+  request function main+0x14ce2f0). With an empty map Co-op shows "This service is not active right now"; with every
+  key 1 (now the default, `--config k=v` overrides) Co-op goes on: Network Play menu -> `cInetMultiClear` ->
+  `cGetMyUserInfo` -> `cAutoMatchReadyEx` -> NetAppTask `cStartAutoMatch` -> enl `cAutoMatchReady` ->
+  **MatchmakeExtension.AutoMatchmakeWithParam_Postpone** (game mode 11 for co-op, 6 attributes) arrives at the server.
+- **Where it stops:** the game refuses the server's answer (the new session it creates): enl `cSilentError`,
+  then MatchMaking method 2 and the Network Play error window. Next: check the MatchmakeSession encoding against the
+  game's extractor (structure versions, the MatchmakeParam and later fields), as was done for GetNewNotification.
+- **Still to do:** the NAT check and PIA's UDP (not reached yet); two instances on one Mac probably need a
+  per-instance virtual address for PIA's UDP ports (127.0.0.2 can't be bound without root); the co-op course download
+  (DataStore PrepareGetObject + an HTTPS course file); then both instances in one lobby, a course started, inputs.
+- **Tools** (private, `/Volumes/SSD/smm-work/recomp-net/`): `run2.sh` (server + two instances with their own data
+  folders / accounts), `cycle.sh` (one instance), `RECOMP_NET_TRACE_STATES=<states.txt>` (the enl / Network Play /
+  NetAppTask state names, made from the player's own game by `stategen.py`; never committed) logs each state entered.
+- Machine load matters: with ~28 other game instances on this Mac one instance reaches Network Play in 4-12 min.

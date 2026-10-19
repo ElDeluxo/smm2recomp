@@ -24,7 +24,7 @@ import struct
 import time
 from collections.abc import Callable
 
-from . import kerberos, mii, prudp, rmc
+from . import kerberos, matchmaking, mii, prudp, rmc
 
 CORE_NOT_IMPLEMENTED = 0x80010002
 SECURE_PID = 257049437023956657  # Quazal Rendez-Vous on Switch servers [public: kinnay's wiki, special accounts]
@@ -47,15 +47,19 @@ def structure(content: bytes, version: int = 0) -> bytes:
     return struct.pack("<BI", version, len(content)) + content
 
 
-def check_jwt(token: str, key: bytes | None) -> str:
+def check_jwt(token: str, keys: bytes | list[bytes] | None) -> str:
     parts = token.split(".")
     if len(parts) != 3:
         return "not a JWT"
-    if key is None:
+    keys = [keys] if isinstance(keys, bytes) else keys or []
+    if not keys:
         return "signature not checked (no net/account.txt here)"
-    mac = hmac.new(key, f"{parts[0]}.{parts[1]}".encode(), hashlib.sha256).digest()
     sig = base64.urlsafe_b64decode(parts[2] + "=" * (-len(parts[2]) % 4))
-    return "signature valid (the local account's key)" if hmac.compare_digest(mac, sig) else "signature INVALID"
+    for key in keys:
+        mac = hmac.new(key, f"{parts[0]}.{parts[1]}".encode(), hashlib.sha256).digest()
+        if hmac.compare_digest(mac, sig):
+            return "signature valid (a local account's key)"
+    return "signature INVALID"
 
 
 def token_of(req: rmc.Request) -> str | None:
@@ -73,17 +77,47 @@ def token_of(req: rmc.Request) -> str | None:
 class Server:
     """State shared by every connection: this server's key, the account key (to check tokens), the handlers."""
 
-    def __init__(self, log: Callable[[str], None], account_key: bytes | None, name: str = "Player") -> None:
+    def __init__(self, log: Callable[[str], None], account_key: bytes | list[bytes] | None, name: str = "Player") -> None:
         self.log, self.account_key = log, account_key
         self.users: dict[int, dict] = {}  # PID -> {"name", "mii", "country", "region"} (registered this run)
         self.default_name = name
+        self.config: dict[int, int] = {k: 1 for k in range(38)}  # (the application config, GetIntegerSettings(0))
         self.key = os.urandom(16)
         self.next_cid = 1
+        self.players: dict[int, Connection] = {}  # PID -> its secure connection (for requests the server sends)
+        self.urls: dict[int, list[str]] = {}       # PID -> its station URLs (Register, UpdateURLs, ReplaceURL)
+        self.mm = matchmaking.Matchmaker()
         self.handlers: dict[tuple[int, int], Callable[[Connection, rmc.Request], bytes]] = {
             (10, 6): self.validate_and_request_ticket_with_param,
             (10, 3): self.request_ticket,
             (11, 1): self.register,
             (11, 4): self.register,
+            (11, 6): self.update_urls,
+            (11, 7): self.replace_url,
+            (11, 8): self.empty,             # SendReport
+            (3, 1): self.probe_initiation,
+            (3, 3): self.probe_initiation,
+            (3, 4): self.empty,              # ReportNATTraversalResult
+            (3, 5): self.nat_properties,
+            (3, 6): self.relay_signature_key,
+            (3, 7): self.empty,              # ReportNATTraversalResultDetail
+            (0x6D, 1): self.empty,           # CloseParticipation
+            (0x6D, 2): self.empty,           # OpenParticipation
+            (0x6D, 3): self.auto_matchmake,  # AutoMatchmake_Postpone
+            (0x6D, 6): self.create_session,
+            (0x6D, 7): self.join_session,
+            (0x6D, 11): self.empty,          # UpdateApplicationBuffer
+            (0x6D, 12): self.empty,          # UpdateMatchmakeSessionAttribute
+            (0x6D, 14): self.empty,          # UpdateMatchmakeSession
+            (0x6D, 15): self.auto_matchmake, # AutoMatchmakeWithSearchCriteria_Postpone
+            (0x6D, 16): self.empty_list,     # GetPlayingSession
+            (0x6D, 34): self.empty,          # UpdateProgressScore
+            (0x6D, 38): self.create_session,
+            (0x6D, 39): self.join_session,
+            (0x6D, 40): self.auto_matchmake, # AutoMatchmakeWithParam_Postpone
+            (0x15, 41): self.session_urls,
+            (0x15, 42): self.empty,          # UpdateSessionHost
+            (0x32, 1): self.end_participation,
             (0x6E, 7): self.integer_settings,
             (0x6E, 8): self.string_settings,
             (0x73, 47): self.register_user,
@@ -138,6 +172,7 @@ class Server:
         plain = kerberos.decrypt(session_key, request)
         rpid, cid, check = struct.unpack_from("<QII", plain)
         conn.pid, conn.session_key = pid, session_key
+        self.players[pid] = conn
         self.log(f"{conn.name} secure CONNECT: PID {rpid} (ticket for {pid}, {int(time.time()) - issued} s old), "
                  f"connection id {cid}")
         return struct.pack("<II", 4, (check + 1) & 0xFFFFFFFF)
@@ -157,13 +192,153 @@ class Server:
                 self.log(f"{conn.name}   login data token: {rmc.mask_token(tok)} ({check_jwt(tok, self.account_key)})")
         cid, self.next_cid = self.next_cid, self.next_cid + 1
         public = urls[0] if urls else "prudp:/"
+        self.urls[conn.pid or 0] = urls
         return struct.pack("<II", RESULT_SUCCESS, cid) + rmc.Writer().string(public).bytes()
 
 
+    def update_urls(self, conn: Connection, req: rmc.Request) -> bytes:
+        r = rmc.Reader(req.params)
+        urls = [r.string() for _ in range(r.u32())]
+        self.urls[conn.pid or 0] = urls
+        self.log(f"{conn.name}   station URLs now: {urls}")
+        return b""
+
+    def replace_url(self, conn: Connection, req: rmc.Request) -> bytes:
+        r = rmc.Reader(req.params)
+        old, new = r.string(), r.string()
+        urls = self.urls.setdefault(conn.pid or 0, [])
+        self.urls[conn.pid or 0] = [new if u == old else u for u in urls] if old in urls else urls + [new]
+        self.log(f"{conn.name}   station URL {old} -> {new}")
+        return b""
+
+    # -- NAT traversal [public: kinnay's wiki, "NAT Traversal Protocol"]
+    def probe_initiation(self, conn: Connection, req: rmc.Request) -> bytes:
+        r = rmc.Reader(req.params)
+        targets = [r.string() for _ in range(r.u32())]
+        mine = r.string() if req.method == 3 else (self.urls.get(conn.pid or 0) or [""])[-1]
+        for t in targets:
+            pid = next((p for p, us in self.urls.items() if t in us), None)
+            if pid is None:
+                pid = next((int(kv[4:]) for kv in t.split(";") if kv.startswith("PID=") and kv[4:].isdigit()), None)
+            other = self.players.get(pid) if pid is not None else None
+            self.log(f"{conn.name}   probe initiation towards {t} (player {pid}): "
+                     f"{'InitiateProbe sent' if other else 'unknown station'}")
+            if other:
+                other.push(3, 2, rmc.Writer().string(mine).bytes(), f"NATTraversal.InitiateProbe({mine})")
+        return b""
+
+    def nat_properties(self, conn: Connection, req: rmc.Request) -> bytes:
+        mapping, filtering, rtt = struct.unpack_from("<III", req.params)
+        self.log(f"{conn.name}   NAT properties: mapping {mapping}, filtering {filtering}, rtt {rtt}")
+        return b""
+
+    def relay_signature_key(self, conn: Connection, req: rmc.Request) -> bytes:
+        # no relay: mode 0, now, no address
+        return struct.pack("<iQ", 0, datetime_now()) + rmc.Writer().string("").bytes() + struct.pack("<HiI", 0, 0, 0x22306D00)
+
+    # -- matchmaking [public: kinnay's wiki, "Matchmake Extension Protocol", "Match Making Types"]
+    def notify(self, to: int, source: int, kind: int, p1: int, p2: int, text: str = "", p3: int = 0) -> None:
+        other = self.players.get(to)
+        if other:
+            ev = (struct.pack("<QIQQ", source, kind, p1, p2) + rmc.Writer().string(text).bytes()
+                  + struct.pack("<Q", p3))
+            other.push(14, 1, structure(ev), f"Notification {kind} (from {source}, {p1}, {p2})")
+
+    def matched(self, conn: Connection, src: matchmaking.Session, how: str) -> matchmaking.Session:
+        pid = conn.pid or 0
+        s = self.mm.find_open(src, pid)
+        if s:
+            self.mm.join(s, pid)
+            self.log(f"{conn.name}   {how}: joins session {s.gid} (game mode {s.game_mode}, attributes {s.attribs}, "
+                     f"{len(s.participants)}/{s.max_part}: {s.participants})")
+            self.notify(s.owner, pid, 3001, s.gid, pid)
+        else:
+            s = self.mm.new(src, pid)
+            self.log(f"{conn.name}   {how}: new session {s.gid} (game mode {s.game_mode}, attributes {s.attribs}, "
+                     f"max {s.max_part})")
+        return s
+
+    def auto_matchmake(self, conn: Connection, req: rmc.Request) -> bytes:
+        r = rmc.Reader(req.params)
+        if req.method == 15:  # list<criteria> first (each a structure: skipped by its length)
+            for _ in range(r.u32()):
+                _, n = r.struct_header()
+                r.take(n)
+        if req.method in (3, 15):  # Data<Gathering>
+            name = r.string()
+            r.u32()
+            inner = rmc.Reader(r.take(r.u32()))
+            src = matchmaking.read_session(inner)
+            s = self.matched(conn, src, f"AutoMatchmake ({name})")
+            data = matchmaking.write_session(s)
+            return rmc.Writer().string("MatchmakeSession").u32(len(data) + 4).u32(len(data)).raw(data).bytes()
+        r.struct_header()  # AutoMatchmakeParam
+        src = matchmaking.read_session(r)
+        return matchmaking.write_session(self.matched(conn, src, "AutoMatchmakeWithParam"))
+
+    def create_session(self, conn: Connection, req: rmc.Request) -> bytes:
+        r = rmc.Reader(req.params)
+        if req.method == 6:
+            r.string()
+            r.u32()
+            src = matchmaking.read_session(rmc.Reader(r.take(r.u32())))
+        else:
+            r.struct_header()
+            src = matchmaking.read_session(r)
+        s = self.mm.new(src, conn.pid or 0)
+        self.log(f"{conn.name}   CreateMatchmakeSession: session {s.gid} (game mode {s.game_mode}, attributes {s.attribs})")
+        if req.method == 6:
+            return struct.pack("<I", s.gid) + kerberos.buffer(s.session_key)
+        return matchmaking.write_session(s)
+
+    def join_session(self, conn: Connection, req: rmc.Request) -> bytes:
+        r = rmc.Reader(req.params)
+        if req.method == 39:
+            r.struct_header()
+        gid = r.u32()
+        s = self.mm.sessions.get(gid)
+        if not s:
+            raise RmcError(0x8006000B)  # (RendezVous::SessionVoid [inf])
+        self.mm.join(s, conn.pid or 0)
+        self.notify(s.owner, conn.pid or 0, 3001, s.gid, conn.pid or 0)
+        self.log(f"{conn.name}   JoinMatchmakeSession {gid}: {s.participants}")
+        return kerberos.buffer(s.session_key) if req.method == 7 else matchmaking.write_session(s)
+
+    def session_urls(self, conn: Connection, req: rmc.Request) -> bytes:
+        gid = struct.unpack_from("<I", req.params)[0]
+        s = self.mm.sessions.get(gid)
+        urls = self.urls.get(s.host, []) if s else []
+        self.log(f"{conn.name}   GetSessionURLs({gid}): host {s.host if s else None}: {urls}")
+        w = rmc.Writer().u32(len(urls))
+        for u in urls:
+            w.string(u)
+        return w.bytes()
+
+    def end_participation(self, conn: Connection, req: rmc.Request) -> bytes:
+        gid = struct.unpack_from("<I", req.params)[0]
+        s = self.mm.sessions.get(gid)
+        if s and (conn.pid or 0) in s.participants:
+            s.participants.remove(conn.pid or 0)
+            s.participation = len(s.participants)
+            for p in s.participants:
+                self.notify(p, conn.pid or 0, 3008, gid, conn.pid or 0)
+            if not s.participants:
+                del self.mm.sessions[gid]
+        self.log(f"{conn.name}   EndParticipation({gid})")
+        return b"\1"
+
     # -- utility
     def integer_settings(self, conn: Connection, req: rmc.Request) -> bytes:
-        self.log(f"{conn.name}   GetIntegerSettings({struct.unpack_from('<I', req.params)[0]}): none (empty map)")
-        return struct.pack("<I", 0)
+        # [obs] index 0 is SMM2's application config: map<u16, s32>, keys 0..37 land in the game's config array
+        # (the request function main+0x14ce2f0); 0 = "This service is not active right now" (keys 0..3: the Endless
+        # Challenge's difficulties; which key gates Network Play: [?]). Every key 1 here (--config k=v overrides).
+        index = struct.unpack_from("<I", req.params)[0]
+        values = dict(self.config) if index == 0 else {}
+        self.log(f"{conn.name}   GetIntegerSettings({index}): {len(values)} values")
+        w = rmc.Writer().u32(len(values))
+        for k in sorted(values):
+            w.raw(struct.pack("<Hi", k, values[k]))
+        return w.bytes()
 
     def string_settings(self, conn: Connection, req: rmc.Request) -> bytes:
         self.log(f"{conn.name}   GetStringSettings({struct.unpack_from('<I', req.params)[0]}): none (empty map)")
@@ -181,9 +356,10 @@ class Server:
         return b"\0"  # the name is fine
 
     def new_notification(self, conn: Connection, req: rmc.Request) -> bytes:
-        # [inf] GetNewNotification: four one-byte flags (the request function, main+0x14edee0, reads a 4-byte field
-        # and keeps bytes 1-3); all 0: nothing new
-        return b"\0\0\0\0"
+        # [obs] GetNewNotification answers a structure of three bools (its extractor, main+0x5ef890, reads the
+        # version / length header, then three bools, the request function main+0x14edee0 keeps them); all false:
+        # nothing new. (An error here leads the game's network worker to "Pure virtual function called" later.)
+        return structure(b"\0\0\0")
 
     def event_course_status(self, conn: Connection, req: rmc.Request) -> bytes:
         return structure(struct.pack("<Q", 0) + b"\0" + struct.pack("<Q", 0))  # EventCourseStatusInfo: no event
@@ -264,8 +440,10 @@ class Server:
 class Connection:
     """One PRUDP connection: (client port, server port) on one WebSocket."""
 
-    def __init__(self, server: Server, ws_id: int, client_port: int, server_port: int) -> None:
-        self.server, self.ws_id = server, ws_id
+    def __init__(self, server: Server, ws_id: int, client_port: int, server_port: int,
+                 send: Callable[[bytes], None] | None = None) -> None:
+        self.server, self.ws_id, self.send = server, ws_id, send
+        self.call_id = 0x10000  # (requests the server sends)
         self.client_port, self.server_port = client_port, server_port
         self.name = f"conn {ws_id}:{client_port}>{server_port}"
         self.seq = 1
@@ -320,11 +498,31 @@ class Connection:
             return out
         return []
 
+    def push(self, protocol: int, method: int, params: bytes, what: str) -> None:
+        """Send the client a request (a notification, NAT traversal's InitiateProbe ...)"""
+        if not self.send:
+            return
+        self.call_id += 1
+        body = rmc.request(protocol, self.call_id, method, params)
+        chunks = [body[i:i + FRAGMENT] for i in range(0, len(body), FRAGMENT)]
+        self.server.log(f"{self.name} S>C request {what} (call {self.call_id}, {len(params)} bytes)")
+        for n, chunk in enumerate(chunks):
+            seq, self.seq = self.seq, self.seq + 1
+            frag = 0 if n == len(chunks) - 1 else n + 1
+            p = prudp.Packet(type=prudp.TYPE_DATA, flags=prudp.FLAG_RELIABLE | prudp.FLAG_NEED_ACK | prudp.FLAG_HAS_SIZE,
+                             src_type=10, dst_type=10, src_port=self.server_port, dst_port=self.client_port, seq=seq,
+                             fragment=frag, payload=chunk)
+            self.send(prudp.encode(p))
+
     def request(self, p: prudp.Packet, msg: bytes) -> list[bytes]:
         log = self.server.log
         req = rmc.parse_request(msg)
         if not req:
-            log(f"{self.name} not an RMC request: {msg.hex()}")
+            r = rmc.parse_response(msg)
+            if r:
+                log(f"{self.name} the client answers call {r[2]}: {'ok' if r[1] else f'error {r[3]:#010x}'}")
+            else:
+                log(f"{self.name} not an RMC message: {msg.hex()}")
             return []
         log(f"{self.name} RMC request {req.name} (call {req.call_id}, {len(req.params)} bytes)")
         handler = self.server.handlers.get((req.protocol, req.method))
@@ -354,8 +552,8 @@ class Connection:
 class Session:
     """Every PRUDP connection carried by one WebSocket."""
 
-    def __init__(self, server: Server, ws_id: int) -> None:
-        self.server, self.ws_id = server, ws_id
+    def __init__(self, server: Server, ws_id: int, send: Callable[[bytes], None] | None = None) -> None:
+        self.server, self.ws_id, self.send = server, ws_id, send
         self.conns: dict[tuple[int, int], Connection] = {}
 
     def feed(self, data: bytes) -> list[bytes]:
@@ -367,7 +565,7 @@ class Session:
             key = (p.src_port, p.dst_port)
             conn = self.conns.get(key)
             if conn is None or (p.type == prudp.TYPE_SYN and not p.flags & prudp.FLAG_ACK):
-                conn = self.conns[key] = Connection(self.server, self.ws_id, p.src_port, p.dst_port)
+                conn = self.conns[key] = Connection(self.server, self.ws_id, p.src_port, p.dst_port, self.send)
             self.server.log(f"{conn.name} C>S {p.describe()}")
             out += conn.handle(p)
         return out

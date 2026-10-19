@@ -35,6 +35,14 @@ class CheckFileTests(unittest.TestCase):
         tex.write_bytes(b"\x00" * 16)
         self.assertTrue(check_file(tex))
 
+    def test_branding_icon_allowed(self):
+        b = self.dir / "docs" / "branding"
+        b.mkdir(parents=True)
+        icon = b / "app-icon.png"
+        icon.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 2_100_000)
+        self.assertEqual(check_file(icon), [])
+        self.assertTrue(check_file(self.write("icon.icns", b"icns" + b"\x00" * 16)))
+
     def test_clean_source_file_passes(self):
         self.assertEqual(check_file(self.write("main.rs", b"fn main() {}\n")), [])
 
@@ -78,6 +86,11 @@ class CheckFileTests(unittest.TestCase):
         self.assertTrue(check_file(self.write("game.dylib", b"\x00")))
         self.assertTrue(check_file(self.write("blob.bin", b"\xcf\xfa\xed\xfe" + b"\x00" * 16)))
         self.assertTrue(check_file(self.write("shader.dat", b"\x03\x02\x23\x07" + b"\x00" * 16)))
+
+    def test_metal_shader_cache_blocked(self):
+        self.assertTrue(check_file(self.write("v_0123456789abcdef.metal", b"#include <metal_stdlib>\n")))
+        self.assertTrue(check_file(self.write("shaders.bin", b"MTLB" + b"\x00" * 16)))
+        self.assertTrue(check_file(self.write("0000.bin", b"\xcb\xfe\xba\xbe" + b"\x00" * 16)))
 
     def test_app_packages_blocked(self):
         for name in ("SMM2Recomp.apk", "app.aab", "classes.dex", "SMM2Recomp.ipa", "android-debug.keystore"):

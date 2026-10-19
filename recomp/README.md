@@ -94,18 +94,61 @@ Status (2026-10-19), from the Linux evidence:
 `/usr/lib/<arch>-linux-gnu` (amd64 packages unpacked with `dpkg-deb -x` for x86-64). Outputs go to
 `build/smm2-<target>/`; the executable looks for its libraries in the system and in `lib/` next to it.
 
-**The player package** (`make ... package`): the runtime, zig, the generator (Python) and the headers - nothing from
-the game. Unzip it, then:
+**The player package** (`tools/fetch_deps.sh linux-<arch>`, then `make ... package`: see [Player packages](#player-packages-and-the-setup-screen)):
+`dist/SMM2Recomp-linux-<arch>.tar.gz` with the runtime and its setup screen, `lib/libshaderc.so.1`, Python, the
+recompiler, zig and hactool - nothing from the game. Unpack it and start `./smm2recomp`: the setup screen takes the
+dump, the keys and the firmware and recompiles the game code into `extracted/smm2game.so`. It needs SDL3 3.2+ and the
+Vulkan loader from the distribution, and glibc 2.38+ (Debian 13, Ubuntu 25.04, Fedora 41, Arch).
 
-    ./setup.sh                                  # once: tools/venv (capstone, unicorn, lz4) for the generator
-    tools/venv/bin/python tools/games/smm2/setup.py --base-romfs <base romfs> --update-exefs <update exefs> \
-        --update-romfs <update romfs> --out extracted
-    tools/venv/bin/python tools/games/smm2/sysdata.py --firmware <registered NCA folder> --keys <prod.keys> --data .
-    ./smm2recomp                                # first launch: recompiles extracted/exefs into extracted/smm2game.so
+The data folder (saves, settings, shader caches, the set-up game files) is `~/.local/share/smm2recomp`, or the
+starting folder when it has `extracted/` (a source checkout). Audio needs a running PulseAudio / PipeWire / ALSA
+device (without one the game runs silent).
 
-The folder with `extracted/` is the data folder (saves, settings, shader caches); without one the runtime uses
-`~/.local/share/smm2recomp`. Audio needs a running PulseAudio / PipeWire / ALSA device (without one the game runs
-silent).
+## Player packages and the setup screen
+
+Releases follow melee-pc's model (`../DECISIONS.md`, "Releases: a launcher plus recompiler per platform"): a package
+is the runtime with its **setup screen** (`runtime/ui/launcher.mm`) plus what recompiling the game needs, never the
+game. Shown in place of the game until the player's files are set up (and after Quit > Quit to Start Screen, the Mods
+tab's Game files, or `--setup`), the setup screen takes:
+
+- the game: NSP / XCI files (the base game and the 3.0.3 update) or folders with the extracted ExeFS / RomFS;
+- `prod.keys` and the firmware's NCA folder (suggested from Ryujinx / yuzu / their forks when they have them);
+- optionally the SMM1 (Wii U) dump, passed to the SMM1 mods as `RECOMP_SMM1_DUMP`;
+
+and then runs, with progress and an error card per step:
+
+1. `games/smm2/setup.py --source ...`: finds the ExeFS / RomFS in what was chosen, extracts NSP / XCI with hactool
+   and the player's keys (the program NCA copied out of the container, the base RomFS patched by the update's), checks
+   the ExeFS against `games/smm2/versions.py` (the v3.0.3 build ids and the SHA-256 of `main`, `sdk`, `rtld`,
+   `main.npdm`: hashes of the player's own files, never the files), and lays out `extracted/`;
+2. `games/smm2/sysdata.py`: the shared fonts and system data from the firmware;
+3. `runtime/gamebuild.c`: the generator (the package's own Python) and the compiler (the package's zig) build the game
+   code library;
+4. boots the game in the same window.
+
+The scripts print `@step` / `@progress` / `@found` / `@error` lines the screen follows; keys are only handed to
+hactool, and hactool's output is never shown (masked if quoted in an error). What was chosen is kept as paths in
+`launcher.ini`. The screen also asks GitHub for the latest release (`RECOMP_VERSION`, the tag the build was made from)
+and only says so, with a link; the overlay menu's Mods tab has the switch ("Check for updates") and Game files.
+
+| Package | Made by | Contents | Size (v0.1.0-test) |
+|---|---|---|---|
+| `SMM2Recomp-macos-arm64.zip` | `make GAME=smm2 app-macos` (`tools/bundle_macos.sh`) | `SMM2Recomp.app`: the runtime (macOS 15+, SDL3 built for it by `tools/build_deps_macos.sh`), Resources: python, tools, gamelib-src, zig, hactool; signed ad hoc or with `RECOMP_MACOS_IDENTITY` | 96 MB (320 MB) |
+| `SMM2Recomp-windows-x86_64.zip` | `make TARGET=windows-x86_64 GAME=smm2 DEPS=... package` (`tools/package.sh`) | `smm2recomp.exe`, SDL3 / libiconv / shaderc DLLs, the same tools | 113 MB (425 MB) |
+| `SMM2Recomp-linux-x86_64.tar.gz`, `-linux-aarch64.tar.gz` | `make TARGET=linux-<arch> GAME=smm2 DEPS=... package` | `smm2recomp`, `lib/libshaderc.so.1`, the same tools | 113 MB (373 MB), 104 MB (341 MB) |
+
+The pieces, each pinned by version and hash and built or fetched for the target, so every package can be made from
+one machine: `tools/fetch_python.sh` (python-build-standalone 3.12 + the wheels in `tools/requirements-gen.txt`),
+`tools/fetch_zig.sh`, `tools/build_hactool.sh` (hactool 1.4.0 from source with zig; ISC), `tools/fetch_deps.sh` (the
+cross-build headers and link libraries: MSYS2 packages for Windows, the distribution's for Linux). Every package is
+checked by `../scripts/check_package.py` before it is archived, and again by the release workflow before upload:
+no file of a set-up data folder, no game file by name, magic or the known ExeFS hashes, no key-shaped lines, no
+recompiled code, no runtime with game functions linked in.
+
+`.github/workflows/release.yml` builds the four packages only when a `v*` tag is pushed (Windows and Linux cross-built
+in a Debian 13 container, macOS on a macOS runner) and attaches them to the tag's release, making a draft release if
+there is none. Android and iOS have no package: they are built from source (below; iOS needs the Mac to build, sign
+and install).
 
 ## Building (iOS / iPadOS)
 
@@ -247,6 +290,10 @@ Added for SMM2:
 | `SMM2_SEED=<n>` | fixed seed for the game's global random generator: every boot shows the same title course and frames repeat exactly (`4`: the course Ryujinx shows) |
 | `LARECOMP_CG_SHOT=<frame>` or `<first>:<last>:<step>` | capture the window through the window server (colour-managed, like the Ryujinx reference grabs); with a range, `LARECOMP_SHOT_PATH` is a printf pattern (`shot_%05d.png`). For comparisons: `LARECOMP_WINDOW=1280x720 LARECOMP_SCALE=1` |
 | `LARECOMP_ASYNC_SHADERS=1` | compile shaders in the background and skip their draws meanwhile (LAS's behaviour, Metal and Vulkan; SMM2 then misses one-shot renders) |
+| `LARECOMP_NO_PIPELINE_CACHE=1` | (Metal) don't use the pipeline cache `cache/pipelines/` in the data folder (compiled pipelines kept across runs and app updates; delete `cache/` to reset) |
+| `LARECOMP_NO_PRECOMPILED=1` | (Metal) don't load precompiled shaders (`cache/metallib/`, made by `tools/precompile_shaders.sh <data>/cache/metallib macos <data>/cache/shaders`; an iOS app's bundled `metallib/`) |
+| `LARECOMP_NO_SHADER_WARM=1` | (Metal) no start-up warm-up of the shaders listed in `cache/shaders/` (compiled on a background thread so that their first use doesn't wait) |
+| `LARECOMP_SHADER_SALT=<text>` | (measurements) tag every shader source so Metal's own shader cache misses: first-use compile costs as on a new install |
 | `LARECOMP_WINDOW_SHOT=<first>:<last>:<step>` | (Vulkan) the window image every step-th frame in that range, `LARECOMP_SHOT_PATH` a printf pattern (`build/win_%05d.png`); raw sRGB, not colour-managed like `LARECOMP_CG_SHOT` |
 | `RECOMP_USER_NAME=<name>` | the account nickname (default "Player") |
 | `LARECOMP_DEBUG_FRAME=<n>` | log every draw of frame n and save each render pass to `build/pass_NNN.png`; `LARECOMP_DEBUG_EACH_DRAW=1` saves the target after every draw (Metal); `LARECOMP_DEBUG_NO_PASSES=1` logs without the images (on Vulkan skipped draws log their reason) |

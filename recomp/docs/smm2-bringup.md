@@ -203,6 +203,23 @@ generated C needs no changes: arm64 shares `generated/smm2` with macOS, and x86-
   - Compare raw with raw, or map the raw capture through the colour transform measured from a Metal raw / grab pair
     of the same frame.
 
+**Where this stands (2026-10-19, paused):**
+- Vulkan Mario: both causes fixed (vertex data past the allocation limit; the lavapipe-only draw split). Open: the
+  NaN texels at his eyes (fragment program 0x729accc000, alpha NaN) that bloom into a white blur, on lavapipe.
+  Paused until the owner's Windows test on a real GPU shows whether it happens there. Next step if it does: find
+  the instruction that makes the alpha NaN (an output-side tracer: the NaN checks on registers were folded away by
+  lavapipe's compiler, so trace the outputs instead), and compare with the same values on Metal.
+- Windows package: builds from main with zig. The first-launch build emulated from the package (its own generator,
+  headers and patches, mods' patch points included; 908 files, linked against its import library) produces the game
+  code DLL. Not run on Windows; no zip on the Desktop (the owner paused Windows testing).
+- macOS title frame vs Ryujinx (seed 4, frame 2386; 2.35-2.5 % of pixels > 24 apart): the differences sit on edges
+  everywhere (outlines of the logo, tiles, text), not in flat areas. [obs] Sampling our window grab 0.25-0.5 px
+  higher halves them (2.69 % -> 1.27 % on a bilinear resample); 1 px shifts and blurring don't. So most of what's
+  left is a sub-pixel vertical offset between the two grabs. Not yet known whether it's in the rendering (a half-pixel
+  in the viewport / present) or in the capture (a Retina window grabbed at 1x, its 32 px title bar cropped). Next
+  step: the same test on the raw read-back mapped through the colour transform (`cmtransfer.py`); if the offset
+  stays, check the present pass's texel centres against Ryujinx's. Text and the blink timing are untouched.
+
 ## Open issues
 
 - ~~A title course swapped into another slot crashes the recomp; Ryujinx runs the all-slots mod.~~ Not a recomp bug
@@ -345,3 +362,52 @@ PCM before the host volume), the same session (the stock title course to the goa
   from 62 Hz to 16 kHz within 0.6 dB, 70 loud onsets against 69, loudness envelopes correlating 0.76. Sound events
   land at slightly different wall-clock times (audio runs on host time; loading and pacing differ), so the waveforms
   don't line up sample for sample.
+
+### Where the frame work stands (paused 2026-10-19)
+
+- Sampler border colours are now honoured (`renderer.m` `sampler_for`): 3D World castle lava 2.28 % -> 0.22 % px
+  >24. Depth clamp (`nvnCommandBufferSetDepthClamp`) is recorded and applied (SMM2 leaves it off; Vulkan ignores it).
+  The 90-course recheck with both stopped after 23 courses (all still identical): resume from M1_sky_night.
+- Left: 3D World forest (0.20 %: glint quads on the poison water, an effect draw [inf]), NSMBU underwater (+-1-2
+  levels, rounding [inf]).
+- Menus in lockstep: a presented-frame clock from the first player update on both sides (`RECOMP_PAD_CLOCK=frame
+  RECOMP_PAD_ORIGIN=player`, `RECOMP_FRAME_SHOT=k1,k2,...`; the Ryujinx trace build's `RYU_TRACE_FRAMECLOCK=1
+  RYU_TRACE_FRAMESHOT`). Built, not yet run against Ryujinx.
+
+## First-use shader compiles: the Metal shader caches (2026-10-19)
+
+iPad build 24 stalled 3.5 s on the first use of a compute program, and every first draw with a new program waited
+for its compile. Measured on macOS (M4 Pro, a heavily loaded machine: absolute times are noisy): the stock title
+course to presented frame 2750 (both compute programs included), with `LARECOMP_SHADER_SALT` so that Metal's own
+cache misses:
+
+| Run | Compile time | Worst 2 s window of compiles | Compute programs built in |
+|---|---|---|---|
+| cold (nothing cached) | 55-64 s | 22-28 s | 290-455 ms each |
+| precompiled shaders, no pipeline cache yet | 21-34 s (back-end only) | 3.6-15.7 s | 540-850 ms |
+| precompiled shaders + pipeline cache (steady state) | 3.1 s | 0.6 s | 3-5 ms, from the cache |
+
+- [obs] The front-end (MSL to AIR, `newLibraryWithSource`) was most of the cost (~70 of ~85 s in one cold run),
+  pipeline creation (AIR to GPU code) the rest.
+- [obs] Metal's own on-disk cache can't be relied on: it's shared by every process and size-limited, and a "second
+  launch" an hour of other compiles later was fully cold again (138 s). An app update may clear it too [?].
+- Three layers now, all in the data folder's `cache/` (Documents on iOS, which an app update keeps):
+  `cache/shaders/` (the translated MSL, as before; warmed in the background at start-up unless precompiled);
+  `cache/metallib/` and `metallib/` (precompiled with `tools/precompile_shaders.sh`, Metal's offline compiler, so
+  Mac only: `make_ios_app.sh` precompiles `RECOMP_IOS_DATA`'s shaders, plus `RECOMP_IOS_SHADERS` folders, into the
+  app); `cache/pipelines/NNNN.bin` (Metal binary archives of the pipelines built, written from a background queue).
+- [obs] Saving an archive again after adding to it (or after loading it) failed now and then on macOS 27 ("Failed to
+  generate machO ... expecting 'fragment' stage in pipeline no. N") and emptied it, while the same pipelines saved
+  fine from a fresh archive: each save is a new write-once file.
+- [obs] An archive serves only pipelines built from the same AIR: archives made with precompiled shaders don't serve
+  source-compiled ones (0 hits), and the other way round.
+- The VS and FS libraries compile side by side; entry points are named `v_/f_/c_<hash>` instead of `main0`.
+
+- Files don't pile up: each archive file has its pipelines' descriptions next to it (`NNNN.txt`: entry-point names
+  and fixed-function state), and once there are more than 8 files a start-up rebuilds all described pipelines into
+  one new file on the background queue; the files it replaces are deleted at the next start-up (before loading).
+  Archives can't be read back, hence the descriptions. (26 files had taken 1.6 s to load.) Files from before the
+  descriptions are deleted.
+
+iPad numbers are still to be measured; the `[shader] slow program`, `[compute] program ... built in` and
+`[shader] pipeline cache ...` log lines show what's left there.

@@ -1543,7 +1543,7 @@ before.
 research/specs/recomp-mods.md §3. At the first start with the switch on, the costume models are built
 from the player's own dumps: SMM2's small SMB1 Mario model with each SMM1 costume's 24x24 frames
 (`Model/M1_Player_Chara_<res>.szs` of the SMM1 dump), written into a rebuilt `Pack/M1_Model.pack`
-(a zstd frame of stored blocks) by the mods' shared RomFS overlay (generator "costumes",
+(zstd level 3, about 8 MB for 100 costumes against the game's 5 MB; stored blocks made it 38 MB) by the mods' shared RomFS overlay (generator "costumes",
 `<data>/mods-generated/romfs/`), which lays it over the game's.
 Nothing of either game is in the repository.
 
@@ -1560,7 +1560,11 @@ Nothing of either game is in the repository.
 - A hit takes the costume off through the Super → small power-down (hook point 0x15a50a4 reads the
   form as 1), as a costume absorbs one hit in SMM1.
 - Sound: the costume's power-up, goal and death sounds from SMM1's `Sound/CharaMario` banks on the
-  host mixer; SMM2's goal and death fanfares give way to them.
+  host mixer; SMM2's goal and death fanfares give way to them. Jump (`jump` / `jump2`, half and half),
+  landing (`ground`) and the taunt (`appeal`: Up held 8 frames standing still) come from the player's
+  motion each frame (on-ground bit, vertical speed); SMM2's own player sounds still play under them,
+  since they are action triggers in the sound links [inf: muting them needs the links' play call]. The
+  taunt has no pose: SMM2's small-Mario model has no slot for SMM1's `appeal` frame.
 - Reward: after a won 100 Mario run the ending shows SMM1's costume window (`Cmn_CMListWindow_01`)
   with one random costume not owned yet, from SMM1's pools by difficulty (smm1-100mario-code.md §7);
   owned costumes are kept in `costumes-owned.txt` (category 0 always owned).
@@ -1637,6 +1641,35 @@ costumes) and checks for updates.
 - Release builds come from GitHub Actions, run only for releases (CI minutes budget).
 - The repository still has no top-level licence for the project's own code; the owner hasn't chosen
   one (MIT like LAS Recomp, or GPL-3.0 like melee-pc). Until then none is added.
+
+**How it's built (2026-10-19, the releases agent):**
+- **The launcher is the runtime's own start screen** (`recomp/runtime/ui/launcher.mm`, on the overlay menu's SDL3 +
+  ImGui stack, Metal on macOS and Vulkan elsewhere), shown in place of the game until it is set up; then the game boots
+  in the same window. No separate launcher program: one download, one process, and the same window for the setup,
+  the recompile's progress and the game.
+- **The dump logic stays in Python** (`games/smm2/setup.py --source`, `sysdata.py`), driven by the screen through
+  `@step / @progress / @error` lines: one implementation for `make` and the launcher, testable without a window. The
+  identifiers of known-good v3.0.3 dumps live in `games/smm2/versions.py` (build ids, the ExeFS files' SHA-256, title
+  versions, program NCA ids): hashes of the player's own files only.
+- **A Python of its own in every package** (python-build-standalone 3.12, pinned by hash, plus capstone / unicorn /
+  lz4 wheels pinned by hash) instead of LAS's PyInstaller-frozen generator: wheels and Python builds exist for every
+  target, so one machine (a Mac, or the release workflow's Linux container) makes the Windows and Linux packages, and
+  players install nothing. About 25 MB per package.
+- **hactool is bundled** (ISC; its mbedtls Apache-2.0), built from the 1.4.0 release's source with zig for each target.
+  hactoolnet (LibHac, BSD) would also be allowed, but needs .NET; hactool is one small binary and already what
+  `sysdata.py` used. NSP / XCI extraction copies the program NCA out of the container, extracts the base RomFS raw and
+  lets hactool apply the update's patch (`--baseromfs`): about 6 GB of free disk at the peak.
+- **macOS 15+** for the app: zig 0.17 itself needs it. Signed ad hoc (no Developer ID on this machine); the release
+  workflow signs with a Developer ID when the secrets `MACOS_CERT_P12` / `MACOS_CERT_PASSWORD` / `MACOS_IDENTITY` exist.
+- **Linux packages use the distribution's SDL3 (3.2+) and Vulkan loader** and bundle only shaderc (Debian's
+  self-contained `libshaderc.so.1`, glibc 2.38+). Debian's SDL3 links PipeWire, sndio, libdecor and more directly, so
+  it can't ship; an AppImage with an SDL3 built for it is left for later.
+- **The update check only notifies:** the latest release's tag from GitHub's API (a background `curl`), compared with
+  the tag the build was made from (`RECOMP_VERSION`), shown with a link to the releases page; switchable in the overlay
+  menu's Mods tab (the app settings page) and on the setup screen.
+- **No game content in a package, checked twice:** `scripts/check_package.py` fails `tools/package.sh` /
+  `tools/bundle_macos.sh` and the release workflow on any file of a set-up data folder, game file names, magics or
+  known ExeFS hashes, key-shaped lines, recompiled code, or a runtime with game functions linked in.
 
 ## 2026-10-19 — The game's own network stack: Mbed TLS, the runtime's trust policy, deny-by-default names
 

@@ -10,8 +10,10 @@
 //
 // Written once, by the mods' shared RomFS overlay (mods/romfs_overlay.h: generator "costumes"), as Pack/M1_Model.pack
 // (the original pack's files plus Model/M1_Player_Chara_<res>{,_2,_3,_4}.Nin_NX_NVN.zs, one data blob under four
-// names), which replaces the game's. The .zs files are zstd frames of raw blocks (no compressor needed).
-#define _XOPEN_SOURCE 700  // (glibc: nftw and FTW_* are X/Open)
+// names), which replaces the game's. The .zs files are compressed with zstd (level 3), as the game's own are.
+#ifndef SMM1UI_STANDALONE
+#include "../../../../runtime/platform.h"  // (mkdir with a mode and plat_remove_tree on every host)
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,7 +25,7 @@
 #include "tegra.h"
 
 #define ZSTD_STATIC_LINKING_ONLY
-#include "../../../../third_party/zstd/zstddeclib.c"
+#include "../../../../third_party/zstd/zstd.c"
 
 #define LOGC "[costume] "
 
@@ -119,24 +121,14 @@ static uint8_t *zstd_read(const uint8_t *d, size_t n, size_t *out_n) {
     *out_n = r;
     return o;
 }
-// a zstd frame of raw (stored) blocks
+// compressed (level 3: about a tenth of the raw size; the pack stays near the game's own size)
 static uint8_t *zstd_store(const uint8_t *d, size_t n, size_t *out_n) {
-    Buf b = {0};
-    uint8_t h[9] = {0x28, 0xB5, 0x2F, 0xFD, 0xA0};  // magic; descriptor: 4-byte content size, single segment
-    w32(h + 5, (uint32_t)n);
-    buf_put(&b, h, 9);
-    size_t off = 0;
-    do {
-        size_t k = n - off > 0x1FFFF ? 0x1FFFF : n - off;
-        bool last = off + k >= n;
-        uint32_t bh = (uint32_t)(last ? 1 : 0) | 0u << 1 | (uint32_t)k << 3;
-        uint8_t hb[3] = {(uint8_t)bh, (uint8_t)(bh >> 8), (uint8_t)(bh >> 16)};
-        buf_put(&b, hb, 3);
-        buf_put(&b, d + off, k);
-        off += k;
-    } while (off < n);
-    *out_n = b.n;
-    return b.d;
+    size_t cap = ZSTD_compressBound(n);
+    uint8_t *o = malloc(cap);
+    size_t r = o ? ZSTD_compress(o, cap, d, n, 3) : 0;
+    if (!o || ZSTD_isError(r)) { free(o); return NULL; }
+    *out_n = r;
+    return o;
 }
 
 // ---------------------------------------------------------------- the patch
@@ -269,14 +261,9 @@ static bool mkdirs(const char *path) {
     return true;
 }
 #ifndef SMM1UI_STANDALONE
-#include <ftw.h>
-static int rm_entry(const char *p, const struct stat *sb, int flag, struct FTW *ftw) {
-    (void)sb, (void)flag, (void)ftw;
-    return remove(p);
-}
 static void remove_old(void) {  // (the folder of the first version, before the shared overlay)
     struct stat st;
-    if (!stat("mods-generated/costume-romfs", &st)) nftw("mods-generated/costume-romfs", rm_entry, 8, FTW_DEPTH | FTW_PHYS);
+    if (!stat("mods-generated/costume-romfs", &st)) plat_remove_tree("mods-generated/costume-romfs");
 }
 #endif
 static __attribute__((unused)) bool write_file(const char *path, const uint8_t *d, size_t n) {
@@ -387,6 +374,7 @@ bool costume_generate(void) {
         size_t zn;
         uint8_t *zs = zstd_store(arc, an, &zn);
         free(arc);
+        if (!zs) { fprintf(stderr, LOGC "%s: not compressed\n", g_costumes[c]); continue; }
         blob[nblob] = zs, blob_n[nblob] = zn;
         static const char *suffix[4] = {"", "_2", "_3", "_4"};
         for (int s = 0; s < 4; s++) {
@@ -417,7 +405,7 @@ static bool costume_overlay(void) {
     remove_old();
     return costume_generate();
 }
-ROV_GENERATOR("costumes", 1, costume_overlay)
+ROV_GENERATOR("costumes", 2, costume_overlay)  // (2: the models compressed)
 #endif
 
 // ---------------------------------------------------------------- the costume table (SMM1's Mush/CharaMarioTable.byaml)
