@@ -285,6 +285,23 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
   slightly off (timing). Probably tied to the SLink sound trigger table not being decoded (sounds are
   placed by name, not frame-exact). Not started.
 
+### Future (owner's backlog, not scheduled)
+- 🔄 **120 fps output by frame generation** (owner, 2026-10-19): built 2026-10-20 (Video tab, `frame_gen`,
+  off by default; our own interpolation for Metal and Vulkan, not MetalFX's; game logic stays 60 Hz). Owner on
+  the iPad: "doesn't look amazing at this stage". Left: picture quality, the iPad's shown-frames count, a real
+  120 Hz display. Spec: `docs/superpowers/specs/2026-10-20-frame-generation-design.md`
+- ⬜ **Local multiplayer input, players 1-4** (owner, 2026-10-20): today the runtime opens one SDL gamepad
+  and reports only player 1 (`runtime/hle/input.c`: `fill_state` returns for any id but 0, `GetNpadStyleSet`
+  reports 2-4 disconnected), so a second controller is never seen. Needed: every connected controller mapped
+  to a player slot, ids 1-3 filled, style set / update event per player, the controller-assignment screen the
+  game shows before Play Together. Gives SMM2's own Play Together (up to 4 on one device) as Nintendo built it.
+  Not started.
+- ⬜ **Endless / 100 Mario in local co-op** (owner, 2026-10-20; needs the item above): challenge runs played
+  together on one device. SMM2's Endless and SMM1's 100 Mario are single-player, so this is a mod, off by
+  default: start each challenge course the way Play Together does, and decide the rules (shared or separate
+  lives, a clear when any player reaches the goal, whose form the ending shows). `mods/endless.c` keeps one
+  run per difficulty today. Not designed yet.
+
 | Platform | Builds | Boots to title | Plays courses | Frames match Ryujinx | Input replays in sync |
 |---|---|---|---|---|---|
 | macOS (Apple Silicon, Metal) | ✅ | ✅ title rendered, 60 fps | ✅ title course to the goal, Course Maker test play | 🔄 in course: 71 / 90 courses bit-identical (all SMB1/SMB3/SMW), the rest within 20 px except 3D World lava 2.28 % px >24 (title: 2.5-4.8 %) | ✅ 221,189 / 221,189 updates identical (31 sessions) |
