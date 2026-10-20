@@ -352,7 +352,32 @@ static void pin_live_ok(void) {  // a handshake with Nextendo's game server (not
     mbedtls_ssl_free(&ssl), mbedtls_ssl_config_free(&conf);
 }
 
+// The game asks sfdnsres for the NAT check's names with nsd's '%' still in them ("nncs2-%.n.n.srv.nintendo.net"):
+// '%' is the nsd environment ("lp1") there too, so nncs2 reaches the NAT check and nncs1 the game server.
+static void nextendo_percent_names(void) {
+    nextendo_env();
+    CHECK(resolves("nncs2-%.n.n.srv.nintendo.net", NAT), "nncs2-%% not to the NAT check");
+    CHECK(resolves("nncs1-%.n.n.srv.nintendo.net", SERVER), "nncs1-%% not to the game server");
+    CHECK(resolves("g22306d00-%.s.n.srv.nintendo.net", SERVER), "g22306d00-%% not to the game server");
+    CHECK(resolves("NNCS2-%.N.N.SRV.NINTENDO.NET.", NAT), "upper case / absolute nncs2-%%");
+}
+
+// The net log's plaintext dump (ssl.c) masks the player id in NEX station URLs: "PID=<digits>" -> "PID=<hidden>"
+static void log_redacts_pid(void) {
+    char out[256];
+    net_log_redact("prudp:/address=1.2.3.4;port=1;PID=1234567890;RVCID=1140;sid=2", out, sizeof out);
+    CHECK(!strcmp(out, "prudp:/address=1.2.3.4;port=1;PID=<hidden>;RVCID=1140;sid=2"), "got %s", out);
+    net_log_redact("a pid=42 and PID=7 and PID= and PIDX=5 ...PID=99", out, sizeof out);
+    CHECK(!strcmp(out, "a pid=<hidden> and PID=<hidden> and PID= and PIDX=5 ...PID=<hidden>"), "got %s", out);
+    net_log_redact("no ids here", out, sizeof out);
+    CHECK(!strcmp(out, "no ids here"), "got %s", out);
+    char small[16];
+    net_log_redact("PID=123456789012345", small, sizeof small);
+    CHECK(strlen(small) < sizeof small && !strpbrk(small, "0123456789"), "small buffer leaked digits: %s", small);
+}
+
 static const struct { const char *name; void (*fn)(void); } cases[] = {
+    {"nextendo_percent_names", nextendo_percent_names}, {"log_redacts_pid", log_redacts_pid},
     {"ours_default_untouched", ours_default_untouched}, {"nextendo_routes", nextendo_routes},
     {"nextendo_hosts_local_only", nextendo_hosts_local_only}, {"nextendo_dest", nextendo_dest},
     {"nextendo_overrides", nextendo_overrides}, {"nextendo_not_signed_in_falls_back", nextendo_not_signed_in_falls_back},

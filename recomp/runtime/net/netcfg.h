@@ -47,6 +47,9 @@ NetBackend net_backend_setting(void);  // as set
 const char *net_backend_key(NetBackend b);  // "ours", "local-nex", "nextendo"
 bool net_real_sockets(void);           // the game's sockets reach the host's network stack (local-nex, nextendo)
 bool net_log_on(void);
+// A log line with the player id masked: every "PID=<digits>" (any case; NEX station URLs carry it) becomes
+// "PID=<hidden>". Always NUL-terminated within cap; a cut digit run is dropped, never printed.
+void net_log_redact(const char *in, char *out, size_t cap);
 #define NLOG(...) do { if (net_log_on()) LOG(__VA_ARGS__); } while (0)
 
 // For a settings page: the backends, which can be chosen now, and choosing one (saved; takes effect at the next

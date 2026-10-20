@@ -170,6 +170,24 @@ NetBackend net_backend_setting(void) { init(); return backend_set; }
 const char *net_backend_key(NetBackend b) { return b < NET_BACKEND_COUNT ? backend_keys[b] : "?"; }
 bool net_real_sockets(void) { NetBackend b = net_backend(); return b == NET_BACKEND_LOCAL_NEX || b == NET_BACKEND_NEXTENDO; }
 bool net_log_on(void) { init(); return log_on; }
+
+// (the PID is the player's account id: the TLS plaintext dump would show it in every NEX station URL)
+void net_log_redact(const char *in, char *out, size_t cap) {
+    static const char mask[] = "<hidden>";
+    size_t o = 0;
+    if (!cap) return;
+    while (*in && o + 1 < cap) {
+        if (tolower((unsigned char)in[0]) == 'p' && tolower((unsigned char)in[1]) == 'i' &&
+            tolower((unsigned char)in[2]) == 'd' && in[3] == '=' && isdigit((unsigned char)in[4])) {
+            for (int i = 0; i < 4 && o + 1 < cap; i++) out[o++] = *in++;
+            while (isdigit((unsigned char)*in)) in++;
+            for (const char *m = mask; *m && o + 1 < cap; m++) out[o++] = *m;
+            continue;
+        }
+        out[o++] = *in++;
+    }
+    out[o] = 0;
+}
 uint32_t net_test_server_ip(void) { init(); return test_ip; }
 uint16_t net_dest_port(uint32_t ip, uint16_t port) {
     init();
@@ -238,7 +256,11 @@ bool net_resolve(const char *name, uint32_t *ip) {
     init();
     char n[256];
     size_t len = 0;
-    for (; name[len] && len < sizeof n - 1; len++) n[len] = (char)tolower((unsigned char)name[len]);
+    // (a '%' is nsd's environment, as nsd resolves it: the game asks sfdnsres for "nncs2-%.n.n.srv.nintendo.net")
+    for (const char *p = name; *p && len < sizeof n - 1; p++)
+        if (*p == '%')
+            for (const char *e = net_nsd_environment(); *e && len < sizeof n - 1; e++) n[len++] = *e;
+        else n[len++] = (char)tolower((unsigned char)*p);
     n[len] = 0;
     while (len && n[len - 1] == '.') n[--len] = 0;  // (an absolute name)
     if (parse_ip(n, ip)) return true;

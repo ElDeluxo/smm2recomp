@@ -16,6 +16,8 @@
 #include <string.h>
 
 #include "mod.h"
+#include "../../../runtime/net/netcfg.h"
+#include "../../../runtime/net/nextendo.h"
 
 #define STATE_CHANGE MAIN_ADDR(0x8b9320)  // (state machine, new state)
 
@@ -111,7 +113,7 @@ static void get_application_config(Cpu *c) {
     answered(c, "get_application_config");
 }
 LOCAL_WRAPPER(get_user_name_ng_type, 0x14f2cc0, s32(no + 0x141608, 0))  // the name is fine
-LOCAL_WRAPPER(sync_user_profile, 0x14cef40, {})
+// (sync_user_profile: below, after the player's own record)
 LOCAL_WRAPPER(get_mii_clothes, 0x14d8360, s32(no + 0x73a58, 0))      // no costume rewards (ring count)
 LOCAL_WRAPPER(login_check, 0x14d7d20, {})
 LOCAL_WRAPPER(update_last_login, 0x14d7e00, {})
@@ -163,6 +165,40 @@ void user_entry_reset(uint64_t e) {
 uint64_t mod_player_pid(void);  // endless.c: the fake player id the overrides use for the signed-in account
 extern void mod_account_info(char *name, size_t cap, uint32_t best[4]);
 
+// ---- hybrid: the player's name. A save whose Maker avatar has no name (empty or only spaces, as one made without
+// the console's Mii editor) would have the login's SyncUserProfile send a blank name, and the backend would show
+// the player as nameless. The backend's account name stands in: nextendo's user name, or (local-nex) the name in
+// the backend's record of the player. A name the player set is never replaced, and the save is not written.
+#define NAME_MAX16 11  // UTF-16 units of a Maker name with its terminator (10 characters, as the game sends)
+
+static bool blank_utf16(uint64_t buf, uint32_t cap) {
+    for (uint32_t i = 0; buf && i < cap; i++) {
+        uint16_t ch = *(volatile uint16_t *)(uintptr_t)(buf + 2 * i);
+        if (!ch) return true;
+        if (ch != ' ' && ch != 0x3000) return false;  // (ASCII and ideographic spaces)
+    }
+    return true;
+}
+
+static uint16_t record_name[NAME_MAX16];  // local-nex: the backend's name for the player (from its record)
+
+// The backend's name for the player as UTF-16 into buf (cap units); false when there is none.
+static bool backend_name(uint64_t buf, uint32_t cap) {
+    if (!buf || cap < 2) return false;
+    if (cap > NAME_MAX16) cap = NAME_MAX16;
+    char nx[64];
+    if (net_backend() == NET_BACKEND_NEXTENDO) {
+        if (!nextendo_username(nx, sizeof nx) || !nx[0]) return false;
+        put_utf16(buf, cap, nx);
+        return true;
+    }
+    if (!record_name[0]) return false;
+    uint32_t i = 0;
+    for (; i + 1 < cap && record_name[i]; i++) s16(buf + 2 * i, record_name[i]);
+    s16(buf + 2 * i, 0);
+    return true;
+}
+
 // Hybrid: the backend's record of the player (its name, Mii, maker code, registration and player id) stays as the
 // game's own request wrote it; our server's Endless bests go into it (mod_account_info also sets the 100 Mario
 // unlocks), and its player id becomes the player's own id in the mod's answers (mod_set_backend_pid). Neither our
@@ -177,13 +213,26 @@ static void get_my_user_hybrid(Cpu *c) {
     char name[64] = "";
     uint32_t best[4] = {0};
     mod_account_info(name, sizeof name, best);  // (our server; before the lock: it may take a while)
+    bool named = false;
     netobj_lock(c);
     uint64_t e = g64(no + USER_RING);
     if (e) {
         for (int d = 0; d < 4; d++) s32(e + 0x114 + 4 * d, best[d]);
         mod_set_backend_pid(g64(e + 0x58));
+        // the name (entry +0x30, the converter's copy of the UserInfo's name; +0x38 its capacity): kept for
+        // SyncUserProfile when it is a real one, else (nextendo) the account's user name, so the card shows it
+        uint64_t nb = g64(e + 0x30);
+        uint32_t cap = g32(e + 0x38);
+        if (!blank_utf16(nb, cap)) {
+            for (uint32_t i = 0; i < NAME_MAX16; i++)
+                record_name[i] = i + 1 < NAME_MAX16 && i < cap ? *(volatile uint16_t *)(uintptr_t)(nb + 2 * i) : 0;
+        } else if (net_backend() == NET_BACKEND_NEXTENDO) {
+            named = backend_name(nb, cap);
+        }
     }
     netobj_unlock(c);
+    (void)mod_player_pid();  // (the own maker ID from our server, before any list is answered)
+    if (named) LOG("[mod] GetUsers (own): the backend's record had no name; the Nextendo user name stands in\n");
     c->x[0] = ret;
     LOG("[mod] GetUsers (own): the backend's record, our Endless bests %u/%u/%u/%u\n", best[0], best[1], best[2],
         best[3]);
@@ -229,6 +278,27 @@ static void get_my_user(Cpu *c) {
     MLOG("GetUsers (own): %s, best %u/%u/%u/%u\n", name, best[0], best[1], best[2], best[3]);
     s32(no + 0x60, 0);
     c->x[0] = wrapper_ok();
+}
+
+// SyncUserProfile (the login's profile upload: name, Mii, region; this = NetObj). Its name is the UTF-16 string at
+// +0x738e0 (buffer +0x738e8, capacity +0x738f0; the request converts 10 characters of it). Hybrid: a blank one is
+// the backend's name for the player (above) for this request only; the original then sends it.
+#define SYNC_NAME 0x738e0
+
+static void sync_user_profile(Cpu *c) {
+    uint64_t no = c->x[0];
+    if (mod_hybrid()) {
+        netobj_lock(c);
+        uint64_t buf = g64(no + SYNC_NAME + 8);
+        uint32_t cap = g32(no + SYNC_NAME + 0x10);
+        bool filled = blank_utf16(buf, cap < NAME_MAX16 ? cap : NAME_MAX16) && backend_name(buf, cap);
+        netobj_unlock(c);
+        if (filled) LOG("[mod] SyncUserProfile: the save's Maker name is blank; sending the backend's name\n");
+        guest_call_orig(c, MAIN_ADDR(0x14cef40));
+        return;
+    }
+    if (!mod_answers_login()) { guest_call_orig(c, MAIN_ADDR(0x14cef40)); return; }
+    answered(c, "sync_user_profile");
 }
 
 // RECOMP_MOD_TRACE=1: log each state entered by the machines above (their enter functions, reached through pointers)

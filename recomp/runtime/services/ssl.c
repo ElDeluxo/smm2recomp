@@ -114,7 +114,9 @@ static void log_data(const char *dir, const SslConn *c, const uint8_t *p, size_t
         line[o++] = ch == '\n' ? '|' : (ch >= 0x20 && ch < 0x7f) ? (char)ch : '.';
     }
     line[o] = 0;
-    LOG("[ssl] %s %s %zu bytes: %s%s\n", c->sni[0] ? c->sni : "?", dir, n, line, n > show ? " ..." : "");
+    char shown[sizeof line + 16];
+    net_log_redact(line, shown, sizeof shown);  // (NEX station URLs carry the player id: "PID=<hidden>")
+    LOG("[ssl] %s %s %zu bytes: %s%s\n", c->sni[0] ? c->sni : "?", dir, n, shown, n > show ? " ..." : "");
 }
 
 // ---- the BIO: the game's socket, non-blocking (waits happen in io_wait, outside the connection's lock)

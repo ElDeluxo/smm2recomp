@@ -447,9 +447,9 @@ The owner's choice for Nextendo (DECISIONS.md 2026-10-20 "Nextendo for multiplay
 
 | What | Answered by |
 |---|---|
-| nifm / acc / mii, the enl session's login, Course World's login sequence (GetUserNameNgType, SyncUserProfile, GetMiiClothes, LoginCheck, UpdateLastLoginInfo, PostActivityQuest, GetNewNotification, GetEventCourseStatus) | the game's own NEX client, against the backend (`mod_answers_login()` is false) |
+| nifm / acc / mii, the enl session's login, Course World's login sequence (GetUserNameNgType, SyncUserProfile (a blank name filled, below), GetMiiClothes, LoginCheck, UpdateLastLoginInfo, PostActivityQuest, GetNewNotification, GetEventCourseStatus) | the game's own NEX client, against the backend (`mod_answers_login()` is false) |
 | GetApplicationConfig | the backend's (Utility.GetIntegerSettings(0): Network Play's switches), then the mod switches the Endless Challenge's four keys (+0x737b0, 0..3) on: `GetApplicationConfig: the backend's, Endless on` |
-| GetUsers (own) | the backend's record of the player (name, Mii, maker code, registration, player id), then the mod writes our server's Endless bests into it (entry +0x114) and sets the 100 Mario unlocks; its player id (entry +0x58) becomes the player's own id in the mod's answers (`mod_set_backend_pid`: "my course", "me", the player's courses on our server; never logged). No Maker avatar name is written: `GetUsers (own): the backend's record, our Endless bests` |
+| GetUsers (own) | the backend's record of the player (name, Mii, maker code, registration, player id), then the mod writes our server's Endless bests into it (entry +0x114) and sets the 100 Mario unlocks; its player id (entry +0x58) becomes the player's own id in the mod's answers (`mod_set_backend_pid`: "my course", "me", the player's courses on our server; never logged). No Maker avatar name is written; a blank record name becomes the Nextendo user name (below): `GetUsers (own): the backend's record, our Endless bests` |
 | Course World's lists, makers, downloads, uploads, comments, likes; the Endless Challenge; 100 Mario | the mod (`mod_hundred()` is true whatever `hundred=` says): TGRCode by default (`courses=` unset: `hybrid: courses from TGRCode (courses= not set)`; the built-in server's local account is named after the Nextendo user), or `courses=server` |
 | Network Play (matchmaking, rooms, PIA) | the game's own NEX client (Task 7 of the Nextendo plan routes its course search and download) |
 
@@ -461,10 +461,22 @@ answered by the mod": none, as with backend `ours`), so no other Course World re
 New Game, course start and a clear came from our server; Network Play's Co-op reached
 MatchmakeExtension.AutoMatchmakeWithParam_Postpone with no `enl command` line. Live on Nextendo: the NEX login,
 TGRCode's Popular list and a course played, 100 Mario (New Game, a course with 100 lives); the game's TCP went only
-to 51.178.29.194. Not working yet: the Co-op search screen stops presenting frames about 5 s in (offline too, and
-with the mod off, so not hybrid's), the NAT check's names come to sfdnsres as `nncs1-%` / `nncs2-%` and so resolve
-to the game server instead of the NAT check (the `nncs2-lp1` redirect doesn't match), and the player's name on the
-own profile is the backend's record's, empty for a save without a Maker avatar (SyncUserProfile sends the save's).
+to 51.178.29.194. The NAT check's names come to sfdnsres as `nncs1-%` / `nncs2-%`: `net_resolve` reads `%` as nsd's
+environment (`lp1`), so `nncs2-%` reaches the NAT check (164.132.111.120, [obs] live) and `nncs1-%` the game server.
+Not working yet: the Co-op search screen stops presenting frames about 5 s in (offline too, and with the mod off,
+so not hybrid's).
+
+**The player's name.** SyncUserProfile (main+0x14cef40) sends the name in the NetObj string at +0x738e0 (buffer
++0x738e8, capacity +0x738f0; 10 characters), the save's Maker name; a save whose avatar was made without the
+console's Mii editor has a blank one (empty or spaces), and the backend would then show the player without a name.
+In hybrid a blank name is replaced, for that request only (the save isn't written by the mod), by the backend's
+name for the player: nextendo's user name, or (local-nex) the name in the backend's record of the player
+(`SyncUserProfile: the save's Maker name is blank; sending the backend's name`). A name the player set is sent as
+it is. GetUsers (own) likewise fills a blank name in the record (entry +0x30) with the Nextendo user name, so the
+card shows it before the backend has the synced one. [obs] offline the profile shows the test server's `--name`,
+live the Nextendo user name.
+
+The net log's TLS plaintext dump masks the player id in NEX station URLs (`PID=<hidden>`, `net_log_redact`).
 
 ### Settings (all in smm2mods.ini, or the environment)
 
