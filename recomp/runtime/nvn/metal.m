@@ -1080,6 +1080,7 @@ void renderer_save_texture(id<MTLTexture> tex, const char *path) {
 
 static double last_fps_time;
 static _Atomic float g_display_hz;  // the window's display refresh (ui_run)
+static _Atomic uint64_t g_fg_shown;  // in-between frames the display actually showed (a presented handler with a time)
 
 void backend_present(NvnTexture *t);
 static bool g_held;          // (backend_present from backend_represent: no generated frame)
@@ -1320,6 +1321,9 @@ void backend_present(NvnTexture *t) {
                     fg_three = three;
                 }
                 menu_render(dev, cb, drawable.texture);
+                [drawable addPresentedHandler:^(id<MTLDrawable> d) {
+                    if (d.presentedTime > 0) atomic_fetch_add(&g_fg_shown, 1);  // (0: replaced before it was shown)
+                }];
                 [cb presentDrawable:drawable];
                 // (committed before the next drawable is asked for: that may wait for a display refresh, and the
                 // GPU works on this meanwhile)
@@ -1471,12 +1475,13 @@ void backend_present(NvnTexture *t) {
     prev_present = now;
     if (now - last_fps_time >= fps_iv) {
         extern const char *game_level_name(void);
-        static uint64_t fg_real0, fg_gen0;  // frame generation: generated / real frames since the last line
-        char fgs[64] = "";
+        static uint64_t fg_real0, fg_gen0, fg_shown0;  // frame generation: generated (shown) / real since the last line
+        char fgs[80] = "";
+        uint64_t shown = atomic_load(&g_fg_shown);
         if (g_settings.frame_gen != FRAMEGEN_OFF)
-            snprintf(fgs, sizeof fgs, " gen %llu/%llu", (unsigned long long)(g_fg_generated - fg_gen0),
-                     (unsigned long long)(g_fg_real - fg_real0));
-        fg_real0 = g_fg_real, fg_gen0 = g_fg_generated;
+            snprintf(fgs, sizeof fgs, " gen %llu/%llu shown %llu", (unsigned long long)(g_fg_generated - fg_gen0),
+                     (unsigned long long)(g_fg_real - fg_real0), (unsigned long long)(shown - fg_shown0));
+        fg_real0 = g_fg_real, fg_gen0 = g_fg_generated, fg_shown0 = shown;
         if (last_fps_time > 0) LOG("[metal] t=%.1f frame %llu %.1f fps%s max %.0fms level %s (%s)\n", now, (unsigned long long)total_frames,
                                    frames / (now - last_fps_time), fgs, max_gap * 1000.0, game_level_name(), renderer_stats());
         {   // (diagnostics) frame rate low for two periods in a row: what's allocated (at most once a minute)
