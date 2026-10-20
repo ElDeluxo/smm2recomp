@@ -652,6 +652,9 @@ static void pass_layout(const ExecState *s, PassLayout *out) {
         out->color[i] = s->rt.has_cview[i] && s->rt.cview[i].setmask ? view_pixel_format(base, &s->rt.cview[i], false) : base;
     }
     layout_depth_samples(s, out);
+    static int wrong = -1;  // (test) LARECOMP_DEBUG_MISPREDICT=1: a wrong prediction, which mustn't change what's drawn
+    if (wrong < 0) wrong = getenv("LARECOMP_DEBUG_MISPREDICT") != NULL;
+    if (wrong && out->color[0]) out->color[0] = MTLPixelFormatRGBA32Float;
 }
 static void layout_apply(MTLRenderPipelineDescriptor *pd, const PassLayout *pl) {
     for (int i = 0; i < 8; i++) if (pl->color[i]) pd.colorAttachments[i].pixelFormat = pl->color[i];
@@ -770,13 +773,13 @@ static int cbuf_base = 3, tex_base = 8;
 @public
     MTLRenderPipelineDescriptor *pd;
     NSString *key;
-    uint64_t phash;
+    uint64_t khash;  // (pipe_key_hash of key)
 }
 @end
 @implementation PipeReq
 @end
 @class MPipe;
-static MPipe *pipe_request(Prog *pr, MTLRenderPipelineDescriptor *pd, NSString *key, uint64_t phash, bool *created);
+static MPipe *pipe_request(Prog *pr, MTLRenderPipelineDescriptor *pd, NSString *key, uint64_t khash, bool *created);
 static uint64_t g_prog_creates;  // programs made (game thread): the scan's and the draws' share of them
 
 static id<MTLBuffer> ring;
@@ -1519,13 +1522,15 @@ static Prog *get_program(NvnProgram *p, ShaderKey *vkey, ShaderKey *fkey) {
     build_begin();
     dispatch_async(q, ^{
         int r = compile_program(pr);
-        NSArray *w;
-        @synchronized(pr) {  // (with the scan's check-and-add: a request is either here or sees the result)
-            w = pr->waiting;
+        // The scan's pipeline requests go out before the program shows ready (all under its lock, which the scan's
+        // check-and-add takes too): a draw that sees it ready finds them, and they're in flight before it is not.
+        @synchronized(pr) {
+            NSArray *w = pr->waiting;
             pr->waiting = nil;
+            build_test_delay();
+            if (r == BUILD_READY) for (PipeReq *q in w) pipe_request(pr, q->pd, q->key, q->khash, NULL);
             build_finish(&pr->state, r);
         }
-        if (r == BUILD_READY) for (PipeReq *q in w) pipe_request(pr, q->pd, q->key, q->phash, NULL);
     });
     return pr;
 }
@@ -2371,13 +2376,20 @@ static void mpipe_release(void *p) { CFRelease(p); }
 
 // The pipeline for (pd, key) in the pending table, its build started if it's new (pr must be ready: its functions
 // go into the pipeline). The archive lookup is part of the build, so a draw doesn't wait for that either.
+// The pending table's key for a pipeline: its whole cache key (attachment formats, program, boot), so a pipeline the
+// scan built from a wrong prediction is never a draw's
+static uint64_t pipe_key_hash(NSString *key) {
+    uint64_t h = fnv64(key.UTF8String);
+    return h ? h : 1;
+}
+
 // (Also called from a program's compile completion, for the scan's requests: pipeline_cache_open ran before.)
-static MPipe *pipe_request(Prog *pr, MTLRenderPipelineDescriptor *pd, NSString *key, uint64_t phash, bool *created) {
+static MPipe *pipe_request(Prog *pr, MTLRenderPipelineDescriptor *pd, NSString *key, uint64_t khash, bool *created) {
     MPipe *fresh = [MPipe new];
     void *fp = (__bridge_retained void *)fresh;
-    void *got = pend_get_or_put(phash, fp);
+    void *got = pend_get_or_put(khash, fp);
     if (created) *created = got == fp;
-    if (got != fp) { CFRelease(fp); return (__bridge MPipe *)got; }
+    if (got != fp) { CFRelease(fp); return created ? (__bridge MPipe *)got : nil; }  // (nil: the caller doesn't hold it)
     pipeline_cache_open();
     static dispatch_queue_t q;
     static dispatch_once_t once;
@@ -2545,10 +2557,11 @@ static void draw(CmdRec *r, bool indexed) {
     }
     if (!pobj && shader_mode() == SHADERS_PREFETCH) {  // (built off the thread - maybe started by the scan - and waited for)
         bool created;
-        MPipe *m = pipe_request(pr, pd, pk, phash, &created);
+        uint64_t khash = pipe_key_hash(pk);
+        MPipe *m = pipe_request(pr, pd, pk, khash, &created);
         if (created) g_prefetch.unforeseen++;  // (a build the scan didn't start)
         build_wait(&m->state, "pipeline");
-        void *t = pend_take(phash);
+        void *t = pend_take(khash);
         if (t) CFRelease(t);
         pobj = m->pipe ? (id)m->pipe : (id)[NSNull null];
         cache[pk] = pobj;
@@ -3626,7 +3639,7 @@ static void scan_draw(const CmdRec *r) {
     @synchronized(pr) {  // (compiling still: the pipeline is requested when it's done - see get_program)
         if (atomic_load(&pr->state) == BUILD_PENDING) {
             PipeReq *q = [PipeReq new];
-            q->pd = pd, q->key = pk, q->phash = phash;
+            q->pd = pd, q->key = pk, q->khash = pipe_key_hash(pk);
             if (!pr->waiting) pr->waiting = [NSMutableArray new];
             [pr->waiting addObject:q];
             later = true;
@@ -3634,7 +3647,7 @@ static void scan_draw(const CmdRec *r) {
         }
     }
     bool created = false;
-    if (!later && atomic_load(&pr->state) == BUILD_READY) pipe_request(pr, pd, pk, phash, &created);
+    if (!later && atomic_load(&pr->state) == BUILD_READY) pipe_request(pr, pd, pk, pipe_key_hash(pk), &created);
     if (created) g_prefetch.pipes++;
 }
 

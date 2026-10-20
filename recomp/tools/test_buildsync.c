@@ -143,6 +143,21 @@ static void test_drain(void) {
     printf("ok drain\n");
 }
 
+// (a job whose function publishes its object's state and is then still running: build_drain must wait for the job
+// to be done with the object too - a reset frees it right after the drain)
+static _Atomic int tail_state;
+static void finish_then_linger(void *a) { (void)a; build_finish(&tail_state, BUILD_READY); sleep_ms(50); }
+static void test_drain_waits_job_tail(void) {
+    JobQueue *q = jobq_create(1);
+    BuildJob j = {0};
+    tail_state = BUILD_PENDING;
+    build_begin();
+    jobq_submit(q, &j, finish_then_linger, NULL);
+    build_drain();
+    CHECK("drain_waits_job_tail", j.state == JOB_DONE);
+    printf("ok drain_waits_job_tail\n");
+}
+
 #define PEND_THREADS 8
 #define PEND_PER 400
 static int pend_vals[PEND_THREADS][PEND_PER];
@@ -182,6 +197,7 @@ int main(void) {
     test_wait_running();
     test_fifo();
     test_drain();
+    test_drain_waits_job_tail();
     test_pend();
     printf(failures ? "test_buildsync: %d failed\n" : "test_buildsync: all passed\n", failures);
     return failures ? 1 : 0;

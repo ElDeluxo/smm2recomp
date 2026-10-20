@@ -441,5 +441,12 @@ Measured with seed-4 boots to the title course and the Make / Play menu (`recomp
   of waits on the title load in lavapipe). Cleared per pass now: 0 and 131 ms.
 - The iPad's first launch after an install is cold too (the new binary misses Metal's system cache): 41.6 s of builds
   on the worker threads there, 0.9 s of game-thread waits.
+- Ordering (from the branch review): a program's waiting pipeline requests go out before it shows ready, under the
+  lock the scan's check-and-add takes, so a draw that sees it ready finds them and a reset's drain can't see zero in
+  between; jobs count as in flight until they're done with their object; Metal's pending table is keyed by the
+  pipeline's own key, so a pipeline the scan built from a wrong pass prediction is never a draw's. Test switches:
+  `LARECOMP_DEBUG_CONT_DELAY_MS=<ms>` (a pause in that window: before the fix 73 / 31 builds the scan had started
+  counted unforeseen on Metal / Vulkan, after 0) and `LARECOMP_DEBUG_MISPREDICT=1` (Metal: a wrong pass prediction;
+  before, almost every pixel of every frame wrong; after, frames within noise, the draws building their own).
 - `[shader] prefetch: ...` every 600 frames: draws / submits scanned and the time, builds started ahead, waits, and
   builds the scan didn't foresee. A wait over 2 s is logged once per object (`[shader] waited N ms for ...`).

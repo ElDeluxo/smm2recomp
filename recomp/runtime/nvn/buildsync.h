@@ -34,3 +34,4 @@ typedef struct { uint64_t draws, submits, scan_ns, progs, pipes, waits, unforese
 extern PrefetchStats g_prefetch;
 void prefetch_stats_tick(uint64_t presented);  // the stats line every 600 presented frames (then reset)
 void prefetch_stats_log(void);                 // the stats line now (also at exit)
+void build_test_delay(void);  // (test) LARECOMP_DEBUG_CONT_DELAY_MS: a pause where a program's pipeline requests go out

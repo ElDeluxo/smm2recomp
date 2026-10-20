@@ -128,9 +128,11 @@ void pend_clear(void (*release)(void *)) {
 struct JobQueue { pthread_mutex_t lock; pthread_cond_t cond; BuildJob *head, *tail; };
 
 static void run_job(BuildJob *j) {  // (the caller won QUEUED -> RUNNING)
+    build_begin();  // (in flight until it's done with j too: a reset frees the object j is in once build_drain returns)
     j->fn(j->arg);
     pthread_mutex_lock(&lock);
     atomic_store(&j->state, JOB_DONE);
+    inflight--;
     pthread_cond_broadcast(&done);
     pthread_mutex_unlock(&lock);
 }
@@ -195,6 +197,12 @@ void job_run_or_wait(JobQueue *q, BuildJob *j) {
     }
     count_wait(now_ms() - t0, j, "job");
     pthread_mutex_unlock(&lock);
+}
+
+void build_test_delay(void) {
+    static int ms = -1;
+    if (ms < 0) { const char *e = getenv("LARECOMP_DEBUG_CONT_DELAY_MS"); ms = e ? atoi(e) : 0; }
+    if (ms) { struct timespec t = {ms / 1000, (long)(ms % 1000) * 1000000}; nanosleep(&t, NULL); }
 }
 
 // ---- stats

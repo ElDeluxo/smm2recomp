@@ -1305,14 +1305,17 @@ static pthread_mutex_t g_wait_lock = PTHREAD_MUTEX_INITIALIZER;  // Prog.waiting
 static uint64_t g_prog_creates, g_cs_creates;  // programs made (game thread): the scan's and the draws' share
 static void pipe_requests_run(struct PipeReq *w, int v);
 
-static void prog_state(Prog *p, int v) {  // (its final state, once; the scan's pipeline requests start or are dropped)
+// Its final state, once. The scan's pipeline requests start (or are dropped) before it shows, under the lock the scan's
+// check-and-add takes: a draw that sees it ready finds them, and they're in flight before it is not.
+static void prog_state(Prog *p, int v) {
     pthread_mutex_lock(&g_wait_lock);
     struct PipeReq *w = p->waiting;
     p->waiting = NULL;
+    build_test_delay();
+    if (w) pipe_requests_run(w, v);
     if (p->async) build_finish(&p->state, v);
     else atomic_store(&p->state, v);
     pthread_mutex_unlock(&g_wait_lock);
-    if (w) pipe_requests_run(w, v);
 }
 
 static VkPipelineLayout make_layout(Prog *p, int nsets, VkShaderStageFlags s0, VkShaderStageFlags s1) {
