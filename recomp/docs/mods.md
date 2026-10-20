@@ -441,11 +441,14 @@ The castle's axe, online versus and the Course Maker's test play are left as the
   of its own to show, and calls `smw_goal_poll` every frame. The centre is the body of the player who broke the tape
   (actor x / y at +0x230 / +0x234, mapped through the camera's view rect); the screen centre when that can't be read.
   The circle takes the sound's 0.8 s, then 0.25 s of black.
-- **The timing** comes from one override, MariowGoal's own Fade-state execute thunk (main+0x12d28a0: every goal type
-  has its own, so the axe never comes here). SMM2's Fade waits while a fade is under way or while the demo's counter
-  (fanfare, then 35 frames) runs; then it opens the clear panel, or asks for the scene change. The override starts the
-  circle on the first frame the Fade would go on and skips the Fade until the circle is shut (a skipped frame changes
-  nothing: the Fade only waits). Then the Fade runs: a scene change asked for (the scene manager's byte at +0x344)
+- **The timing** comes from MariowGoal's own Fade-state thunks (enter main+0x12d2890, execute main+0x12d28a0: every
+  goal type has its own, so the axe never comes here). The enter override arms the wipe once per goal (the demo
+  controller sits at the same address course after course, and the Fade can start after the fanfare's counter has run
+  out: the Fade comes on a 480-frame timer, the fanfare plays in real time, so slow frames leave no counter to see).
+  SMM2's Fade waits while a fade is under way or while the demo's counter (fanfare, then 35 frames) runs; then it
+  opens the clear panel, or asks for the scene change. The execute override starts the armed circle on the first
+  frame the Fade would go on and skips the Fade until the circle is shut (a skipped frame changes nothing: the Fade
+  only waits). Then the Fade runs: a scene change asked for (the scene manager's byte at +0x344)
   keeps the black until the new scene exists; otherwise the black fades 54 frames later, when the panel's staircase
   wipe covers the course.
 - Research (private): `research/specs/smw-goal-wipe.md`.
