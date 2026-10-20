@@ -1128,6 +1128,23 @@ renderers upload a texture when a sprite first uses it. Measured on the same cou
   Basics sets its own flag (which also grows the title-course rotation from 8 to 10), power-up
   lessons set nothing; Nina's introduction is one flag for every lesson kind (save +0x100 bit 10).
 
+## 2026-10-20 — Shader prefetch: a submission's first-use builds start side by side; draws wait, never skip
+**Decision:** before a submission's lists run, both backends walk them on a copy of the executor state and start the
+programs, pipelines and compute programs their draws need, on worker threads; a draw waits for its own build (on
+Vulkan running it itself while it's still queued). Default; `LARECOMP_NO_SHADER_PREFETCH=1` keeps R1's inline builds,
+`LARECOMP_ASYNC_SHADERS=1` LAS's skipping. Design: `docs/superpowers/specs/2026-10-20-shader-prefetch-design.md`;
+numbers: `recomp/docs/smm2-bringup.md` ("Shader prefetch").
+- **Why:** R1's blocking compiles kept the one-shot renders but stalled for the sum of a load's compiles (a 19.6 s
+  frame cold on the Mac); prefetch keeps the rule (no skipped draw) and stalls for about the slowest instead: cold
+  worst frame 19.6 -> 2.8 s (Mac), 6.9 -> 2.6 s (iPad); warm unchanged.
+- **The scan is advisory:** a key it gets wrong only means that draw builds its own and waits, as before; the scan
+  and the draws share the key functions (`apply_state`, `program_keys`, `pass_layout`, the pipeline key), and the pass
+  formats it predicts are checked against the real pass on every pipeline miss.
+- **Not done:** Metal's translation stays on the game thread (0.14 ms a shader, 22 ms on the worst load frame,
+  measured); no record-time scan (more lead time, guessed state); no start-up build of the archive descriptions.
+**What would change it:** a game whose one submission carries less than a frame (lead time too short: then scan at
+`EndRecording`), or a scan cost over 0.5 ms a frame on a target (then memoise lists that found nothing).
+
 ## 2026-10-19 — Android: guest window at 0x800000000, game code built on the Mac, APK without Gradle
 The recomp builds for Android arm64 (`make -C recomp TARGET=android-arm64 GAME=smm2 apk install push-data`; how-to in
 `recomp/README.md`, "Building (Android)"). The choices:

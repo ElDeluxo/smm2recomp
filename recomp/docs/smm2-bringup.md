@@ -409,5 +409,37 @@ cache misses:
   Archives can't be read back, hence the descriptions. (26 files had taken 1.6 s to load.) Files from before the
   descriptions are deleted.
 
-iPad numbers are still to be measured; the `[shader] slow program`, `[compute] program ... built in` and
-`[shader] pipeline cache ...` log lines show what's left there.
+iPad numbers: in the next section.
+
+## Shader prefetch: first-use builds side by side (2026-10-20)
+
+Design: `docs/superpowers/specs/2026-10-20-shader-prefetch-design.md`. Before a submission runs (`nvnQueueSubmitCommands`
+runs its lists at once, on the game thread), `backend_prefetch` walks them on a copy of the executor state and starts
+every program, pipeline and compute program their draws will need, on worker threads. A draw then waits only for its
+own build, and is never skipped (the one-shot LUT / light-probe renders stay). Both backends; `buildsync.c` is shared.
+Measured with seed-4 boots to the title course and the Make / Play menu (`recomp/tools/shader_ab.sh`), blocking
+(`LARECOMP_NO_SHADER_PREFETCH=1`, the old default) against prefetch:
+
+| | worst frame | game-thread build stall | reached |
+|---|---|---|---|
+| macOS M4 Pro, cold, blocking | 19,557 ms | 21,867 ms inline | frame 4200 at 105.8 s |
+| macOS M4 Pro, cold, prefetch | 2,794 ms | 4,143 ms of waits | frame 4200 at 84.1 s |
+| macOS warm, blocking / prefetch | 241 / 236 ms | 66 / 4 ms | 76.6 / 74.4 s |
+| iPad Pro M5, cold, blocking | 6,944 ms | 7,607 ms inline | frame 2400 at 50.8 s |
+| iPad Pro M5, cold, prefetch | 2,631 ms | 3,064 ms of waits | frame 2400 at 46.4 s |
+| iPad warm, blocking / prefetch | 210 / 210 ms | - | - |
+
+- [obs] Boots aren't byte-repeatable over these frames: two runs of one binary differ by up to 2 % of pixels in the
+  intro, ~0.05 % on the title course and ~0.5 % in the menu (loading and the menu move with timing). Frames are
+  compared within that noise (`shader_ab.sh --compare <ref> <cand> <noise runs>`; `tools/frame_diff.m`). Prefetch is
+  within it everywhere: Metal warm / cold / mirror mode, Vulkan (lavapipe) frames 300-3000.
+- [obs] The scan foresees every build: `unforeseen 0` on both backends, and `LARECOMP_PREFETCH_VERIFY=1` (its state
+  against the executor's after each submission) stays silent. Scan cost: ~0.33 ms a frame on the Mac and ~0.28 ms on
+  the iPad on the title course (~1,000 draws a frame), ~0.1 ms in the menu.
+- [obs] Vulkan: `begin_pass` left the formats past the bound targets from earlier passes in `pass_color`, and pipeline
+  keys carry all eight - one pipeline was cached as several, and the scan's keys missed (222 unforeseen builds, 9.6 s
+  of waits on the title load in lavapipe). Cleared per pass now: 0 and 131 ms.
+- The iPad's first launch after an install is cold too (the new binary misses Metal's system cache): 41.6 s of builds
+  on the worker threads there, 0.9 s of game-thread waits.
+- `[shader] prefetch: ...` every 600 frames: draws / submits scanned and the time, builds started ahead, waits, and
+  builds the scan didn't foresee. A wait over 2 s is logged once per object (`[shader] waited N ms for ...`).

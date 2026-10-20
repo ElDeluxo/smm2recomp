@@ -66,6 +66,9 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
 - ✅ R1 (macOS): boots to the title screen and renders it (2026-10-19). What it took: `recomp/docs/smm2-bringup.md`
   (per-core scheduling, nifm/friend/mii/fonts/system data, NVN conditional rendering, 3D render targets, blocking
   first-use compiles, narrow vertex strides, in-order uniform updates, translator TLD4/TMML/LDC.64 fix)
+- ✅ Shader prefetch (2026-10-20, Metal + Vulkan): a submission's first-use builds start side by side, draws wait for
+  theirs and are never skipped; cold worst frame 19.6 -> 2.8 s (Mac), 6.9 -> 2.6 s (iPad), warm unchanged
+  (`recomp/docs/smm2-bringup.md`)
 - 🔄 Title screen frames vs Ryujinx, five courses in four styles (3D World, SMB1 x2, SMB3, NSMBU), same course
   and nearest frame, both windows grabbed through the window server: 2.50-4.80 % of pixels differ by more than 24,
   0.66-2.98 % by more than 48, 0.13-1.15 % by more than 96 (table in `recomp/docs/smm2-bringup.md`). Fixed in
