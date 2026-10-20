@@ -1163,7 +1163,7 @@ void backend_present(NvnTexture *t) {
             if (warned++ < 20) LOG("[metal] nextDrawable blocked %llums\n", (unsigned long long)(nd / 1000000));
         }
         if (!drawable) return;
-        id<MTLCommandBuffer> cb = [queue commandBuffer];
+        __block id<MTLCommandBuffer> cb = [queue commandBuffer];  // (__block: frame generation commits it and starts another)
         // Frame generation (Video tab; runtime/nvn/framegen.h): the game image goes to fg_cur, and from there to an
         // in-between drawable (with fg_prev) and this frame's own
         static id<MTLTexture> fg_prev, fg_cur;
@@ -1321,6 +1321,10 @@ void backend_present(NvnTexture *t) {
                 }
                 menu_render(dev, cb, drawable.texture);
                 [cb presentDrawable:drawable];
+                // (committed before the next drawable is asked for: that may wait for a display refresh, and the
+                // GPU works on this meanwhile)
+                [cb commit];
+                cb = [queue commandBuffer];
                 drawable = [layer nextDrawable];  // (this frame's own image: shown 1/120 s after the in-between one)
             }
             if (drawable) {

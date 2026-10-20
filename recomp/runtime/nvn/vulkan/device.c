@@ -460,7 +460,8 @@ void vk_queue_unlock(void) { pthread_mutex_unlock(&queue_lock); }
 
 static pthread_mutex_t dp_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t dp_cond = PTHREAD_COND_INITIALIZER;
-static struct { bool pending; uint32_t img; VkSemaphore sem; VkSwapchainKHR sc; uint64_t at; } dp;
+static struct { bool pending; uint32_t img; VkSemaphore sem; VkSwapchainKHR sc; uint64_t at, gen_seq; } dp;
+static uint64_t last_frame_seq;  // the submission of the last window image (the in-between one, for a deferred present)
 static _Atomic bool dp_stale;  // a deferred present found the swapchain out of date / the surface lost
 
 static void *dp_main(void *arg) {
@@ -468,10 +469,15 @@ static void *dp_main(void *arg) {
     pthread_mutex_lock(&dp_lock);
     for (;;) {
         while (!dp.pending) pthread_cond_wait(&dp_cond, &dp_lock);
-        uint64_t at = dp.at;
+        uint64_t at = dp.at, gen_seq = dp.gen_seq;
         VkPresentInfoKHR pi = {.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR, .waitSemaphoreCount = 1, .pWaitSemaphores = &dp.sem,
                                .swapchainCount = 1, .pSwapchains = &dp.sc, .pImageIndices = &dp.img};
         pthread_mutex_unlock(&dp_lock);
+        if (gen_seq) {  // (the in-between image ready on the GPU: the real one half a slot after that)
+            VkSemaphoreWaitInfo wi = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO, .semaphoreCount = 1,
+                                      .pSemaphores = &g_vk.timeline, .pValues = &gen_seq};
+            if (vkWaitSemaphores(g_vk.dev, &wi, 1000000000ull) == VK_SUCCESS) at = framegen_real_present_at(at, plat_now_ns());
+        }
         if (plat_now_ns() < at) plat_sleep_until_ns(at);
         vk_queue_lock();
         VkResult r = vkQueuePresentKHR(g_vk.queue, &pi);
@@ -559,6 +565,8 @@ static void frame_end(const char *shot_path, uint64_t present_at) {
     if (!done_sem[img]) done_sem[img] = binary_semaphore();
     uint64_t seq = vk_pending_seq();
     vk_submit_extra(cur_frame.acquired, done_sem[img], VK_NULL_HANDLE);
+    uint64_t prev_frame_seq = last_frame_seq;
+    last_frame_seq = seq;
     static int started = -1;
     if (present_at && started < 0) {
         pthread_t th;
@@ -568,7 +576,8 @@ static void frame_end(const char *shot_path, uint64_t present_at) {
     }
     if (present_at && started) {
         pthread_mutex_lock(&dp_lock);
-        dp.img = img, dp.sem = done_sem[img], dp.sc = g_vk.swapchain, dp.at = present_at, dp.pending = true;
+        dp.img = img, dp.sem = done_sem[img], dp.sc = g_vk.swapchain, dp.at = present_at, dp.gen_seq = prev_frame_seq;
+        dp.pending = true;
         pthread_cond_broadcast(&dp_cond);
         pthread_mutex_unlock(&dp_lock);
     } else {
@@ -724,18 +733,26 @@ void backend_present(NvnTexture *t) {
     bool fg_on = g_settings.frame_gen != FRAMEGEN_OFF;
 #ifdef __ANDROID__
     {   // (the display's refresh follows what the app asks for: 120 while frame generation is on)
+        // (the request belongs to the surface: asked again for a new one, after the app was in the background)
         static int asked = -1;
-        if (asked != fg_on) {
-            asked = fg_on;
-            if (__builtin_available(android 30, *)) {
-                ANativeWindow *aw = SDL_GetPointerProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_ANDROID_WINDOW_POINTER, NULL);
-                if (aw) ANativeWindow_setFrameRate(aw, fg_on ? 120.0f : 0.0f, ANATIVEWINDOW_FRAME_RATE_COMPATIBILITY_DEFAULT);
-            }
+        static void *asked_win;
+        ANativeWindow *aw = SDL_GetPointerProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_ANDROID_WINDOW_POINTER, NULL);
+        if (aw && (asked != fg_on || aw != asked_win)) {
+            asked = fg_on, asked_win = aw;
+            if (__builtin_available(android 30, *))
+                ANativeWindow_setFrameRate(aw, fg_on ? 120.0f : 0.0f, ANATIVEWINDOW_FRAME_RATE_COMPATIBILITY_DEFAULT);
         }
     }
 #endif
     TexBackend *fgc = NULL;
     bool have;
+    if (fg_on && g_vk.swapchain) {  // (the swapchain at the window's size first: our image is made at its size)
+        int ww, wh;
+        SDL_GetWindowSizeInPixels(window, &ww, &wh);
+        if (ww && wh && (atomic_exchange(&dp_stale, false) || (uint32_t)ww != g_vk.sc_extent.width ||
+                         (uint32_t)wh != g_vk.sc_extent.height))
+            recreate_swapchain();
+    }
     if (fg_on && g_vk.swapchain && g_vk.sc_extent.width && g_vk.sc_extent.height) {
         fgc = vk_framegen_image(fg_k, g_vk.sc_extent.width, g_vk.sc_extent.height);
         vk_offscreen_begin(fgc, black);
@@ -793,7 +810,12 @@ void backend_present(NvnTexture *t) {
         if (fgc) {
             vk_offscreen_end();
             TexBackend *fgp = fg_gen ? vk_framegen_image(fg_k ^ 1, fgc->width, fgc->height) : NULL;  // (outside any rendering)
-            if (fg_gen && vk_frame_begin(black)) {
+            bool in_hand = false;  // (a window image acquired for the in-between frame, used for this frame's instead)
+            if (fg_gen && vk_frame_begin(black) &&
+                (g_vk.sc_extent.width != fgc->width || g_vk.sc_extent.height != fgc->height)) {
+                LOG("[framegen] the window changed size under the in-between frame: this frame's own goes there\n");
+                fg_gen = false, in_hand = true;
+            } else if (fg_gen && cur_frame.ok) {
                 vk_framegen_encode(vk_cmd(), fgp, fgc, 0.5f, !fg_last_gen);
                 menu_render((void *)vk_cmd(), g_vk.sc_extent.width, g_vk.sc_extent.height);
                 char gen_path[512];
@@ -812,7 +834,7 @@ void backend_present(NvnTexture *t) {
             }
             fg_last_gen = fg_gen;
             fg_k ^= 1;
-            if (!vk_frame_begin(black)) goto presented;
+            if (!in_hand && !vk_frame_begin(black)) goto presented;
             cb = vk_cmd();
             vk_present_copy(cb, fgc);
             if (fg_gen) menu_redraw((void *)cb, g_vk.sc_extent.width, g_vk.sc_extent.height);

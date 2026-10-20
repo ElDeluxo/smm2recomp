@@ -26,6 +26,10 @@ bool framegen_step(FgState *s, const FgFrame *f);
 float framegen_display_hz(struct SDL_Window *w);
 extern uint64_t g_fg_real, g_fg_generated;  // counters for the fps log
 #define FG_HALF_SLOT_NS 8333333ull           // the real frame is shown this long after the generated one
+// When the real frame's present may go: half a slot after the in-between image is ready on the GPU (gen_done_ns),
+// and not before the planned time - so the in-between image gets a refresh of its own (a mailbox swapchain would
+// otherwise replace it with the real one)
+uint64_t framegen_real_present_at(uint64_t planned_ns, uint64_t gen_done_ns);
 
 // The passes (framegen_src.c): one shared source, assembled per backend.
 char *framegen_msl(void);                     // malloc'd MSL library: every pass as fragment function <pass>_fs, plus fg_vs

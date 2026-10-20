@@ -88,6 +88,13 @@ static void test_any_pace(void) {  // (LARECOMP_FRAMEGEN_ANY_PACE: slow software
     f.now_ns += 140000000; f.w = 1280; CHECK(!framegen_step(&s, &f));  // (still not across a size change)
 }
 
+static void test_real_present_after_gen_ready(void) {  // (review I2) the real frame waits half a slot after the
+    // in-between image is ready on the GPU, not after its present call returned on the CPU
+    uint64_t t_gen_cpu = 1000000000ull;
+    CHECK(framegen_real_present_at(t_gen_cpu + FG_HALF_SLOT_NS, t_gen_cpu + 1000000) == t_gen_cpu + 1000000 + FG_HALF_SLOT_NS);
+    CHECK(framegen_real_present_at(t_gen_cpu + FG_HALF_SLOT_NS, t_gen_cpu - 5000000) == t_gen_cpu + FG_HALF_SLOT_NS);
+}
+
 static void test_counters(void) {
     g_fg_real = g_fg_generated = 0;
     FgState s = {0};
@@ -104,7 +111,8 @@ int main(void) {
         {"test_first_frame_real", test_first_frame_real}, {"test_enable_resets", test_enable_resets},
         {"test_size_change_resets", test_size_change_resets}, {"test_gap_bounds", test_gap_bounds},
         {"test_held_resets", test_held_resets}, {"test_low_refresh_skips", test_low_refresh_skips},
-        {"test_any_pace", test_any_pace}, {"test_counters", test_counters},
+        {"test_any_pace", test_any_pace}, {"test_real_present_after_gen_ready", test_real_present_after_gen_ready},
+        {"test_counters", test_counters},
     };
     int bad = 0;
     for (size_t i = 0; i < sizeof t / sizeof t[0]; i++) {

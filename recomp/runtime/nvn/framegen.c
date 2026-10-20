@@ -30,6 +30,11 @@ bool framegen_step(FgState *s, const FgFrame *f) {
     return gen;
 }
 
+uint64_t framegen_real_present_at(uint64_t planned_ns, uint64_t gen_done_ns) {
+    uint64_t after = gen_done_ns + FG_HALF_SLOT_NS;
+    return after > planned_ns ? after : planned_ns;
+}
+
 float framegen_display_hz(struct SDL_Window *w) {
     static float forced = -1;
     if (forced < 0) forced = getenv("LARECOMP_FORCE_DISPLAY_HZ") ? (float)atof(getenv("LARECOMP_FORCE_DISPLAY_HZ")) : 0;
