@@ -3,6 +3,10 @@
 #include "../../game.h"
 #include <SDL3/SDL_vulkan.h>
 #include <math.h>
+#include <pthread.h>
+#ifdef __ANDROID__
+#include <android/native_window.h>
+#endif
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,10 +14,12 @@
 #include <unistd.h>
 
 #include "../../paths.h"
+#include "../../platform.h"
 #include "../../settings.h"
 #include "../../ui/menu.h"
 #include "vk.h"
 #include "../output_scale.h"
+#include "../framegen.h"
 #include "../renderer.h"
 
 VkG g_vk;
@@ -304,6 +310,7 @@ static void create_swapchain(void) {
         for (uint32_t i = 0; i < nf; i++)
             if (fmts[i].format == VK_FORMAT_R8G8B8A8_UNORM && fmts[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) { sf = fmts[i]; break; }
     uint32_t count = caps.minImageCount + 1;
+    if (count < 3) count = 3;  // (frame generation: two presents per real frame)
     if (caps.maxImageCount && count > caps.maxImageCount) count = caps.maxImageCount;
     if (count > 8) count = 8;
     VkSwapchainKHR old = g_vk.swapchain;
@@ -337,15 +344,22 @@ static void create_swapchain(void) {
     }
 }
 
-static void recreate_swapchain(void) {
+static void device_wait_idle(void) {  // (with nothing left for the present thread to present)
+    vk_present_flush();
+    vk_queue_lock();
     vkDeviceWaitIdle(g_vk.dev);
+    vk_queue_unlock();
+}
+
+static void recreate_swapchain(void) {
+    device_wait_idle();
     create_swapchain();
 }
 
 // The window's surface went away (Android destroys it while the app is in the background and makes a new one on
 // return): swapchain and surface dropped; vk_frame_begin makes new ones from the window once it has one again.
 static void surface_lost(void) {
-    vkDeviceWaitIdle(g_vk.dev);
+    device_wait_idle();
     for (uint32_t i = 0; i < g_vk.sc_count; i++) vkDestroyImageView(g_vk.dev, g_vk.sc_views[i], NULL);
     g_vk.sc_count = 0;
     if (g_vk.swapchain) vkDestroySwapchainKHR(g_vk.dev, g_vk.swapchain, NULL);
@@ -394,8 +408,87 @@ static void image_barrier(VkCommandBuffer cb, VkImage img, VkImageLayout from, V
     vkCmdPipelineBarrier2(cb, &di);
 }
 
-typedef struct { uint32_t image; VkSemaphore acquired; bool ok; } Frame;
+// What is being rendered into: a window image (acquired), or one of our own images (vk_offscreen_begin)
+typedef struct { uint32_t image; VkSemaphore acquired; bool ok; TexBackend *off; } Frame;
 static Frame cur_frame;
+
+static VkImageView frame_view(void) {
+    static const VkComponentMapping id = {0};
+    return cur_frame.off ? vk_image_view(cur_frame.off, VK_IMAGE_VIEW_TYPE_2D, cur_frame.off->format, 0, 1, 0, 1, id,
+                                         VK_IMAGE_ASPECT_COLOR_BIT)
+                         : g_vk.sc_views[cur_frame.image];
+}
+static VkImageLayout frame_layout(void) {
+    return cur_frame.off ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+}
+static VkExtent2D frame_extent(void) {
+    return cur_frame.off ? (VkExtent2D){cur_frame.off->width, cur_frame.off->height} : g_vk.sc_extent;
+}
+VkFormat vk_frame_format(void) { return cur_frame.off ? cur_frame.off->format : g_vk.sc_format; }
+
+static void frame_rendering(VkAttachmentLoadOp load, const float clear[4]) {
+    VkCommandBuffer cb = vk_cmd();
+    VkRenderingAttachmentInfo ca = {.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, .imageView = frame_view(),
+                                    .imageLayout = frame_layout(), .loadOp = load, .storeOp = VK_ATTACHMENT_STORE_OP_STORE};
+    if (clear) memcpy(ca.clearValue.color.float32, clear, 4 * sizeof(float));
+    VkExtent2D ext = frame_extent();
+    VkRenderingInfo ri = {.sType = VK_STRUCTURE_TYPE_RENDERING_INFO, .renderArea = {{0, 0}, ext}, .layerCount = 1,
+                          .colorAttachmentCount = 1, .pColorAttachments = &ca};
+    vkCmdBeginRendering(cb, &ri);
+    VkViewport vp = {0, 0, (float)ext.width, (float)ext.height, 0, 1};
+    VkRect2D sc = {{0, 0}, ext};
+    vkCmdSetViewport(cb, 0, 1, &vp);
+    vkCmdSetScissor(cb, 0, 1, &sc);
+}
+
+void vk_offscreen_begin(TexBackend *img, const float clear[4]) {
+    cur_frame = (Frame){.ok = true, .off = img};
+    vk_full_barrier(vk_cmd());
+    frame_rendering(VK_ATTACHMENT_LOAD_OP_CLEAR, clear);
+}
+void vk_offscreen_end(void) {
+    if (!cur_frame.ok || !cur_frame.off) return;
+    vkCmdEndRendering(vk_cmd());
+    vk_full_barrier(vk_cmd());
+    cur_frame = (Frame){0};
+}
+
+// ---- the queue, shared with the present thread; the deferred present (frame generation's real frame)
+static pthread_mutex_t queue_lock = PTHREAD_MUTEX_INITIALIZER;
+void vk_queue_lock(void) { pthread_mutex_lock(&queue_lock); }
+void vk_queue_unlock(void) { pthread_mutex_unlock(&queue_lock); }
+
+static pthread_mutex_t dp_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t dp_cond = PTHREAD_COND_INITIALIZER;
+static struct { bool pending; uint32_t img; VkSemaphore sem; VkSwapchainKHR sc; uint64_t at; } dp;
+static _Atomic bool dp_stale;  // a deferred present found the swapchain out of date / the surface lost
+
+static void *dp_main(void *arg) {
+    (void)arg;
+    pthread_mutex_lock(&dp_lock);
+    for (;;) {
+        while (!dp.pending) pthread_cond_wait(&dp_cond, &dp_lock);
+        uint64_t at = dp.at;
+        VkPresentInfoKHR pi = {.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR, .waitSemaphoreCount = 1, .pWaitSemaphores = &dp.sem,
+                               .swapchainCount = 1, .pSwapchains = &dp.sc, .pImageIndices = &dp.img};
+        pthread_mutex_unlock(&dp_lock);
+        if (plat_now_ns() < at) plat_sleep_until_ns(at);
+        vk_queue_lock();
+        VkResult r = vkQueuePresentKHR(g_vk.queue, &pi);
+        vk_queue_unlock();
+        if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR || r == VK_ERROR_SURFACE_LOST_KHR) atomic_store(&dp_stale, true);
+        pthread_mutex_lock(&dp_lock);
+        dp.pending = false;
+        pthread_cond_broadcast(&dp_cond);
+    }
+    return NULL;
+}
+
+void vk_present_flush(void) {
+    pthread_mutex_lock(&dp_lock);
+    while (dp.pending) pthread_cond_wait(&dp_cond, &dp_lock);
+    pthread_mutex_unlock(&dp_lock);
+}
 
 // Acquire the next window image and begin rendering into it (cleared to `clear`). Returns false when there is
 // nothing to draw into (minimised window).
@@ -405,6 +498,7 @@ bool vk_frame_begin(const float clear[4]) {
     SDL_GetWindowSizeInPixels(window, &w, &h);
     if (!w || !h) return false;  // minimised
     if (!g_vk.surface && !recreate_surface()) return false;
+    if (atomic_exchange(&dp_stale, false)) recreate_swapchain();
     if (!g_vk.swapchain || (uint32_t)w != g_vk.sc_extent.width || (uint32_t)h != g_vk.sc_extent.height) recreate_swapchain();
     if (!g_vk.swapchain) return false;
     static int trace = -1;
@@ -412,6 +506,7 @@ bool vk_frame_begin(const float clear[4]) {
     if (trace) LOG("[vk] frame begin %dx%d (swapchain %ux%u)\n", w, h, g_vk.sc_extent.width, g_vk.sc_extent.height);
     slot = (slot + 1) % FRAMES;
     if (!acquire_sem[slot]) acquire_sem[slot] = binary_semaphore();
+    vk_present_flush();  // (the swapchain is the present thread's until its present is issued)
     vk_wait_seq(slot_seq[slot]);
     VkResult r = vkAcquireNextImageKHR(g_vk.dev, g_vk.swapchain, UINT64_MAX, acquire_sem[slot], VK_NULL_HANDLE, &cur_frame.image);
     if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_ERROR_SURFACE_LOST_KHR) {
@@ -420,20 +515,10 @@ bool vk_frame_begin(const float clear[4]) {
     }
     if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR) { LOG("[vk] acquire failed: %d\n", r); return false; }
     cur_frame.acquired = acquire_sem[slot];
+    cur_frame.off = NULL;
     slot_seq[slot] = vk_pending_seq();
-    VkCommandBuffer cb = vk_cmd();
-    image_barrier(cb, g_vk.sc_images[cur_frame.image], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-    VkRenderingAttachmentInfo ca = {.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, .imageView = g_vk.sc_views[cur_frame.image],
-                                    .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                                    .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR, .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-                                    .clearValue.color.float32 = {clear[0], clear[1], clear[2], clear[3]}};
-    VkRenderingInfo ri = {.sType = VK_STRUCTURE_TYPE_RENDERING_INFO, .renderArea = {{0, 0}, g_vk.sc_extent}, .layerCount = 1,
-                          .colorAttachmentCount = 1, .pColorAttachments = &ca};
-    vkCmdBeginRendering(cb, &ri);
-    VkViewport vp = {0, 0, (float)g_vk.sc_extent.width, (float)g_vk.sc_extent.height, 0, 1};
-    VkRect2D sc = {{0, 0}, g_vk.sc_extent};
-    vkCmdSetViewport(cb, 0, 1, &vp);
-    vkCmdSetScissor(cb, 0, 1, &sc);
+    image_barrier(vk_cmd(), g_vk.sc_images[cur_frame.image], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    frame_rendering(VK_ATTACHMENT_LOAD_OP_CLEAR, clear);
     cur_frame.ok = true;
     return true;
 }
@@ -444,18 +529,7 @@ void vk_frame_suspend(void) {
     if (cur_frame.ok) vkCmdEndRendering(vk_cmd());
 }
 void vk_frame_resume(void) {
-    if (!cur_frame.ok) return;
-    VkCommandBuffer cb = vk_cmd();
-    VkRenderingAttachmentInfo ca = {.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, .imageView = g_vk.sc_views[cur_frame.image],
-                                    .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                                    .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD, .storeOp = VK_ATTACHMENT_STORE_OP_STORE};
-    VkRenderingInfo ri = {.sType = VK_STRUCTURE_TYPE_RENDERING_INFO, .renderArea = {{0, 0}, g_vk.sc_extent}, .layerCount = 1,
-                          .colorAttachmentCount = 1, .pColorAttachments = &ca};
-    vkCmdBeginRendering(cb, &ri);
-    VkViewport vp = {0, 0, (float)g_vk.sc_extent.width, (float)g_vk.sc_extent.height, 0, 1};
-    VkRect2D sc = {{0, 0}, g_vk.sc_extent};
-    vkCmdSetViewport(cb, 0, 1, &vp);
-    vkCmdSetScissor(cb, 0, 1, &sc);
+    if (cur_frame.ok) frame_rendering(VK_ATTACHMENT_LOAD_OP_LOAD, NULL);
 }
 
 VkExtent2D vk_frame_extent(void) { return g_vk.sc_extent; }
@@ -471,9 +545,11 @@ static void save_window_image(VkCommandBuffer cb, VkSpan *out) {
     image_barrier(cb, g_vk.sc_images[cur_frame.image], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 }
 
-// End rendering into the window image and present it. shot_path: also save the window image as PNG.
-void vk_frame_end(const char *shot_path) {
-    if (!cur_frame.ok) return;
+// End rendering into the window image and present it (present_at: on the present thread at that time; 0: now).
+// shot_path: also save the window image as PNG.
+static void frame_end(const char *shot_path, uint64_t present_at) {
+    if (!cur_frame.ok || cur_frame.off) return;
+    if (!present_at) vk_present_flush();  // (the real frame before it is shown first)
     VkCommandBuffer cb = vk_cmd();
     vkCmdEndRendering(cb);
     VkSpan shot = {0};
@@ -483,11 +559,27 @@ void vk_frame_end(const char *shot_path) {
     if (!done_sem[img]) done_sem[img] = binary_semaphore();
     uint64_t seq = vk_pending_seq();
     vk_submit_extra(cur_frame.acquired, done_sem[img], VK_NULL_HANDLE);
-    VkPresentInfoKHR pi = {.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR, .waitSemaphoreCount = 1, .pWaitSemaphores = &done_sem[img],
-                           .swapchainCount = 1, .pSwapchains = &g_vk.swapchain, .pImageIndices = &img};
-    VkResult r = vkQueuePresentKHR(g_vk.queue, &pi);
-    if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) recreate_swapchain();
-    else if (r == VK_ERROR_SURFACE_LOST_KHR) recreate_surface();
+    static int started = -1;
+    if (present_at && started < 0) {
+        pthread_t th;
+        started = pthread_create(&th, NULL, dp_main, NULL) == 0;
+        if (started) pthread_detach(th);
+        else LOG("[vk] no present thread: the real frame is presented at once\n");
+    }
+    if (present_at && started) {
+        pthread_mutex_lock(&dp_lock);
+        dp.img = img, dp.sem = done_sem[img], dp.sc = g_vk.swapchain, dp.at = present_at, dp.pending = true;
+        pthread_cond_broadcast(&dp_cond);
+        pthread_mutex_unlock(&dp_lock);
+    } else {
+        VkPresentInfoKHR pi = {.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR, .waitSemaphoreCount = 1, .pWaitSemaphores = &done_sem[img],
+                               .swapchainCount = 1, .pSwapchains = &g_vk.swapchain, .pImageIndices = &img};
+        vk_queue_lock();
+        VkResult r = vkQueuePresentKHR(g_vk.queue, &pi);
+        vk_queue_unlock();
+        if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) recreate_swapchain();
+        else if (r == VK_ERROR_SURFACE_LOST_KHR) recreate_surface();
+    }
     cur_frame.ok = false;
     if (shot_path) {
         vk_wait_seq(seq);
@@ -499,6 +591,8 @@ void vk_frame_end(const char *shot_path) {
         vk_save_png(shot_path, px, w, h);
     }
 }
+void vk_frame_end(const char *shot_path) { frame_end(shot_path, 0); }
+void vk_frame_end_at(const char *shot_path, uint64_t present_at_ns) { frame_end(shot_path, present_at_ns ? present_at_ns : 1); }
 
 #if !SDL_VERSION_ATLEAST(3, 4, 0)
 // (SDL_SavePNG is SDL 3.4; distributions ship 3.2) A plain PNG writer: RGBA8, deflate "stored" blocks.
@@ -587,10 +681,31 @@ static NvnTexture *g_last_presented;
 
 const float *vk_shot_crop(void) { return g_shot_crop; }
 
+// (frame generation shots) one of our RGBA8 images (GENERAL layout) as PNG, at <base><suffix>; waits for the GPU
+static void save_image(TexBackend *img, const char *base, const char *suffix) {
+    char path[512];
+    snprintf(path, sizeof path, "%s%s", base, suffix);
+    VkSpan out = vk_readback((uint64_t)img->width * img->height * 4);
+    VkBufferImageCopy rg = {.bufferOffset = out.off, .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                            .imageExtent = {img->width, img->height, 1}};
+    vk_full_barrier(vk_cmd());
+    vkCmdCopyImageToBuffer(vk_cmd(), img->image, VK_IMAGE_LAYOUT_GENERAL, out.buf, 1, &rg);
+    uint64_t seq = vk_pending_seq();
+    renderer_submit();
+    vk_wait_seq(seq);
+    uint8_t *px = out.ptr;
+    for (uint64_t i = 0; i < (uint64_t)img->width * img->height; i++) px[i * 4 + 3] = 255;
+    vk_save_png(path, px, img->width, img->height);
+}
+
 void backend_present(NvnTexture *t);
+static bool g_held;                 // (backend_present from backend_represent: no generated frame)
+static _Atomic float g_display_hz;  // the window's display refresh (ui_run)
 void backend_represent(void) {
+    g_held = true;
     if (g_last_presented) backend_present(g_last_presented);
     else SDL_Delay(16);
+    g_held = false;
 }
 
 void backend_present(NvnTexture *t) {
@@ -602,14 +717,39 @@ void backend_present(NvnTexture *t) {
     vk_end_pass();
     static const float black[4] = {0, 0, 0, 1};
     uint64_t t0 = SDL_GetTicksNS();
-    bool have = vk_frame_begin(black);
+    // Frame generation (Video tab; runtime/nvn/framegen.h): the game image goes to an image of ours (fg_k) first, and
+    // from there to an in-between window image (with the last frame's, fg_k ^ 1) and this frame's own
+    static int fg_k;
+    static bool fg_last_gen;
+    bool fg_on = g_settings.frame_gen != FRAMEGEN_OFF;
+#ifdef __ANDROID__
+    {   // (the display's refresh follows what the app asks for: 120 while frame generation is on)
+        static int asked = -1;
+        if (asked != fg_on) {
+            asked = fg_on;
+            if (__builtin_available(android 30, *)) {
+                ANativeWindow *aw = SDL_GetPointerProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_ANDROID_WINDOW_POINTER, NULL);
+                if (aw) ANativeWindow_setFrameRate(aw, fg_on ? 120.0f : 0.0f, ANATIVEWINDOW_FRAME_RATE_COMPATIBILITY_DEFAULT);
+            }
+        }
+    }
+#endif
+    TexBackend *fgc = NULL;
+    bool have;
+    if (fg_on && g_vk.swapchain && g_vk.sc_extent.width && g_vk.sc_extent.height) {
+        fgc = vk_framegen_image(fg_k, g_vk.sc_extent.width, g_vk.sc_extent.height);
+        vk_offscreen_begin(fgc, black);
+        have = true;
+    } else {
+        have = vk_frame_begin(black);
+    }
     uint64_t nd = SDL_GetTicksNS() - t0;
-    if (nd > 30000000) {
+    if (nd > 30000000 && !fgc) {  // (with frame generation the acquires come later)
         static int warned;
         if (warned++ < 20) LOG("[vk] acquire blocked %llums\n", (unsigned long long)(nd / 1000000));
     }
     if (have) {
-        double dw = g_vk.sc_extent.width, dh = g_vk.sc_extent.height;
+        double dw = fgc ? fgc->width : g_vk.sc_extent.width, dh = fgc ? fgc->height : g_vk.sc_extent.height;
         extern void widescreen_frame_end(uint64_t frame);
         widescreen_frame_end(total_frames);
         extern void widescreen_set_factor(float f);
@@ -633,7 +773,53 @@ void backend_present(NvnTexture *t) {
         static long menu_at = -1;
         if (menu_at < 0) menu_at = getenv("LARECOMP_MENU_AT") ? atol(getenv("LARECOMP_MENU_AT")) : 0;
         if (menu_at && (long)total_frames + 1 == menu_at) { extern void menu_test_open(void); menu_test_open(); }
-        menu_render((void *)cb, g_vk.sc_extent.width, g_vk.sc_extent.height);
+        static FgState fg_state;
+        FgFrame ff = {.w = (uint32_t)dw, .h = (uint32_t)dh, .fmt = (uint32_t)g_vk.sc_format, .now_ns = plat_now_ns(),
+                      .display_hz = atomic_load(&g_display_hz), .enabled = fgc != NULL, .held = g_held,
+                      .any_pace = getenv("LARECOMP_FRAMEGEN_ANY_PACE") != NULL};
+        memcpy(ff.crop, crop, sizeof crop);
+        bool fg_gen = framegen_step(&fg_state, &ff);
+        // LARECOMP_FRAMEGEN_SHOT=<frame>: at the first in-between frame from there, the last real frame's game image,
+        // the in-between window image and this frame's game image (LARECOMP_SHOT_PATH + _prev / _gen / _cur.png;
+        // default build/framegen)
+        static long fg_shot = -1;
+        if (fg_shot < 0) fg_shot = getenv("LARECOMP_FRAMEGEN_SHOT") ? atol(getenv("LARECOMP_FRAMEGEN_SHOT")) : 0;
+        char fg_base[480] = "";
+        if (fgc && fg_gen && fg_shot && (long)total_frames + 1 >= fg_shot) {
+            fg_shot = 0;
+            snprintf(fg_base, sizeof fg_base, "%s", getenv("LARECOMP_SHOT_PATH") ? getenv("LARECOMP_SHOT_PATH") : "build/framegen");
+        }
+        uint64_t t_gen = 0;
+        if (fgc) {
+            vk_offscreen_end();
+            TexBackend *fgp = fg_gen ? vk_framegen_image(fg_k ^ 1, fgc->width, fgc->height) : NULL;  // (outside any rendering)
+            if (fg_gen && vk_frame_begin(black)) {
+                vk_framegen_encode(vk_cmd(), fgp, fgc, 0.5f, !fg_last_gen);
+                menu_render((void *)vk_cmd(), g_vk.sc_extent.width, g_vk.sc_extent.height);
+                char gen_path[512];
+                snprintf(gen_path, sizeof gen_path, "%s_gen.png", fg_base);
+                vk_frame_end(fg_base[0] ? gen_path : NULL);
+                if (fg_base[0]) {
+                    save_image(fgp, fg_base, "_prev.png");
+                    save_image(fgc, fg_base, "_cur.png");
+                    LOG("[framegen] shot %s_prev / _gen / _cur.png\n", fg_base);
+                }
+                t_gen = plat_now_ns();
+                static bool said;
+                if (!said) said = true, LOG("[framegen] on %ux%u display %.0f Hz\n", fgc->width, fgc->height, ff.display_hz);
+            } else {
+                fg_gen = false;
+            }
+            fg_last_gen = fg_gen;
+            fg_k ^= 1;
+            if (!vk_frame_begin(black)) goto presented;
+            cb = vk_cmd();
+            vk_present_copy(cb, fgc);
+            if (fg_gen) menu_redraw((void *)cb, g_vk.sc_extent.width, g_vk.sc_extent.height);
+            else menu_render((void *)cb, g_vk.sc_extent.width, g_vk.sc_extent.height);
+        } else {
+            menu_render((void *)cb, g_vk.sc_extent.width, g_vk.sc_extent.height);
+        }
         // LARECOMP_WINDOW_SHOT=<frame> saves the window image at that frame (LARECOMP_SHOT_PATH, default
         // build/window.png); <first>:<last>[:<step>] every step-th frame in between, LARECOMP_SHOT_PATH then a printf
         // pattern taking the frame number (build/win_%05d.png) - as metal.m's LARECOMP_CG_SHOT, for comparisons
@@ -653,11 +839,13 @@ void backend_present(NvnTexture *t) {
             if (strchr(pat, '%')) snprintf(shot_path, sizeof shot_path, pat, (int)f1);
             else snprintf(shot_path, sizeof shot_path, "%s", pat);
         }
-        vk_frame_end(shot ? shot_path : NULL);
+        if (fg_gen) vk_frame_end_at(shot ? shot_path : NULL, t_gen + FG_HALF_SLOT_NS);
+        else vk_frame_end(shot ? shot_path : NULL);
         if (shot && f1 + win_step > win_b && getenv("LARECOMP_EXIT_AFTER_SHOT")) { fflush(stderr); _exit(0); }
     } else {
         renderer_submit();
     }
+presented:;  // (frame generation: no window image for this frame's own present)
     extern void vk_prof_frame(uint64_t frame, uint64_t present_ns);
     vk_prof_frame(total_frames, SDL_GetTicksNS() - t0);
     frames++;
@@ -738,9 +926,15 @@ void backend_present(NvnTexture *t) {
     prev_present = now;
     if (now - last_fps_time >= fps_iv) {
         extern const char *game_level_name(void);
+        static uint64_t fg_real0, fg_gen0;  // frame generation: generated / real frames since the last line (as metal.m)
+        char fgs[64] = "";
+        if (g_settings.frame_gen != FRAMEGEN_OFF)
+            snprintf(fgs, sizeof fgs, " gen %llu/%llu", (unsigned long long)(g_fg_generated - fg_gen0),
+                     (unsigned long long)(g_fg_real - fg_real0));
+        fg_real0 = g_fg_real, fg_gen0 = g_fg_generated;
         if (last_fps_time > 0)
-            LOG("[vk] t=%.1f frame %llu %.1f fps max %.0fms level %s (%s)\n", now, (unsigned long long)total_frames,
-                frames / (now - last_fps_time), max_gap * 1000.0, game_level_name(), renderer_stats());
+            LOG("[vk] t=%.1f frame %llu %.1f fps%s max %.0fms level %s (%s)\n", now, (unsigned long long)total_frames,
+                frames / (now - last_fps_time), fgs, max_gap * 1000.0, game_level_name(), renderer_stats());
         max_gap = 0;
         frames = 0;
         last_fps_time = now;
@@ -758,7 +952,7 @@ static void quick_exit_handler(void) {
     if (trace < 0) trace = getenv("LARECOMP_VK_TRACE") != NULL;
     if (trace) LOG("[vk] exit: waiting for the GPU\n");
     if (g_vk.dev) {
-        vkDeviceWaitIdle(g_vk.dev);
+        device_wait_idle();
         if (trace) LOG("[vk] exit: saving the pipeline cache\n");
         vk_pipeline_cache_save();
     }
@@ -814,7 +1008,7 @@ void backend_init(void) {
 // ---- in-place reboot (runtime/main.c teardown; main thread, guest threads stopped)
 void backend_reset(void) {
     if (!g_vk.dev) return;
-    vkDeviceWaitIdle(g_vk.dev);
+    device_wait_idle();
     extern void vk_textures_reset(void);
     extern void vk_exec_reset(void);
     vk_textures_reset();
@@ -844,5 +1038,6 @@ int ui_run(void) {
             input_handle_event(&e);
         }
         menu_apply_window_requests(window);
+        atomic_store(&g_display_hz, framegen_display_hz(window));  // (SDL's display state: read on this thread)
     }
 }

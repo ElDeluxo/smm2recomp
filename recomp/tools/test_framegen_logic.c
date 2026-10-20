@@ -79,6 +79,15 @@ static void test_low_refresh_skips(void) {
     f.now_ns += SLOT; CHECK(framegen_step(&s, &f));
 }
 
+static void test_any_pace(void) {  // (LARECOMP_FRAMEGEN_ANY_PACE: slow software renderers in tests)
+    FgState s = {0};
+    FgFrame f = base(SLOT);
+    f.any_pace = true;
+    framegen_step(&s, &f);
+    f.now_ns += 140000000; CHECK(framegen_step(&s, &f));
+    f.now_ns += 140000000; f.w = 1280; CHECK(!framegen_step(&s, &f));  // (still not across a size change)
+}
+
 static void test_counters(void) {
     g_fg_real = g_fg_generated = 0;
     FgState s = {0};
@@ -95,7 +104,7 @@ int main(void) {
         {"test_first_frame_real", test_first_frame_real}, {"test_enable_resets", test_enable_resets},
         {"test_size_change_resets", test_size_change_resets}, {"test_gap_bounds", test_gap_bounds},
         {"test_held_resets", test_held_resets}, {"test_low_refresh_skips", test_low_refresh_skips},
-        {"test_counters", test_counters},
+        {"test_any_pace", test_any_pace}, {"test_counters", test_counters},
     };
     int bad = 0;
     for (size_t i = 0; i < sizeof t / sizeof t[0]; i++) {

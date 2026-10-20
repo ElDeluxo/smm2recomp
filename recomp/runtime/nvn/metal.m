@@ -1265,7 +1265,8 @@ void backend_present(NvnTexture *t) {
         static bool fg_last_gen;
         FgFrame ff = {.w = (uint32_t)drawable.texture.width, .h = (uint32_t)drawable.texture.height,
                       .fmt = (uint32_t)drawable.texture.pixelFormat, .now_ns = plat_now_ns(),
-                      .display_hz = atomic_load(&g_display_hz), .enabled = fg_on, .held = g_held || g_back_from_bg};
+                      .display_hz = atomic_load(&g_display_hz), .enabled = fg_on, .held = g_held || g_back_from_bg,
+                      .any_pace = getenv("LARECOMP_FRAMEGEN_ANY_PACE") != NULL};
         memcpy(ff.crop, crop, sizeof crop);
         bool fg_gen = framegen_step(&fg_state, &ff);
         g_back_from_bg = false;

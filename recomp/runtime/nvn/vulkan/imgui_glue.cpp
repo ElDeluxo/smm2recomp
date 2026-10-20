@@ -20,7 +20,8 @@ extern "C" bool vk_imgui_backend_init(void) {
     ii.Queue = g_vk.queue;
     ii.DescriptorPoolSize = 64;
     ii.MinImageCount = 2;
-    ii.ImageCount = (g_vk.sc_count > 3 ? g_vk.sc_count : 3) + 1;  // vertex buffers rotate per image: cover frames in flight
+    // vertex buffers rotate per draw: cover frames in flight, two draws each with frame generation (menu_redraw)
+    ii.ImageCount = 2 * (g_vk.sc_count > 3 ? g_vk.sc_count : 3) + 1;
     ii.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
     ii.PipelineCache = g_vk.pcache;
     ii.UseDynamicRendering = true;
@@ -34,7 +35,10 @@ extern "C" bool vk_imgui_backend_init(void) {
 
 extern "C" void vk_imgui_backend_shutdown(void) {
     if (!ImGui::GetIO().BackendRendererUserData) return;
+    vk_present_flush();
+    vk_queue_lock();
     vkDeviceWaitIdle(g_vk.dev);
+    vk_queue_unlock();
     ImGui_ImplVulkan_Shutdown();
 }
 

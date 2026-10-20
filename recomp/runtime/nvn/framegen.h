@@ -15,6 +15,7 @@ typedef struct {
     float display_hz;     // the window's display refresh (SDL), 0 = unknown
     bool enabled;         // g_settings.frame_gen != FRAMEGEN_OFF
     bool held;            // a re-present while the game is held (backend_represent / iOS background)
+    bool any_pace;        // (tests on slow software renderers, LARECOMP_FRAMEGEN_ANY_PACE=1: no 12-22 ms gap rule)
 } FgFrame;
 typedef struct { bool valid; uint32_t w, h, fmt; float crop[4]; uint64_t last_ns; } FgState;
 

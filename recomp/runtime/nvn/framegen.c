@@ -21,7 +21,7 @@ bool framegen_step(FgState *s, const FgFrame *f) {
     }
     uint64_t gap = f->now_ns - s->last_ns;
     bool gen = s->valid && s->w == f->w && s->h == f->h && s->fmt == f->fmt && !memcmp(s->crop, f->crop, sizeof s->crop) &&
-               gap >= 12000000 && gap <= 22000000 && f->display_hz >= 100;
+               (f->any_pace || (gap >= 12000000 && gap <= 22000000)) && f->display_hz >= 100;
     s->valid = true;
     s->w = f->w, s->h = f->h, s->fmt = f->fmt;
     memcpy(s->crop, f->crop, sizeof s->crop);
