@@ -292,6 +292,12 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     100 Mario shows Endless for about a second. The ZL / ZR switch itself is much better now.
   - ⬜ The transition from 100 Mario's map / card into the course isn't exact yet, and lags slightly. Needs
     more testing and tuning against SMM1 and SMM2.
+- ⬜ **3D World rendering on the iPad (owner's screenshot, 2026-10-20; 3D World ground course, Metal):**
+  - ⬜ Mario's model has a grainy, speckled look across his face and overalls, like noise or broken dithering.
+    It's not how he looks on the console. Compare the same frame with Ryujinx; suspects are his shading or AO
+    pass and texture or sampler state on the iPad's GPU. The Vulkan NaN blur at his eyes (line 98) may be related.
+  - ⬜ The water in the background looks a bit too shiny. The 3D World liquid surfaces already differ most from
+    Ryujinx (castle lava 2.28 % px > 24), so check specular and reflection on liquids.
 
 ### Future (owner's backlog, not scheduled)
 - 🔄 **120 fps output by frame generation** (owner, 2026-10-19): built 2026-10-20 (Video tab, `frame_gen`,
