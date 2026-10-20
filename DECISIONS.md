@@ -1716,3 +1716,31 @@ of Nextendo's PolyForm-Shield or citron's GPL code), written from public protoco
 behaviour. The same pieces are the "local NEX server" route.
 **Would change:** the owner's go-ahead with Nextendo's permission and registration (public redirect targets and a
 pinned CA behind an explicit setting); a game server that needs TLS 1.3.
+
+## 2026-10-20 — Frame generation: our own interpolation, the game stays at 60
+
+**Decision:** a Video-tab setting, "Frame generation: Off / 120 fps" (`frame_gen` in `smm2.ini`, off by default),
+shows one generated frame between each pair of real frames on displays of 100 Hz and more.
+- **The game logic stays at 60 Hz.** SMM2 moves one fixed step per present, and `display_pace` keeps the presents
+  at 60. Unlocking that speeds the game up and breaks the input-replay match with Ryujinx. The generated frames
+  exist only on the screen: the player traces of a scripted run are identical with the setting off and on.
+- **Our own interpolation, not Apple's MTLFXFrameInterpolator.** That API wants the engine's depth and motion
+  vectors, and the runtime only sees the finished colour image at present time. So motion is estimated from
+  consecutive frames:
+  - a luma pyramid, then block matching coarse to fine (1/16, 1/8, 1/4, then 1 px)
+  - the median of the neighbouring vectors as a cost-checked candidate
+  - a warp that tries each block's vector and its neighbours' for every pixel
+  - fallbacks: the still pixel, one real image where something appears or disappears, and the previous frame on a
+    scene cut
+  One source serves both backends (`runtime/nvn/framegen_src.c`: MSL and GLSL), so Metal (macOS, iOS) and Vulkan
+  (Windows, Linux, Android) behave the same.
+- **Presentation:** the generated frame is presented at once and the real one 1/120 s later
+  (`presentDrawable:afterMinimumDuration:` on Metal; a present thread on Vulkan, with every submit, present and
+  device wait under one queue lock). This costs about 8 ms of input lag. The menu is never interpolated: it is built
+  once per real frame and drawn on both images.
+- **No generation below 100 Hz**, after a hitch (real frames not 12-22 ms apart: also the game's 30 fps mode), across
+  a size, format or crop change, and while the game is held.
+**Why:** the owner asked for an fps unlock "done with frame gen" (2026-10-20); true high-fps rendering (hooking
+object and camera transforms) was judged far too invasive.
+**Would change:** engine-side motion vectors (would allow MetalFX's interpolator or FSR 3), or rates above 120
+(the passes already take a phase `t`).

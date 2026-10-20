@@ -387,7 +387,9 @@ void vk_submit_extra(VkSemaphore wait, VkSemaphore signal, VkCommandBuffer extra
     {
         PROF_T0();
         dl_note("submit %llu", (unsigned long long)submit_seq + 1);
+        vk_queue_lock();  // (shared with device.c's present thread)
         VkResult sr = vkQueueSubmit2(g_vk.queue, 1, &si, VK_NULL_HANDLE);
+        vk_queue_unlock();
         if (sr == VK_ERROR_DEVICE_LOST) vk_devlost_dump();
         VK_CHECK(sr);
         PROF_ADD(prof_submit);
@@ -3694,18 +3696,19 @@ static VkImageView raw_view(TexBackend *b) {
 // ---- post passes (Video tab "Anti-aliasing" / "Upscaler"): SMAA 1x at the game image's size, then AMD FSR 1 (EASU
 // upscale to the image's size in the window, RCAS sharpen) when it is smaller than its place in the window, as
 // metal.m does with MetalFX. Each pass: a fullscreen triangle into an RGBA8 image (gamma-encoded, like the input);
-// up to three inputs (bindings 0-2), sampled linear / clamp.
+// up to four inputs (bindings 0-3), sampled linear / clamp. Frame generation's passes (framegen_src.c) are post passes
+// too, some into RGBA16F images.
 static VkPipelineLayout post_layout;
 static VkDescriptorSetLayout post_set_layout;
 
-static VkPipeline post_pipeline(const char *fs) {
-    static struct { const char *fs; VkPipeline p; } cache[8];
-    for (int i = 0; i < 8; i++) if (cache[i].p && cache[i].fs == fs) return cache[i].p;
+static VkPipeline post_pipeline(const char *fs, VkFormat fmt) {
+    static struct { const char *fs; VkFormat f; VkPipeline p; } cache[16];
+    for (int i = 0; i < 16; i++) if (cache[i].p && cache[i].fs == fs && cache[i].f == fmt) return cache[i].p;
     if (!post_layout) {
-        VkDescriptorSetLayoutBinding b[3];
-        for (uint32_t i = 0; i < 3; i++)
+        VkDescriptorSetLayoutBinding b[4];
+        for (uint32_t i = 0; i < 4; i++)
             b[i] = (VkDescriptorSetLayoutBinding){i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, NULL};
-        VkDescriptorSetLayoutCreateInfo li = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, .bindingCount = 3, .pBindings = b};
+        VkDescriptorSetLayoutCreateInfo li = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, .bindingCount = 4, .pBindings = b};
         VK_CHECK(vkCreateDescriptorSetLayout(g_vk.dev, &li, NULL, &post_set_layout));
         VkPushConstantRange r = {VK_SHADER_STAGE_FRAGMENT_BIT, 0, 32};
         VkPipelineLayoutCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO, .setLayoutCount = 1,
@@ -3730,7 +3733,6 @@ static VkPipeline post_pipeline(const char *fs) {
                                               .pAttachments = &cba};
     VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
     VkPipelineDynamicStateCreateInfo dy = {.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO, .dynamicStateCount = 2, .pDynamicStates = dyn};
-    VkFormat fmt = VK_FORMAT_R8G8B8A8_UNORM;
     VkPipelineRenderingCreateInfo ri = {.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO, .colorAttachmentCount = 1,
                                         .pColorAttachmentFormats = &fmt};
     VkPipelineDepthStencilStateCreateInfo ds = {.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
@@ -3740,16 +3742,17 @@ static VkPipeline post_pipeline(const char *fs) {
                                        .pColorBlendState = &cb, .pDynamicState = &dy, .layout = post_layout};
     VkPipeline p;
     VK_CHECK(vkCreateGraphicsPipelines(g_vk.dev, g_vk.pcache, 1, &pi, NULL, &p));
-    for (int i = 0; i < 8; i++) if (!cache[i].p) { cache[i].fs = fs; cache[i].p = p; break; }
+    for (int i = 0; i < 16; i++) if (!cache[i].p) { cache[i].fs = fs; cache[i].f = fmt; cache[i].p = p; break; }
     return p;
 }
 
-// Post image `i` at w x h (RGBA8, kept until the size changes). 0, 1: SMAA edges / weights, 2: SMAA output,
-// 3, 4: FSR EASU / RCAS.
-static TexBackend *post_image(int i, uint32_t w, uint32_t h) {
-    static TexBackend img[5];
+// Post image `i` at w x h in format f (kept until the size changes). 0, 1: SMAA edges / weights, 2: SMAA output,
+// 3, 4: FSR EASU / RCAS; frame generation's: FG_IMAGES on.
+enum { FG_GAME = 5, FG_PYR = 7, FG_MOT = 13, FG_MED = 16, FG_ROWS = 18, FG_TOTAL = 19, FG_DUMMY = 20, N_POST = 21 };
+static TexBackend *post_image(int i, uint32_t w, uint32_t h, VkFormat f) {
+    static TexBackend img[N_POST];
     TexBackend *d = &img[i];
-    if (d->image && (d->width != w || d->height != h)) {
+    if (d->image && (d->width != w || d->height != h || d->format != f)) {
         vk_views_forget(d);
         vk_defer_image(d->image, d->mem);
         d->image = VK_NULL_HANDLE;
@@ -3757,12 +3760,12 @@ static TexBackend *post_image(int i, uint32_t w, uint32_t h) {
     }
     if (!d->image) {
         VkImageCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D,
-                                .format = VK_FORMAT_R8G8B8A8_UNORM, .extent = {w, h, 1}, .mipLevels = 1, .arrayLayers = 1,
+                                .format = f, .extent = {w, h, 1}, .mipLevels = 1, .arrayLayers = 1,
                                 .samples = VK_SAMPLE_COUNT_1_BIT, .tiling = VK_IMAGE_TILING_OPTIMAL,
                                 .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT};
         VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
         VK_CHECK(vmaCreateImage(g_vk.vma, &ci, &ai, &d->image, &d->mem, NULL));
-        d->format = VK_FORMAT_R8G8B8A8_UNORM; d->width = w; d->height = h; d->depth = 1; d->layers = 1; d->levels = 1;
+        d->format = f; d->width = w; d->height = h; d->depth = 1; d->layers = 1; d->levels = 1;
         d->samples = 1; d->aspect = VK_IMAGE_ASPECT_COLOR_BIT; d->base_type = VK_IMAGE_VIEW_TYPE_2D;
         vk_image_init_layout(vk_cmd(), d->image, d->aspect);
     }
@@ -3803,7 +3806,7 @@ static VkImageView smaa_lut(int i) {
 // clear: start from zero (SMAA's edge pass only writes edge pixels; its weights / output read them).
 static void post_pass(VkCommandBuffer cb, const char *fs, const VkImageView *srcs, int n, TexBackend *dst, const float pc[8],
                       bool clear) {
-    VkPipeline pipe = post_pipeline(fs);  // (before the rendering begins: created inside it, the NVIDIA driver crashed)
+    VkPipeline pipe = post_pipeline(fs, dst->format);  // (before the rendering begins: created inside it, the NVIDIA driver crashed)
     vk_full_barrier(cb);
     VkRenderingAttachmentInfo ca = {.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, .imageView = post_view(dst),
                                     .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
@@ -3813,8 +3816,8 @@ static void post_pass(VkCommandBuffer cb, const char *fs, const VkImageView *src
                           .layerCount = 1, .colorAttachmentCount = 1, .pColorAttachments = &ca};
     vkCmdBeginRendering(cb, &ri);
     VkDescriptorSet ds = vk_alloc_set(post_set_layout);
-    VkDescriptorImageInfo ii[3];
-    VkWriteDescriptorSet w[3];
+    VkDescriptorImageInfo ii[4];
+    VkWriteDescriptorSet w[4];
     for (int i = 0; i < n; i++) {
         ii[i] = (VkDescriptorImageInfo){vk_default_sampler(true), srcs[i], VK_IMAGE_LAYOUT_GENERAL};
         w[i] = (VkWriteDescriptorSet){.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = ds, .dstBinding = (uint32_t)i,
@@ -3849,8 +3852,8 @@ static VkImageView post_process(VkCommandBuffer cb, TexBackend *b, double ow_d, 
     if (smaa) {  // SMAA 1x: luma edges -> blending weights -> neighbourhood blending
         float w = (float)b->width, h = (float)b->height;
         float m[8] = {1.0f / w, 1.0f / h, w, h};
-        TexBackend *edges = post_image(0, b->width, b->height), *weights = post_image(1, b->width, b->height);
-        TexBackend *out = post_image(2, b->width, b->height);
+        TexBackend *edges = post_image(0, b->width, b->height, VK_FORMAT_R8G8B8A8_UNORM), *weights = post_image(1, b->width, b->height, VK_FORMAT_R8G8B8A8_UNORM);
+        TexBackend *out = post_image(2, b->width, b->height, VK_FORMAT_R8G8B8A8_UNORM);
         VkImageView in[3] = {v};
         post_pass(cb, "smaa_edge.frag", in, 1, edges, m, true);
         VkImageView wi[3] = {post_view(edges), smaa_lut(0), smaa_lut(1)};
@@ -3861,7 +3864,7 @@ static VkImageView post_process(VkCommandBuffer cb, TexBackend *b, double ow_d, 
     }
     if (fsr) {
         float iw = (float)b->width, ih = (float)b->height;
-        TexBackend *e = post_image(3, ow, oh), *r = post_image(4, ow, oh);
+        TexBackend *e = post_image(3, ow, oh, VK_FORMAT_R8G8B8A8_UNORM), *r = post_image(4, ow, oh, VK_FORMAT_R8G8B8A8_UNORM);
         float pe[8] = {iw / ow, ih / oh, 0.5f * iw / ow - 0.5f, 0.5f * ih / oh - 0.5f, iw, ih};
         VkImageView ei[3] = {v};
         post_pass(cb, "easu.frag", ei, 1, e, pe, false);
@@ -3886,7 +3889,7 @@ static VkImageView post_process(VkCommandBuffer cb, TexBackend *b, double ow_d, 
 void vk_present_draw(VkCommandBuffer cb, TexBackend *b, float vx, float vy, float vw, float vh, const float pv[8]) {
     if (!b || !b->image || (b->aspect & ~VK_IMAGE_ASPECT_COLOR_BIT)) return;
     VkImageView src = post_process(cb, b, pv[6] > 0 ? vw / pv[6] : vw, pv[7] > 0 ? vh / pv[7] : vh);
-    VkPipeline p = present_pipeline(g_vk.sc_format);
+    VkPipeline p = present_pipeline(vk_frame_format());
     VkDescriptorSet ds = vk_alloc_set(present_set_layout);
     VkDescriptorImageInfo ii = {vk_default_sampler(true), src, VK_IMAGE_LAYOUT_GENERAL};
     VkWriteDescriptorSet w = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = ds, .dstBinding = 0, .descriptorCount = 1,
@@ -3900,6 +3903,109 @@ void vk_present_draw(VkCommandBuffer cb, TexBackend *b, float vx, float vy, floa
     vkCmdDraw(cb, 3, 1, 0, 0);
     VkViewport full = {0, 0, (float)g_vk.sc_extent.width, (float)g_vk.sc_extent.height, 0, 1};
     vkCmdSetViewport(cb, 0, 1, &full);
+}
+
+// ---- frame generation (runtime/nvn/framegen.h; the passes: framegen_src.c, as framegen_metal.m encodes them)
+TexBackend *vk_framegen_image(int i, uint32_t w, uint32_t h) { return post_image(FG_GAME + i, w, h, VK_FORMAT_R8G8B8A8_UNORM); }
+
+// Inside the window image's rendering: src over all of it
+void vk_present_copy(VkCommandBuffer cb, TexBackend *src) {
+    static const float pv[8] = {0, 0, 0, 0, 0, 0, 1, 1};  // (no flip: our own image is upright; the whole of it)
+    VkPipeline p = present_pipeline(vk_frame_format());
+    VkDescriptorSet ds = vk_alloc_set(present_set_layout);
+    VkDescriptorImageInfo ii = {vk_default_sampler(true), post_view(src), VK_IMAGE_LAYOUT_GENERAL};
+    VkWriteDescriptorSet w = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = ds, .dstBinding = 0, .descriptorCount = 1,
+                              .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .pImageInfo = &ii};
+    vkUpdateDescriptorSets(g_vk.dev, 1, &w, 0, NULL);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, p);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, present_layout, 0, 1, &ds, 0, NULL);
+    VkViewport vp = {0, 0, (float)g_vk.sc_extent.width, (float)g_vk.sc_extent.height, 0, 1};
+    vkCmdSetViewport(cb, 0, 1, &vp);
+    vkCmdPushConstants(cb, present_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, 32, pv);
+    vkCmdDraw(cb, 3, 1, 0, 0);
+}
+
+static void fg_pass(VkCommandBuffer cb, const char *fs, TexBackend *const in[4], TexBackend *dst, const float a[4], const float b[4]) {
+    VkImageView v[4];
+    for (int i = 0; i < 4; i++) v[i] = post_view(in[i]);
+    float pc[8] = {a[0], a[1], a[2], a[3], b[0], b[1], b[2], b[3]};
+    post_pass(cb, fs, v, 4, dst, pc, false);
+}
+
+void vk_framegen_encode(VkCommandBuffer cb, TexBackend *prev, TexBackend *cur, float t, bool reset) {
+    static int k;  // pyramid / final motion k: this frame's; k ^ 1: the last frame's
+    static bool have_prev_pyr, have_last;
+    static uint32_t lw, lh;
+    const VkFormat R8 = VK_FORMAT_R8G8B8A8_UNORM, F16 = VK_FORMAT_R16G16B16A16_SFLOAT;
+    uint32_t W = cur->width, H = cur->height;
+    if (W != lw || H != lh) reset = true, lw = W, lh = H;
+    if (reset) have_prev_pyr = have_last = false;
+    extern void vk_frame_suspend(void);
+    extern void vk_frame_resume(void);
+    vk_frame_suspend();  // (before the images: a new one's first layout is a barrier, not allowed inside a rendering)
+    uint32_t lv[3][2];
+    lv[0][0] = (W + 3) / 4, lv[0][1] = (H + 3) / 4;
+    for (int i = 1; i < 3; i++) lv[i][0] = (lv[i - 1][0] + 1) / 2, lv[i][1] = (lv[i - 1][1] + 1) / 2;
+    TexBackend *pyr[2][3], *mot[3], *med[2];
+    for (int j = 0; j < 2; j++)
+        for (int i = 0; i < 3; i++) pyr[j][i] = post_image(FG_PYR + j * 3 + i, lv[i][0], lv[i][1], R8);
+    for (int i = 0; i < 3; i++) mot[i] = post_image(FG_MOT + i, (lv[i][0] + 3) / 4, (lv[i][1] + 3) / 4, F16);
+    for (int j = 0; j < 2; j++) med[j] = post_image(FG_MED + j, mot[0]->width, mot[0]->height, F16);
+    TexBackend *rows = post_image(FG_ROWS, 1, mot[0]->height, F16), *total = post_image(FG_TOTAL, 1, 1, F16);
+    TexBackend *dummy = post_image(FG_DUMMY, 1, 1, F16);
+    const float z[4] = {0};
+    for (int which = have_prev_pyr ? 1 : 0; which < 2; which++) {  // this frame's pyramid (and the last one's if none is kept)
+        TexBackend **p = which ? pyr[k] : pyr[k ^ 1];
+        TexBackend *in[4] = {which ? cur : prev, dummy, dummy, dummy};
+        float a[4] = {(float)W, (float)H};
+        fg_pass(cb, "fg_luma.frag", in, p[0], a, z);
+        for (int i = 1; i < 3; i++) {
+            TexBackend *di[4] = {p[i - 1], dummy, dummy, dummy};
+            float da[4] = {(float)p[i - 1]->width, (float)p[i - 1]->height};
+            fg_pass(cb, "fg_down.frag", di, p[i], da, z);
+        }
+    }
+    for (int i = 2; i >= 0; i--) {  // motion, coarse (1/16, +-4 texels) to fine (1/8, 1/4: +-2 around the coarser vector)
+        TexBackend *in[4] = {pyr[k][i], pyr[k ^ 1][i], i < 2 ? mot[i + 1] : dummy, have_last ? med[k ^ 1] : dummy};
+        float a[4] = {(float)(4 << i), i == 2 ? 4.0f : 2.0f, i < 2 ? 1.0f : 0.0f, i == 2 && have_last ? 1.0f : 0.0f};
+        float b[4] = {(float)lv[i][0], (float)lv[i][1], (float)W, (float)H};
+        fg_pass(cb, "fg_motion.frag", in, mot[i], a, b);
+    }
+    {
+        TexBackend *in[4] = {mot[0], pyr[k][0], pyr[k ^ 1][0], dummy};
+        float ma[4] = {(float)lv[0][0], (float)lv[0][1]};
+        fg_pass(cb, "fg_median.frag", in, med[k], ma, z);
+        TexBackend *ri[4] = {med[k], dummy, dummy, dummy};
+        float ra[4] = {(float)med[k]->width};
+        fg_pass(cb, "fg_cost_rows.frag", ri, rows, ra, z);
+        TexBackend *ti[4] = {rows, dummy, dummy, dummy};
+        float ta[4] = {(float)rows->height};
+        fg_pass(cb, "fg_cost_total.frag", ti, total, ta, z);
+    }
+    // the warp, into the window image (its pipeline made before the rendering resumes, as post_pass does)
+    VkPipeline wp = post_pipeline("fg_warp.frag", vk_frame_format());
+    vk_full_barrier(cb);
+    vk_frame_resume();
+    VkDescriptorSet ds = vk_alloc_set(post_set_layout);
+    TexBackend *wi[4] = {prev, cur, med[k], total};
+    VkDescriptorImageInfo ii[4];
+    VkWriteDescriptorSet w[4];
+    for (int i = 0; i < 4; i++) {
+        ii[i] = (VkDescriptorImageInfo){vk_default_sampler(true), post_view(wi[i]), VK_IMAGE_LAYOUT_GENERAL};
+        w[i] = (VkWriteDescriptorSet){.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = ds, .dstBinding = (uint32_t)i,
+                                      .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                      .pImageInfo = &ii[i]};
+    }
+    vkUpdateDescriptorSets(g_vk.dev, 4, w, 0, NULL);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, wp);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, post_layout, 0, 1, &ds, 0, NULL);
+    VkViewport vp = {0, 0, (float)W, (float)H, 0, 1};
+    vkCmdSetViewport(cb, 0, 1, &vp);
+    float pc[8] = {t, (float)W, (float)H, 0};
+    vkCmdPushConstants(cb, post_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, 32, pc);
+    vkCmdDraw(cb, 3, 1, 0, 0);
+    have_prev_pyr = have_last = true;
+    k ^= 1;
 }
 
 // Screenshot of a game texture (presented crop applied to build/frame_* shots), via the present shader into RGBA8.

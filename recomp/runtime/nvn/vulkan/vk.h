@@ -114,3 +114,16 @@ VkShaderModule vk_builtin_shader(const char *name);  // internal shaders (clear,
 
 // ---- device / window (device.c)
 void vk_save_png(const char *path, const uint8_t *rgba, uint32_t w, uint32_t h);
+// Frame generation (runtime/nvn/framegen.h): the real frame's present runs on a present thread, 1/120 s after the
+// generated one; every submit, present and device wait takes the queue lock.
+void vk_queue_lock(void);
+void vk_queue_unlock(void);
+void vk_present_flush(void);                                           // wait until a deferred present was issued
+void vk_frame_end_at(const char *shot_path, uint64_t present_at_ns);   // vk_frame_end, presented at that time
+VkFormat vk_frame_format(void);                                        // the format being rendered into
+void vk_offscreen_begin(TexBackend *img, const float clear[4]);        // render into img (GENERAL) like a window image
+void vk_offscreen_end(void);
+// exec.c
+TexBackend *vk_framegen_image(int i, uint32_t w, uint32_t h);          // game images 0 / 1: RGBA8, the window's size
+void vk_framegen_encode(VkCommandBuffer cb, TexBackend *prev, TexBackend *cur, float t, bool reset);  // into the window image
+void vk_present_copy(VkCommandBuffer cb, TexBackend *src);             // src over the whole window image

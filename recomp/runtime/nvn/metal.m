@@ -20,6 +20,7 @@
 #define HAVE_METALFX 1
 #endif
 #include "output_scale.h"
+#include "framegen.h"
 #import <QuartzCore/CAMetalLayer.h>
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_metal.h>
@@ -1083,13 +1084,19 @@ void renderer_save_texture(id<MTLTexture> tex, const char *path) {
 // ================================================================== present
 
 static double last_fps_time;
+static _Atomic float g_display_hz;  // the window's display refresh (ui_run)
+static _Atomic uint64_t g_fg_shown;  // in-between frames the display actually showed (a presented handler with a time)
 
 void backend_present(NvnTexture *t);
+static bool g_held;          // (backend_present from backend_represent: no generated frame)
+static bool g_back_from_bg;  // (the first present after the iOS background: none either)
 // Present the last frame again (the game thread waits in a host dialog, e.g. the software keyboard): the overlay
 // keeps drawing and taking input.
 void backend_represent(void) {
+    g_held = true;
     if (g_last_presented) backend_present(g_last_presented);
     else SDL_Delay(16);
+    g_held = false;
 }
 
 // Our window's image from the window server (CGWindowListCreateImage, looked up at run time: it is deprecated in
@@ -1137,6 +1144,7 @@ static bool SDLCALL app_state_watch(void *userdata, SDL_Event *e) {
 }
 static void wait_while_in_background(void) {
     if (!atomic_load(&g_in_background)) return;
+    g_back_from_bg = true;
     LOG("[metal] the app is in the background: the game waits\n");
     while (atomic_load(&g_in_background)) usleep(20000);
     LOG("[metal] back in the foreground\n");
@@ -1161,9 +1169,28 @@ void backend_present(NvnTexture *t) {
             if (warned++ < 20) LOG("[metal] nextDrawable blocked %llums\n", (unsigned long long)(nd / 1000000));
         }
         if (!drawable) return;
-        id<MTLCommandBuffer> cb = [queue commandBuffer];
+        __block id<MTLCommandBuffer> cb = [queue commandBuffer];  // (__block: frame generation commits it and starts another)
+        // Frame generation (Video tab; runtime/nvn/framegen.h): the game image goes to fg_cur, and from there to an
+        // in-between drawable (with fg_prev) and this frame's own
+        static id<MTLTexture> fg_prev, fg_cur;
+        bool fg_on = g_settings.frame_gen != FRAMEGEN_OFF;
+        if (fg_on) {
+            for (int i = 0; i < 2; i++) {
+                id<MTLTexture> __strong *t = i ? &fg_cur : &fg_prev;
+                if (*t && (*t).width == drawable.texture.width && (*t).height == drawable.texture.height &&
+                    (*t).pixelFormat == drawable.texture.pixelFormat) continue;
+                MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:drawable.texture.pixelFormat
+                                             width:drawable.texture.width height:drawable.texture.height mipmapped:NO];
+                td.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+                td.storageMode = MTLStorageModePrivate;
+                *t = [dev newTextureWithDescriptor:td];
+            }
+        } else {
+            fg_prev = fg_cur = nil;
+        }
+        id<MTLTexture> dst = fg_on ? fg_cur : drawable.texture;
         MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
-        rp.colorAttachments[0].texture = drawable.texture;
+        rp.colorAttachments[0].texture = dst;
         rp.colorAttachments[0].loadAction = MTLLoadActionClear;
         rp.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1);
         rp.colorAttachments[0].storeAction = MTLStoreActionStore;
@@ -1206,7 +1233,7 @@ void backend_present(NvnTexture *t) {
                 [enc endEncoding];
                 src = smaa_encode(cb, src);
                 MTLRenderPassDescriptor *rp2 = [MTLRenderPassDescriptor renderPassDescriptor];
-                rp2.colorAttachments[0].texture = drawable.texture;
+                rp2.colorAttachments[0].texture = dst;
                 rp2.colorAttachments[0].loadAction = MTLLoadActionLoad;
                 rp2.colorAttachments[0].storeAction = MTLStoreActionStore;
                 enc = [cb renderCommandEncoderWithDescriptor:rp2];
@@ -1220,7 +1247,7 @@ void backend_present(NvnTexture *t) {
                 [enc endEncoding];
                 up = metalfx_encode(cb, src);
                 MTLRenderPassDescriptor *rp2 = [MTLRenderPassDescriptor renderPassDescriptor];
-                rp2.colorAttachments[0].texture = drawable.texture;
+                rp2.colorAttachments[0].texture = dst;
                 rp2.colorAttachments[0].loadAction = MTLLoadActionLoad;
                 rp2.colorAttachments[0].storeAction = MTLStoreActionStore;
                 enc = [cb renderCommandEncoderWithDescriptor:rp2];
@@ -1240,7 +1267,87 @@ void backend_present(NvnTexture *t) {
         static long menu_at = -1;  // test hook: open the menu at this frame (LARECOMP_MENU_AT)
         if (menu_at < 0) menu_at = getenv("LARECOMP_MENU_AT") ? atol(getenv("LARECOMP_MENU_AT")) : 0;
         if (menu_at && (long)total_frames + 1 == menu_at) { extern void menu_test_open(void); menu_test_open(); }
-        menu_render(dev, cb, drawable.texture);
+        static FgState fg_state;
+        static bool fg_last_gen;
+        FgFrame ff = {.w = (uint32_t)drawable.texture.width, .h = (uint32_t)drawable.texture.height,
+                      .fmt = (uint32_t)drawable.texture.pixelFormat, .now_ns = plat_now_ns(),
+                      .display_hz = atomic_load(&g_display_hz), .enabled = fg_on, .held = g_held || g_back_from_bg,
+                      .any_pace = getenv("LARECOMP_FRAMEGEN_ANY_PACE") != NULL};
+        memcpy(ff.crop, crop, sizeof crop);
+        bool fg_gen = framegen_step(&fg_state, &ff);
+        g_back_from_bg = false;
+        static id<MTLTexture> fg_three;  // (LARECOMP_FRAMEGEN_SHOT: saved once this frame's work is done)
+        if (fg_on) {
+            static long fg_shot = -1;  // LARECOMP_FRAMEGEN_SHOT=<frame>: prev | generated | cur side by side (LARECOMP_SHOT_PATH)
+            if (fg_shot < 0) fg_shot = getenv("LARECOMP_FRAMEGEN_SHOT") ? atol(getenv("LARECOMP_FRAMEGEN_SHOT")) : 0;
+            bool shot3 = fg_gen && fg_shot && (long)total_frames + 1 >= fg_shot;
+            id<MTLTexture> gen_tex = drawable.texture;
+            if (shot3) {
+                MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:fg_cur.pixelFormat
+                                             width:fg_cur.width height:fg_cur.height mipmapped:NO];
+                td.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+                gen_tex = [dev newTextureWithDescriptor:td];
+            }
+            if (fg_gen && !fgm_encode(dev, cb, fg_prev, fg_cur, 0.5f, !fg_last_gen, gen_tex)) fg_gen = false;
+            fg_last_gen = fg_gen;
+            // (a drawable can only be drawn into: copies to it are draws)
+            void (^copy_to)(id<MTLTexture>, id<MTLTexture>) = ^(id<MTLTexture> from, id<MTLTexture> to) {
+                MTLRenderPassDescriptor *cp = [MTLRenderPassDescriptor renderPassDescriptor];
+                cp.colorAttachments[0].texture = to;
+                cp.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+                cp.colorAttachments[0].storeAction = MTLStoreActionStore;
+                id<MTLRenderCommandEncoder> ce = [cb renderCommandEncoderWithDescriptor:cp];
+                float cv[8] = {0, 0, 0, 0, 0, 0, 1, 1};
+                [ce setRenderPipelineState:present_pipe];
+                [ce setVertexBytes:cv length:sizeof cv atIndex:0];
+                [ce setFragmentTexture:from atIndex:0];
+                [ce setFragmentSamplerState:present_sampler atIndex:0];
+                [ce drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+                [ce endEncoding];
+            };
+            if (fg_gen) {
+                static bool said;
+                if (!said) { said = true; LOG("[framegen] on %lux%lu display %.0f Hz\n", (unsigned long)fg_cur.width,
+                                              (unsigned long)fg_cur.height, ff.display_hz); }
+                if (shot3) {
+                    fg_shot = 0;
+                    MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:fg_cur.pixelFormat
+                                                 width:fg_cur.width * 3 height:fg_cur.height mipmapped:NO];
+                    td.usage = MTLTextureUsageShaderRead;
+                    id<MTLTexture> three = [dev newTextureWithDescriptor:td];
+                    id<MTLBlitCommandEncoder> bl = [cb blitCommandEncoder];
+                    id<MTLTexture> parts[3] = {fg_prev, gen_tex, fg_cur};
+                    for (int i = 0; i < 3; i++)
+                        [bl copyFromTexture:parts[i] sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0)
+                                 sourceSize:MTLSizeMake(fg_cur.width, fg_cur.height, 1) toTexture:three destinationSlice:0
+                           destinationLevel:0 destinationOrigin:MTLOriginMake(fg_cur.width * i, 0, 0)];
+                    [bl endEncoding];
+                    copy_to(gen_tex, drawable.texture);
+                    fg_three = three;
+                }
+                menu_render(dev, cb, drawable.texture);
+                [drawable addPresentedHandler:^(id<MTLDrawable> d) {
+                    if (d.presentedTime > 0) atomic_fetch_add(&g_fg_shown, 1);  // (0: replaced before it was shown)
+                }];
+                [cb presentDrawable:drawable];
+                // (committed before the next drawable is asked for: that may wait for a display refresh, and the
+                // GPU works on this meanwhile)
+                [cb commit];
+                cb = [queue commandBuffer];
+                drawable = [layer nextDrawable];  // (this frame's own image: shown 1/120 s after the in-between one)
+            }
+            if (drawable) {
+                copy_to(fg_cur, drawable.texture);
+                if (fg_gen) menu_redraw(dev, cb, drawable.texture);
+                else menu_render(dev, cb, drawable.texture);
+            }
+            id<MTLTexture> sw = fg_prev;
+            fg_prev = fg_cur, fg_cur = sw;
+        } else {
+            menu_render(dev, cb, drawable.texture);
+        }
+        if (!drawable) [cb commit];  // (no image for this frame's own present: the in-between one still shows)
+        if (drawable) {
         static long win_shot = -1;  // LARECOMP_WINDOW_SHOT=<frame>: save the final window image (game + menu)
         if (win_shot < 0) win_shot = getenv("LARECOMP_WINDOW_SHOT") ? atol(getenv("LARECOMP_WINDOW_SHOT")) : 0;
         id<MTLTexture> shot_tex = nil;
@@ -1254,7 +1361,8 @@ void backend_present(NvnTexture *t) {
             [bl copyFromTexture:drawable.texture toTexture:shot_tex];
             [bl endEncoding];
         }
-        [cb presentDrawable:drawable];
+        if (fg_gen) [cb presentDrawable:drawable afterMinimumDuration:FG_HALF_SLOT_NS / 1e9];
+        else [cb presentDrawable:drawable];
         [cb commit];
         {   // LARECOMP_CG_SHOT=<frame> (+ LARECOMP_SHOT_PATH): capture our window as the window server composites it,
             // colour-managed into the display's space - the way the Ryujinx reference grabs its window, so the two
@@ -1291,6 +1399,16 @@ void backend_present(NvnTexture *t) {
                 if (getenv("LARECOMP_EXIT_AFTER_SHOT")) { fflush(stderr); _exit(0); }
             }
             g_save_upright = false;
+        }
+        }  // (drawable)
+        if (fg_three) {
+            [cb waitUntilCompleted];
+            const char *pat = getenv("LARECOMP_SHOT_PATH");
+            g_save_upright = true;
+            renderer_save_texture(fg_three, pat ? pat : "build/framegen.png");
+            g_save_upright = false;
+            LOG("[framegen] shot %s\n", pat ? pat : "build/framegen.png");
+            fg_three = nil;
         }
     }
     frames++;
@@ -1364,8 +1482,15 @@ void backend_present(NvnTexture *t) {
     prev_present = now;
     if (now - last_fps_time >= fps_iv) {
         extern const char *game_level_name(void);
-        if (last_fps_time > 0) LOG("[metal] t=%.1f frame %llu %.1f fps max %.0fms level %s (%s)\n", now, (unsigned long long)total_frames,
-                                   frames / (now - last_fps_time), max_gap * 1000.0, game_level_name(), renderer_stats());
+        static uint64_t fg_real0, fg_gen0, fg_shown0;  // frame generation: generated (shown) / real since the last line
+        char fgs[80] = "";
+        uint64_t shown = atomic_load(&g_fg_shown);
+        if (g_settings.frame_gen != FRAMEGEN_OFF)
+            snprintf(fgs, sizeof fgs, " gen %llu/%llu shown %llu", (unsigned long long)(g_fg_generated - fg_gen0),
+                     (unsigned long long)(g_fg_real - fg_real0), (unsigned long long)(shown - fg_shown0));
+        fg_real0 = g_fg_real, fg_gen0 = g_fg_generated, fg_shown0 = shown;
+        if (last_fps_time > 0) LOG("[metal] t=%.1f frame %llu %.1f fps%s max %.0fms level %s (%s)\n", now, (unsigned long long)total_frames,
+                                   frames / (now - last_fps_time), fgs, max_gap * 1000.0, game_level_name(), renderer_stats());
         {   // (diagnostics) frame rate low for two periods in a row: what's allocated (at most once a minute)
             static int slow;
             static double last_dump = -100;
@@ -1423,6 +1548,7 @@ void ui_window_init(void) {
     layer.device = dev;
     layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
     layer.framebufferOnly = getenv("LARECOMP_WINDOW_SHOT") ? NO : YES;
+    layer.maximumDrawableCount = 3;  // (frame generation: two presents per real frame)
 }
 
 SDL_Window *ui_window(void) { return window; }
@@ -1452,5 +1578,6 @@ int ui_run(void) {
         int w, h;
         SDL_GetWindowSizeInPixels(window, &w, &h);
         layer.drawableSize = CGSizeMake(w, h);
+        atomic_store(&g_display_hz, framegen_display_hz(window));  // (SDL's display state: read on this thread)
     }
 }

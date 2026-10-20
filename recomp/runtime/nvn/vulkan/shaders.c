@@ -6,6 +6,7 @@
 #include <sys/stat.h>
 
 #include "shaders.h"
+#include "../framegen.h"
 
 void vk_shaders_init(void) {  // (compilers are per thread: check shaderc works at all)
     shaderc_compiler_t c = shaderc_compiler_initialize();
@@ -259,6 +260,11 @@ static const char *builtin_src(const char *name, int *stage) {
                "  vec2 p = vec2((gl_VertexIndex << 1) & 2, gl_VertexIndex & 2);\n"
                "  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);\n"
                "}\n";
+    }
+    // frame generation's passes (runtime/nvn/framegen_src.c: one source with metal's; exec.c vk_framegen_encode)
+    if (!strncmp(name, "fg_", 3)) {
+        *stage = STAGE_FRAGMENT;
+        return framegen_glsl(name);
     }
     // SMAA 1x (third_party/smaa, runtime/nvn/smaa_data.c): the reference SMAA.hlsl in its GLSL mode, High preset,
     // with an entry point per pass. a = SMAA_RT_METRICS (1 / size, size). The vertex-stage offset helpers run per

@@ -22,9 +22,13 @@ void menu_apply_window_requests(void *sdl_window);
 #if defined(__APPLE__) && defined(__OBJC__)
 // Render thread: draw the overlay into the drawable after the game image (no-op while closed).
 void menu_render(id<MTLDevice> dev, id<MTLCommandBuffer> cb, id<MTLTexture> target);
+// The last menu_render's overlay again, onto a second image of the same frame (frame generation): no new ImGui frame,
+// no input taken (no-op when that menu_render drew nothing).
+void menu_redraw(id<MTLDevice> dev, id<MTLCommandBuffer> cb, id<MTLTexture> target);
 #elif !defined(__APPLE__)
 // Render thread, inside the window image's rendering (Vulkan command buffer cmd).
 void menu_render(void *cmd, uint32_t target_w, uint32_t target_h);
+void menu_redraw(void *cmd, uint32_t target_w, uint32_t target_h);
 #endif
 
 #ifdef __cplusplus

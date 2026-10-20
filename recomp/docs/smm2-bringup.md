@@ -40,6 +40,14 @@ title screen was checked against Ryujinx. Names and behaviour only: no game code
 - Virtual memory pools: a 112 MB virtual pool mapped whole onto a physical pool aliases its storage.
 - Textures sharing storage alias one Metal texture.
 - Display pacing at 60 Hz from presents (the game would run at 120 fps).
+- Frame generation (Video tab, `runtime/nvn/framegen*`; DECISIONS.md 2026-10-20) adds an in-between frame per
+  real one on displays of 100 Hz and more; the presents the game makes are still paced at 60. Debug variables:
+  `LARECOMP_FRAMEGEN_SHOT=<frame>` (+ `LARECOMP_SHOT_PATH`) saves the previous game image, the generated one and the
+  current one at the first generated frame from there (one side-by-side PNG on Metal, three files on Vulkan);
+  `LARECOMP_FORCE_DISPLAY_HZ=<hz>` stands in for the display's refresh (the Mac's displays are 60 Hz);
+  `LARECOMP_FRAMEGEN_ANY_PACE=1` drops the 12-22 ms rule (software renderers); `LARECOMP_FRAMEGEN_COST=1` logs
+  each frame's match cost (Metal; tuning `FG_CUT_COST`). Tests: `make -C recomp test-framegen` (logic + passes on
+  synthetic images, macOS), `tools/test_framegen_glsl.c` (the GLSL forms through shaderc, Linux).
 - **Conditional rendering.** SMM2 clears a render target on its first bind each frame by guarding ClearColor with
   SetRenderEnableConditional on a per-target report, then resets the report (ReportCounter / ReportValue /
   ClearBuffer) so later binds skip the clear. LAS ignored the condition, so every later bind cleared the layout

@@ -128,6 +128,56 @@ SPcm *smm1_bfwav_decode(const uint8_t *d, size_t n) {
     return p;
 }
 
+// SMM2's own sounds (little-endian, Switch): a BARS archive (u32 count at 0xC, then count name hashes, then per sound
+// an (AMTA offset, BWAV offset) pair; the AMTA's STRG section holds the sound's name) of BWAVs. A BWAV: 0x10 header
+// (u16 channel count at 0xE), then per channel 0x4C bytes of info: codec (0 PCM16, 1 DSP-ADPCM), rate, sample count,
+// the ADPCM coefficients at +0x10, the channel's data offset (from the BWAV's start) at +0x34. Written from the
+// project's own format notes (core/crates/formats/src/audio/bwav.rs, bars.rs).
+static uint32_t le32(const uint8_t *d, size_t n, size_t o) {
+    return o + 4 <= n ? (uint32_t)d[o] | (uint32_t)d[o + 1] << 8 | (uint32_t)d[o + 2] << 16 | (uint32_t)d[o + 3] << 24 : 0;
+}
+static uint16_t le16(const uint8_t *d, size_t n, size_t o) { return o + 2 <= n ? (uint16_t)(d[o] | d[o + 1] << 8) : 0; }
+
+SPcm *smm1_bwav_decode(const uint8_t *d, size_t n) {
+    if (n < 0x10 + 0x4C || memcmp(d, "BWAV", 4)) return NULL;
+    int ch = le16(d, n, 0xE);
+    if (ch < 1 || ch > 8 || 0x10 + (size_t)ch * 0x4C > n) return NULL;
+    SPcm *p = calloc(1, sizeof *p);
+    p->channels = ch, p->rate = (int)le32(d, n, 0x14), p->frames = (int)le32(d, n, 0x18);
+    if (!p->rate || !p->frames) { free(p); return NULL; }
+    p->pcm = calloc((size_t)p->frames * (size_t)ch, sizeof(int16_t));
+    for (int c = 0; c < ch; c++) {
+        size_t ci = 0x10 + (size_t)c * 0x4C, at = le32(d, n, ci + 0x34);
+        int codec = le16(d, n, ci);
+        if (at >= n) continue;
+        if (codec == 1) {
+            Dsp st;
+            memset(&st, 0, sizeof st);
+            for (int k = 0; k < 16; k++) st.coefs[k] = (int16_t)le16(d, n, ci + 0x10 + (size_t)k * 2);
+            dsp_decode(d + at, n - at, p->frames, &st, p->pcm + c, ch);
+        } else
+            for (int i = 0; i < p->frames; i++) p->pcm[(size_t)i * (size_t)ch + (size_t)c] = (int16_t)le16(d, n, at + (size_t)i * 2);
+    }
+    return p;
+}
+
+SPcm *smm1_bars_sound(const uint8_t *d, size_t n, const char *name) {
+    if (n < 0x10 || memcmp(d, "BARS", 4)) return NULL;
+    uint32_t count = le32(d, n, 0xC);
+    size_t pairs = 0x10 + (size_t)count * 4, len = strlen(name);
+    for (uint32_t i = 0; i < count && pairs + (size_t)i * 8 + 8 <= n; i++) {
+        size_t amta = le32(d, n, pairs + (size_t)i * 8), bwav = le32(d, n, pairs + (size_t)i * 8 + 4);
+        if (amta + 0x20 > n || bwav >= n || memcmp(d + amta, "AMTA", 4)) continue;
+        size_t end = amta + le32(d, n, amta + 8);  // (the AMTA's size)
+        for (size_t s = amta; s + 8 + len < n && s + 8 + len <= end; s++)
+            if (!memcmp(d + s, "STRG", 4)) {
+                if (!memcmp(d + s + 8, name, len) && d[s + 8 + len] == 0) return smm1_bwav_decode(d + bwav, n - bwav);
+                break;
+            }
+    }
+    return NULL;
+}
+
 // ---------------------------------------------------------------- the mixer
 typedef struct {
     SPcm *p;
@@ -223,7 +273,13 @@ bool smm1_se(const char *name) {
         }
     return false;
 }
-
+void smm1_play(SPcm *p) {
+    if (!p) return;
+    pthread_mutex_lock(&g_mx);
+    for (int k = 0; k < 8; k++)
+        if (!g_se[k].on) { g_se[k] = (Voice){p, 0, 1, 0, false, true, 0}; break; }
+    pthread_mutex_unlock(&g_mx);
+}
 
 static void mix_voice(Voice *v, float *out, int n, int rate) {
     if (!v->on || !v->p) return;

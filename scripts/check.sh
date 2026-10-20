@@ -22,6 +22,7 @@ python3 scripts/test_check_package.py -q
 if $recomp; then make -s -C "$root/recomp" test-buildsync; fi
 if $recomp && [ "$(uname -s)" = Darwin ]; then
   make -s -C "$root/recomp" GAME=smm2 -j8 runtime-objs
+  make -s -C "$root/recomp" test-framegen test-ui
 fi
 files=$(git ls-files -m -o --exclude-standard; git diff --cached --name-only --diff-filter=AM)
 if [ -n "$files" ]; then python3 scripts/check_no_proprietary.py $files; fi
