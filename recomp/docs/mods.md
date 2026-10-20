@@ -419,6 +419,40 @@ moves a finger across the touch screen).
 and in the Ryujinx trace build (`tools/replay_sync.py`'s comparison): 606 of 606 player updates identical, the whole
 12 KB player object and the input block too.
 
+## SMW goal wipe (`games/smm2/mods/smw_goal.c`)
+
+In Super Mario World style courses, a goal-tape clear in real play ends the way SMW's levels do: once the fanfare is
+over, a black circle closes on Mario with SMW's own goal-wipe sound. Then:
+
+- where SMM2 shows its clear panel (Course World, Story, Endless / 100 Mario...), the black fades into the panel's own
+  wipe and COURSE CLEAR! card; Next then leaves the course as SMM2 does;
+- where it shows none (My Courses), the screen stays black while SMM2 changes scene under it, and the black fades away
+  when the next screen is up.
+
+The castle's axe, online versus and the Course Maker's test play are left as they were. On by default: the Mods tab's
+"SMW goal wipe" switch, `smw_goal_wipe=0/1` in `smm2mods.ini`, or `RECOMP_SMW_GOAL_WIPE=0/1` (wins over the ini).
+
+- **The sound** is SMW's original (`SuperMarioWorld_43_GoalWipe`, 0.8 s at 32 kHz), which SMM2 keeps in its story
+  mode's sound bank `Sound/Resource/Quest_UndoDog.bars`. The mod reads it from the player's RomFS (`rov_read_game`) and
+  decodes it (`smm1_bars_sound`, `smm1_bwav_decode`: SMM2's BARS of BWAVs, DSP-ADPCM, in `smm1/smm1_audio.c`); it
+  plays through the mods' mixer (`smm1_play`). Nothing is shipped.
+- **The circle** is drawn host-side (`smw_iris`, an antialiased circle over 1280 x 720) through
+  `game_overlay_image`, which the 100 Mario flow owns: it hands its frames to `smw_goal_image` while it has nothing
+  of its own to show, and calls `smw_goal_poll` every frame. The centre is the body of the player who broke the tape
+  (actor x / y at +0x230 / +0x234, mapped through the camera's view rect); the screen centre when that can't be read.
+  The circle takes the sound's 0.8 s, then 0.25 s of black.
+- **The timing** comes from one override, MariowGoal's own Fade-state execute thunk (main+0x12d28a0: every goal type
+  has its own, so the axe never comes here). SMM2's Fade waits while a fade is under way or while the demo's counter
+  (fanfare, then 35 frames) runs; then it opens the clear panel, or asks for the scene change. The override starts the
+  circle on the first frame the Fade would go on and skips the Fade until the circle is shut (a skipped frame changes
+  nothing: the Fade only waits). Then the Fade runs: a scene change asked for (the scene manager's byte at +0x344)
+  keeps the black until the new scene exists; otherwise the black fades 54 frames later, when the panel's staircase
+  wipe covers the course.
+- Research (private): `research/specs/smw-goal-wipe.md`.
+- Test: `RECOMP_SMW_GOAL_SHOTS=<every>` saves a window shot every `<every>` frames for 4 s from the wipe's start
+  (`build/smwgoal_<frame>.png`). The 100 Mario test recipe above with a server holding only `MW_*` test courses
+  clears SMW courses unattended.
+
 ## The game's own network stack (backend local-nex): groundwork for Nextendo and a local NEX server
 
 The mod above *fakes* being online: nifm / acc / friends / mii answer locally, the enl session logs in without NEX,

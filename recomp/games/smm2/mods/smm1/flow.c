@@ -751,6 +751,8 @@ static unsigned test_input(uint64_t frame) {
 }
 static LQuads g_last;
 static bool g_worker_on;
+const uint8_t *smw_goal_image(int *w, int *h, int *full, uint64_t *seq);  // (mods/smw_goal.c: its circle)
+void smw_goal_poll(void);
 
 // Once per presented frame (renderers, runtime/ui/menu.mm): tick the flow, queue this frame's image, return the
 // newest finished one (RGBA8 1280 x 720; *full: opaque, the game's frame hidden), or NULL for none. *seq changes
@@ -773,6 +775,7 @@ const uint8_t *game_overlay_image(int *w, int *h, int *full, uint64_t *seq) {
         F.test[0] = 0;
         flow_test_open(spec);
     }
+    smw_goal_poll();
     // (the buttons and the touch are followed while the flow is closed too: a button or a touch held when it opens,
     // e.g. the ZL / ZR or the tap that switched to it, is no press of its own)
     unsigned b = (unsigned)input_player_buttons() | test_input(renderer_present_count());
@@ -790,7 +793,7 @@ const uint8_t *game_overlay_image(int *w, int *h, int *full, uint64_t *seq) {
         g_has_front = false;
         F.full = F.captured = false;
         F.may_start = true;
-        return NULL;
+        return smw_goal_image(w, h, full, seq);  // (nothing of the flow's: the SMW goal wipe's circle, or none)
     }
     tick(b);
     LQuads *q = &g_last;

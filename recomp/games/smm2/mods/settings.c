@@ -211,9 +211,11 @@ static void mod_toggles_changed(void) {
 }
 
 // The tab: the switches above (when there is something to switch), then the SMM1 extras' (smm1_extras.c: one per SMM1
-// feature, always there).
+// feature, always there), then the SMW goal wipe's (smw_goal.c).
 int smm1_extras_toggles(GameModToggle *out, int room);
 void smm1_extras_toggles_changed(void);
+int smw_goal_toggles(GameModToggle *out, int room);
+void smw_goal_toggles_changed(void);
 static int own_shown;  // (the tab showed the switches above: apply them on a change)
 int game_mod_toggles(const GameModToggle **out) {
     static GameModToggle all[16];
@@ -221,6 +223,7 @@ int game_mod_toggles(const GameModToggle **out) {
     int n = own_shown = mod_toggles(&own);
     for (int i = 0; i < n; i++) all[i] = own[i];
     n += smm1_extras_toggles(all + n, (int)(sizeof all / sizeof *all) - n);
+    n += smw_goal_toggles(all + n, (int)(sizeof all / sizeof *all) - n);
     *out = n ? all : NULL;
     return n;
 }
@@ -228,6 +231,7 @@ int game_mod_toggles(const GameModToggle **out) {
 void game_mod_toggles_changed(void) {
     if (own_shown) mod_toggles_changed();
     smm1_extras_toggles_changed();
+    smw_goal_toggles_changed();
 }
 
 // Overrides are registered before the game's first instruction runs (dispatch reads them on every first call). Each
