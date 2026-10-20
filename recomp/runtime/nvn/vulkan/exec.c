@@ -12,6 +12,7 @@
 
 #include "../../kernel.h"
 #include "shaders.h"
+#include "../buildsync.h"
 #include "vk.h"
 #include "../renderer.h"
 #include "../../settings.h"
@@ -595,91 +596,29 @@ static VkSpan guest_copy(uint64_t addr, uint64_t size) {
     return s;
 }
 
-// ================================================================== worker threads (shader / pipeline builds)
-// First-use compiles run off the render thread; draws needing them are skipped until ready (as on Metal).
-// LARECOMP_SYNC_SHADERS=1 builds on first use, blocking (deterministic tests).
-typedef struct Job { void (*fn)(void *); void *arg; struct Job *next; } Job;
-static Job *jobs_head, *jobs_tail;
-static pthread_mutex_t jobs_lock = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t jobs_cond = PTHREAD_COND_INITIALIZER;
-
-static void *worker(void *a) {
-    (void)a;
-    for (;;) {
-        pthread_mutex_lock(&jobs_lock);
-        while (!jobs_head) pthread_cond_wait(&jobs_cond, &jobs_lock);
-        Job *j = jobs_head;
-        jobs_head = j->next;
-        if (!jobs_head) jobs_tail = NULL;
-        pthread_mutex_unlock(&jobs_lock);
-        j->fn(j->arg);
-        free(j);
-    }
-    return NULL;
-}
-
-// Programs and pipelines are built on first use, blocking (as renderer.m): SMM2 renders some things exactly once (its
-// colour-correction LUT, light probes), and a draw skipped while its shader compiled in the background was never
-// redrawn. The SPIR-V and pipeline caches keep this short after the first run. LARECOMP_ASYNC_SHADERS=1: build in the
-// background and skip the draws meanwhile (LAS's behaviour).
-static bool sync_shaders(void) {
-    static int v = -1;
-    if (v < 0) v = getenv("LARECOMP_ASYNC_SHADERS") == NULL;
-    return v;
-}
-
-// Shader translation: one dedicated thread (the translator isn't re-entrant - translate.c's RSC2 string ring - and
+// ================================================================== builds (shaders, pipelines): buildsync.h queues
+// Prefetch (default): built on the queues ahead of their draws (backend_prefetch), and a draw that needs one waits for
+// it - running it itself while it's still queued. Sync (LARECOMP_NO_SHADER_PREFETCH=1): built inline on first use
+// (deterministic tests). Skip (LARECOMP_ASYNC_SHADERS=1, LAS's behaviour): on the queues, draws skipped meanwhile -
+// SMM2 renders some things exactly once (its colour-correction LUT, light probes), and such a skipped draw is never
+// redrawn. The SPIR-V and pipeline caches keep all of it short after the first run.
+// Translation: one dedicated thread (the translator isn't re-entrant - translate.c's RSC2 string ring - and
 // translating on the game thread cost up to ~90 ms per frame on entering an area). Compiles go on to the workers.
 static pthread_mutex_t translate_lock = PTHREAD_MUTEX_INITIALIZER;  // (compute shaders translate on the game thread)
-static Job *tjobs_head, *tjobs_tail;
-static pthread_mutex_t tjobs_lock = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t tjobs_cond = PTHREAD_COND_INITIALIZER;
-static void *translator(void *a) {
-    (void)a;
-    for (;;) {
-        pthread_mutex_lock(&tjobs_lock);
-        while (!tjobs_head) pthread_cond_wait(&tjobs_cond, &tjobs_lock);
-        Job *j = tjobs_head;
-        tjobs_head = j->next;
-        if (!tjobs_head) tjobs_tail = NULL;
-        pthread_mutex_unlock(&tjobs_lock);
-        j->fn(j->arg);
-        free(j);
-    }
-    return NULL;
+static JobQueue *g_tq, *g_wq;
+static void queues_make(void) {
+    g_tq = jobq_create(1);
+    // first entry into an area builds dozens of pipelines at once: use most of the CPU (draws wait for them)
+    int n = SDL_GetNumLogicalCPUCores() - 4;
+    if (n < 4) n = 4;
+    if (n > 16) n = 16;
+    g_wq = jobq_create(n);
 }
-static bool sync_shaders(void);
-static void run_translate(void (*fn)(void *), void *arg) {
-    if (sync_shaders()) { fn(arg); return; }
-    static bool started;
-    if (!started) { started = true; pthread_t t; pthread_create(&t, NULL, translator, NULL); }
-    Job *j = malloc(sizeof *j);
-    j->fn = fn; j->arg = arg; j->next = NULL;
-    pthread_mutex_lock(&tjobs_lock);
-    if (tjobs_tail) tjobs_tail->next = j; else tjobs_head = j;
-    tjobs_tail = j;
-    pthread_cond_signal(&tjobs_cond);
-    pthread_mutex_unlock(&tjobs_lock);
-}
-
-static void run_job(void (*fn)(void *), void *arg) {
-    if (sync_shaders()) { fn(arg); return; }
-    static bool started;
-    if (!started) {
-        started = true;
-        // first entry into an area builds dozens of pipelines at once: use most of the CPU (draws wait for them)
-        int n = SDL_GetNumLogicalCPUCores() - 4;
-        if (n < 4) n = 4;
-        if (n > 16) n = 16;
-        for (int i = 0; i < n; i++) { pthread_t t; pthread_create(&t, NULL, worker, NULL); }
-    }
-    Job *j = malloc(sizeof *j);
-    j->fn = fn; j->arg = arg; j->next = NULL;
-    pthread_mutex_lock(&jobs_lock);
-    if (jobs_tail) jobs_tail->next = j; else jobs_head = j;
-    jobs_tail = j;
-    pthread_cond_signal(&jobs_cond);
-    pthread_mutex_unlock(&jobs_lock);
+static void run_build(bool translate, BuildJob *j, void (*fn)(void *), void *arg) {  // (inline in sync mode)
+    if (shader_mode() == SHADERS_SYNC) { fn(arg); return; }
+    static pthread_once_t once = PTHREAD_ONCE_INIT;
+    pthread_once(&once, queues_make);
+    jobq_submit(translate ? g_tq : g_wq, j, fn, arg);
 }
 
 // ================================================================== state
@@ -695,7 +634,7 @@ typedef struct {
 
 typedef struct { uint64_t addr, size; } Range;
 
-static struct {
+typedef struct {
     RtState rt;
     bool rt_dirty;
     NvnProgram *program;
@@ -719,7 +658,8 @@ static struct {
     bool render_off;  // SetRenderEnable(false) / a failed SetRenderEnableConditional: draws and clears are skipped
     uint32_t restart_index;
     uint64_t copy_row_stride, copy_image_stride;
-} st;
+} ExecState;
+static ExecState st;
 
 uint32_t nvn_window_origin(void);
 uint32_t nvn_depth_mode(void);
@@ -847,6 +787,8 @@ static uint32_t tex_wh[2][64][2];
 
 // ================================================================== render passes
 static VkFormat pass_color[8], pass_depth, pass_stencil;
+// The attachments' formats a pipeline is built for: the begun pass's (pass_*), or predicted for any state
+typedef struct { VkFormat color[8], depth, stencil; uint32_t ncolor, samples; } PassLayout;
 static uint32_t pass_ncolor, pass_samples = 1, pass_w, pass_h;
 static int debug_pass_no;
 
@@ -1025,6 +967,31 @@ static void vk_end_pass_at(int line) {
 }
 
 static uint32_t level_extent(uint32_t v, uint32_t lv) { v >>= lv; return v ? v : 1; }
+
+// (predicted: no view made, no pass begun - the prefetch scan's; a texture not made yet from its NVN format)
+static void pass_layout(const ExecState *s, PassLayout *out) {
+    memset(out, 0, sizeof *out);
+    out->ncolor = (uint32_t)s->rt.ncolor;
+    out->samples = 1;
+    for (int i = 0; i < s->rt.ncolor && i < 8; i++) {
+        NvnTexture *t = s->rt.color[i];
+        if (!t) continue;
+        const TexBackend *b = t->backend;
+        VkFormat base = b ? b->format : vk_format(t->format);
+        out->color[i] = s->rt.has_cview[i] && (s->rt.cview[i].setmask & 4) && vk_format(t->format) == base
+                      ? vk_format(s->rt.cview[i].format) : base;
+        out->samples = b ? b->samples : (t->samples > 1 ? t->samples : 1);
+    }
+    NvnTexture *d = s->rt.depth;
+    if (d && renderer_format_is_depth(d->format)) {
+        const TexBackend *b = d->backend;
+        VkFormat f = b ? b->format : vk_format(d->format);
+        VkImageAspectFlags a = b ? b->aspect : VK_IMAGE_ASPECT_DEPTH_BIT | (renderer_format_has_stencil(d->format) ? VK_IMAGE_ASPECT_STENCIL_BIT : 0);
+        if (a & VK_IMAGE_ASPECT_DEPTH_BIT) out->depth = f;
+        if (a & VK_IMAGE_ASPECT_STENCIL_BIT) out->stencil = f;
+        if (!out->ncolor) out->samples = b ? b->samples : (d->samples > 1 ? d->samples : 1);
+    }
+}
 
 static void begin_pass(void) {
     if (in_pass && !st.rt_dirty) return;
@@ -1324,8 +1291,15 @@ typedef struct {
     VkDescriptorSetLayout set_layout[3];
     VkPipelineLayout layout;
     bool vs_uses_vid;
-    _Atomic int state;  // 0 building, 1 ready, 2 failed
+    _Atomic int state;  // BUILD_PENDING (translating, compiling), READY, FAILED (buildsync.h)
+    BuildJob tjob, cjob;  // translation, compile (compute programs: cjob only)
+    bool async;           // built on the queues: counted in flight until its state is final
 } Prog;
+
+static void prog_state(Prog *p, int v) {  // (its final state, once)
+    if (p->async) build_finish(&p->state, v);
+    else atomic_store(&p->state, v);
+}
 
 static VkPipelineLayout make_layout(Prog *p, int nsets, VkShaderStageFlags s0, VkShaderStageFlags s1) {
     p->set_layout[0] = vk_set_layout(p->binds, p->nbinds, 0, s0);
@@ -1354,7 +1328,7 @@ static void compile_program(void *arg) {
     uint32_t *sf = sv ? vk_glsl_to_spirv(p->fi->msl, STAGE_FRAGMENT, "fs", &nf) : NULL;
     size_t ng = 0;
     uint32_t *sg = sf && p->gi ? vk_glsl_to_spirv(p->gi->msl, STAGE_GEOMETRY, "gs", &ng) : NULL;
-    if (!sv || !sf || (p->gi && !sg)) { free(sv); free(sf); free(sg); atomic_store(&p->state, 2); return; }
+    if (!sv || !sf || (p->gi && !sg)) { free(sv); free(sf); free(sg); prog_state(p, BUILD_FAILED); return; }
     p->nbinds = vk_reflect(sv, nv, p->binds, MAX_BIND);
     p->nbinds += vk_reflect(sf, nf, p->binds + p->nbinds, MAX_BIND - p->nbinds);
     if (sg) p->nbinds += vk_reflect(sg, ng, p->binds + p->nbinds, MAX_BIND - p->nbinds);
@@ -1366,7 +1340,7 @@ static void compile_program(void *arg) {
     free(sg);
     p->layout = make_layout(p, p->gi ? 3 : 2, VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT);
     atomic_fetch_add(&stat_compiles, 1);
-    atomic_store(&p->state, p->vs && p->fs && (!p->gi || p->gs) ? 1 : 2);
+    prog_state(p, p->vs && p->fs && (!p->gi || p->gs) ? BUILD_READY : BUILD_FAILED);
 }
 
 static void translate_program(void *arg) {
@@ -1391,17 +1365,17 @@ static void translate_program(void *arg) {
     pthread_mutex_unlock(&translate_lock);
     if (!p->vi->msl) {
         LOG("[shader] VS translate failed: %s (code %llx)\n", p->vi->error, (unsigned long long)p->code[0]);
-        atomic_store(&p->state, 2);
+        prog_state(p, BUILD_FAILED);
         return;
     }
     if (p->gi && !p->gi->msl) {
         LOG("[shader] GS translate failed: %s (code %llx)\n", p->gi->error, (unsigned long long)p->code[2]);
-        atomic_store(&p->state, 2);
+        prog_state(p, BUILD_FAILED);
         return;
     }
     if (!p->fi->msl) {
         LOG("[shader] FS translate failed: %s\n", p->fi->error);
-        atomic_store(&p->state, 2);
+        prog_state(p, BUILD_FAILED);
         return;
     }
     {   // (debug) LARECOMP_DEBUG_FS_OUT=<fs code address hex>:<target>:<value>: that fragment shader writes a constant to
@@ -1443,7 +1417,7 @@ static void translate_program(void *arg) {
     save_glsl(p->vi->msl, p->code[0], "vs");
     save_glsl(p->fi->msl, p->code[1], "fs");
     if (p->gi) save_glsl(p->gi->msl, p->code[2], "gs");
-    run_job(compile_program, p);
+    run_build(false, &p->cjob, compile_program, p);
 }
 
 #define PROG_TAB 4096
@@ -1471,8 +1445,20 @@ static Prog *get_program(NvnProgram *np, ShaderKey *vkey, ShaderKey *fkey) {
     }
     p->vkey = *vkey;
     p->fkey = *fkey;
-    run_translate(translate_program, p);
+    if (shader_mode() != SHADERS_SYNC) { p->async = true; build_begin(); }
+    run_build(true, &p->tjob, translate_program, p);
     return p;
+}
+
+// A program draws can use now: in prefetch mode after waiting for it - its translation, then its compile (running
+// either here while it's still queued); sync mode built it inline, skip mode doesn't wait
+static bool prog_ready(Prog *p) {
+    if (!p) return false;
+    if (shader_mode() == SHADERS_PREFETCH && atomic_load(&p->state) == BUILD_PENDING) {
+        job_run_or_wait(g_tq, &p->tjob);
+        if (atomic_load(&p->state) == BUILD_PENDING) job_run_or_wait(g_wq, &p->cjob);  // (queued by the translation)
+    }
+    return atomic_load(&p->state) == BUILD_READY;
 }
 
 // ================================================================== vertex formats / fixed function tables
@@ -1660,7 +1646,7 @@ typedef struct {
     uint32_t write_mask[8];
 } PipeKey;
 
-typedef struct { PipeKey k; uint64_t hash; VkPipeline pipe; _Atomic int state; } Pipe;  // state: 0 building, 1 ready, 2 failed
+typedef struct { PipeKey k; uint64_t hash; VkPipeline pipe; _Atomic int state; BuildJob job; bool async; } Pipe;  // state: BUILD_*
 #define PIPE_TAB 8192
 static struct { uint64_t key; Pipe *pipe; } pipe_tab[PIPE_TAB];
 
@@ -1746,7 +1732,9 @@ static void build_pipeline(void *arg) {
         if (n++ < 10) LOG("[vk] pipeline creation failed: %d\n", r);
     }
     atomic_fetch_add(&stat_compiles, 1);
-    atomic_store(&pp->state, r == VK_SUCCESS ? 1 : 2);
+    int v = r == VK_SUCCESS ? BUILD_READY : BUILD_FAILED;
+    if (pp->async) build_finish(&pp->state, v);
+    else atomic_store(&pp->state, v);
 }
 
 // ================================================================== feedback snapshots (renderer.m resolve_feedback)
@@ -2519,6 +2507,8 @@ static int g_cs_n;  // (compute program table below)
 // address (the old Prog / Pipe objects are leaked, so pipeline keys holding their pointers can't collide), compute
 // programs, shared copies - and the heap import: its pages are replaced (re-imported on first use).
 void vk_exec_reset(void) {
+    build_drain();  // (builds in flight finish first: they write into the objects dropped below)
+    pend_clear(free);
     memset(prog_tab, 0, sizeof prog_tab);
     memset(pipe_tab, 0, sizeof pipe_tab);
     g_cs_n = 0;
@@ -2666,7 +2656,7 @@ static void build_compute(void *arg) {
     CsProg *cp = arg;
     size_t n = 0;
     uint32_t *spv = vk_glsl_to_spirv(cp->si->msl, STAGE_COMPUTE, "cs", &n);
-    if (!spv) { atomic_store(&cp->p.state, 2); return; }
+    if (!spv) { prog_state(&cp->p, BUILD_FAILED); return; }
     cp->p.nbinds = vk_reflect(spv, n, cp->p.binds, MAX_BIND);
     VkShaderModule m = vk_module(spv, n);
     free(spv);
@@ -2680,7 +2670,7 @@ static void build_compute(void *arg) {
                                       .layout = cp->p.layout};
     VkResult r = vkCreateComputePipelines(g_vk.dev, g_vk.pcache, 1, &ci, NULL, &cp->pipe);
     atomic_fetch_add(&stat_compiles, 1);
-    atomic_store(&cp->p.state, r == VK_SUCCESS ? 1 : 2);
+    prog_state(&cp->p, r == VK_SUCCESS ? BUILD_READY : BUILD_FAILED);
     if (r != VK_SUCCESS) LOG("[compute] pipeline failed: %d\n", r);
 }
 
@@ -2712,7 +2702,8 @@ static CsProg *compute_program(NvnProgram *np) {
         if (!cp->local[i]) cp->local[i] = 1;
     }
     save_glsl(cp->si->msl, ss->code_addr, "cs");
-    run_job(build_compute, cp);
+    if (shader_mode() != SHADERS_SYNC) { cp->p.async = true; build_begin(); }
+    run_build(false, &cp->p.cjob, build_compute, cp);
     return cp;
 }
 
@@ -2720,7 +2711,8 @@ static void dispatch_compute(uint32_t gx, uint32_t gy, uint32_t gz) {
     snap_reason = "compute"; snapshots_invalidate(NULL);
     if (!st.program || !gx || !gy || !gz) return;
     CsProg *cp = compute_program(st.program);
-    if (!cp || atomic_load(&cp->p.state) != 1) SKIP_DRAW();
+    if (cp && shader_mode() == SHADERS_PREFETCH && atomic_load(&cp->p.state) == BUILD_PENDING) job_run_or_wait(g_wq, &cp->p.cjob);
+    if (!cp || atomic_load(&cp->p.state) != BUILD_READY) SKIP_DRAW();
     {   // LARECOMP_SKIP_CS=<code address hex> (debug): skip that compute shader's dispatches, to see what it does
         static uint64_t skip = ~0ull;
         if (skip == ~0ull) { const char *e = getenv("LARECOMP_SKIP_CS"); skip = e ? strtoull(e, NULL, 16) : 0; }
@@ -2831,6 +2823,64 @@ static void lavapipe_mrt_split(Prog *pr) {
 }
 
 static void draw_(CmdRec *r, bool indexed);
+// The program keys a draw in state s compiles its shaders with (the mirror flip is the draw's own)
+static void program_keys(const ExecState *s, ShaderKey *vkey, ShaderKey *fkey) {
+    memset(vkey, 0, sizeof *vkey);
+    memset(fkey, 0, sizeof *fkey);
+    vkey->glsl = fkey->glsl = 1;
+    vkey->flip_y = fkey->flip_y = nvn_window_origin() == 0;
+    vkey->depth_minus_one = nvn_depth_mode() == 0;
+    for (int i = 0; i < s->nattrib; i++) vkey->attr_kind[i] = (uint8_t)attr_kind(s->attrib[i] & 0xFF);
+    for (int i = 0; i < s->rt.ncolor; i++) if (s->rt.color[i]) fkey->rt_kind[i] = (uint8_t)rt_kind(s->rt.color[i]->format);
+}
+
+// What a draw's pipeline bakes in, in state s with pass layout pl (the scan's as the draw's)
+static void pipe_key(const ExecState *s, const PassLayout *pl, Prog *pr, int topo_class, PipeKey *k) {
+    memset(k, 0, sizeof *k);
+    k->prog = pr;
+    k->ncolor = pl->ncolor;
+    memcpy(k->color, pl->color, sizeof k->color);
+    k->depth = pl->depth;
+    k->stencil = pl->stencil;
+    k->samples = pl->samples;
+    for (int i = 0; i < 32; i++) {
+        if (!(pr->vi->attr_mask & (1u << i))) continue;
+        k->attr_mask |= 1u << i;
+        uint32_t a = i < s->nattrib ? s->attrib[i] : 0x2E;
+        uint32_t fmt = a & 0xFF, stream = (a >> 8) & 0x1F, off = a >> 13;
+        if (i >= s->nattrib || fmt == 0 || stream >= 16) {  // unbound attribute: (0, 0, 0, 1) from a constant stream
+            k->attr_fmt[i] = VK_FORMAT_R32G32B32A32_SFLOAT;
+            k->attr_bind[i] = ZERO_BINDING;
+            k->used_streams |= 1u << ZERO_BINDING;
+            continue;
+        }
+        k->attr_fmt[i] = vertex_format_supported(vertex_format(fmt));
+        k->attr_off[i] = off;
+        k->attr_bind[i] = stream;
+        k->used_streams |= 1u << stream;
+    }
+    for (int m = 0; m < 16; m++) {
+        if (!(k->used_streams & (1u << m))) continue;
+        k->stride[m] = m < s->nstream ? s->stream[m][0] : 0;
+        k->divisor[m] = m < s->nstream && k->stride[m] ? s->stream[m][1] : 0;
+        if (k->divisor[m] > 1 && !g_vk.divisor) k->divisor[m] = 1;
+    }
+    for (uint32_t i = 0; i < k->ncolor && i < 8; i++) {
+        if (!s->rt.color[i] || k->color[i] == VK_FORMAT_UNDEFINED) continue;
+        // Targets the fragment shader doesn't output keep their contents on Metal, but are undefined in Vulkan
+        // (NVIDIA writes black): mask them. Foliage depth pre-passes left black silhouettes (user 2026-10-08).
+        k->write_mask[i] = ((pr->fi->out_mask >> (i * 4)) & 0xF) ? (s->channel_mask >> (i * 4)) & 0xF : 0;
+        if (((s->color_state[0] >> i) & 1) && !rt_kind(s->rt.color[i]->format)) {
+            k->blend_on |= (uint8_t)(1u << i);
+            memcpy(k->blend[i], s->blend[i], 8);
+        }
+    }
+    k->a2c = s->ms[0xC] != 0;
+    if (getenv("LARECOMP_VK_NO_BLEND")) k->blend_on = 0;  // (debug: no blending at all)
+    k->topo_class = (uint8_t)topo_class;
+    k->poly_fill = s->poly[2] != 1;
+}
+
 static void draw(CmdRec *r, bool indexed) {
     PROF_T0();
     draw_(r, indexed);
@@ -2844,14 +2894,10 @@ static void draw_(CmdRec *r, bool indexed) {
     // FRONT_AND_BACK would too, but cull mode 3 isn't mapped below). SMM2's 3D World background keeps a clear pipe's
     // yellow stand-in mesh switched off this way.
     if (st.poly[0] == 3 && (uint32_t)r->x[0] >= 4) SKIP_DRAW();
-    ShaderKey vkey = {0}, fkey = {0};
-    vkey.glsl = fkey.glsl = 1;
-    vkey.flip_y = fkey.flip_y = nvn_window_origin() == 0;
-    vkey.depth_minus_one = nvn_depth_mode() == 0;
-    for (int i = 0; i < st.nattrib; i++) vkey.attr_kind[i] = (uint8_t)attr_kind(st.attrib[i] & 0xFF);
-    for (int i = 0; i < st.rt.ncolor; i++) if (st.rt.color[i]) fkey.rt_kind[i] = (uint8_t)rt_kind(st.rt.color[i]->format);
+    ShaderKey vkey, fkey;
+    program_keys(&st, &vkey, &fkey);
     Prog *pr = get_program(st.program, &vkey, &fkey);
-    if (!pr || atomic_load(&pr->state) != 1) SKIP_DRAW();
+    if (!prog_ready(pr)) SKIP_DRAW();
     g_mirror_w = 0;
     {   // mirror mode (runtime/hle/mirror.c; as renderer.m): the scene's composite into the window image is mirrored
         extern bool mirror_draw(bool composite);
@@ -2865,7 +2911,7 @@ static void draw_(CmdRec *r, bool indexed) {
         if (mirror_draw(composite)) {
             vkey.flip_x = fkey.flip_x = true;
             pr = get_program(st.program, &vkey, &fkey);
-            if (!pr || atomic_load(&pr->state) != 1) SKIP_DRAW();
+            if (!prog_ready(pr)) SKIP_DRAW();
             g_mirror_w = (float)st.rt.color[0]->width;
         }
     }
@@ -2919,64 +2965,41 @@ static void draw_(CmdRec *r, bool indexed) {
     uint64_t prof_tk_ = prof ? SDL_GetTicksNS() : 0;
     if (prof) prof_pre += prof_tk_ - prof_tp_;
     // ---- pipeline
+    PassLayout pl;  // (the begun pass's)
+    memset(&pl, 0, sizeof pl);
+    pl.ncolor = pass_ncolor;
+    memcpy(pl.color, pass_color, sizeof pl.color);
+    pl.depth = pass_depth;
+    pl.stencil = pass_stencil;
+    pl.samples = pass_samples;
     PipeKey k;
-    memset(&k, 0, sizeof k);
-    k.prog = pr;
-    k.ncolor = pass_ncolor;
-    memcpy(k.color, pass_color, sizeof k.color);
-    k.depth = pass_depth;
-    k.stencil = pass_stencil;
-    k.samples = pass_samples;
-    for (int i = 0; i < 32; i++) {
-        if (!(pr->vi->attr_mask & (1u << i))) continue;
-        k.attr_mask |= 1u << i;
-        uint32_t a = i < st.nattrib ? st.attrib[i] : 0x2E;
-        uint32_t fmt = a & 0xFF, stream = (a >> 8) & 0x1F, off = a >> 13;
-        if (i >= st.nattrib || fmt == 0 || stream >= 16) {  // unbound attribute: (0, 0, 0, 1) from a constant stream
-            k.attr_fmt[i] = VK_FORMAT_R32G32B32A32_SFLOAT;
-            k.attr_bind[i] = ZERO_BINDING;
-            k.used_streams |= 1u << ZERO_BINDING;
-            continue;
-        }
-        k.attr_fmt[i] = vertex_format_supported(vertex_format(fmt));
-        k.attr_off[i] = off;
-        k.attr_bind[i] = stream;
-        k.used_streams |= 1u << stream;
-    }
-    for (int s = 0; s < 16; s++) {
-        if (!(k.used_streams & (1u << s))) continue;
-        k.stride[s] = s < st.nstream ? st.stream[s][0] : 0;
-        k.divisor[s] = s < st.nstream && k.stride[s] ? st.stream[s][1] : 0;
-        if (k.divisor[s] > 1 && !g_vk.divisor) k.divisor[s] = 1;
-    }
-    for (uint32_t i = 0; i < k.ncolor && i < 8; i++) {
-        if (!st.rt.color[i] || k.color[i] == VK_FORMAT_UNDEFINED) continue;
-        // Targets the fragment shader doesn't output keep their contents on Metal, but are undefined in Vulkan
-        // (NVIDIA writes black): mask them. Foliage depth pre-passes left black silhouettes (user 2026-10-08).
-        k.write_mask[i] = ((pr->fi->out_mask >> (i * 4)) & 0xF) ? (st.channel_mask >> (i * 4)) & 0xF : 0;
-        if (((st.color_state[0] >> i) & 1) && !rt_kind(st.rt.color[i]->format)) {
-            k.blend_on |= (uint8_t)(1u << i);
-            memcpy(k.blend[i], st.blend[i], 8);
-        }
-    }
-    k.a2c = st.ms[0xC] != 0;
-    if (getenv("LARECOMP_VK_NO_BLEND")) k.blend_on = 0;  // (debug: no blending at all)
+    pipe_key(&st, &pl, pr, cls, &k);
     if (g_debug_frame) LOG("[draw]   pipeline: %u targets, fs out %#x, write masks %x %x %x %x, blend %#x (rt0 %02x %02x %02x %02x %02x %02x %02x %02x), formats %d %d, a2c %d\n", k.ncolor, pr->fi->out_mask, k.write_mask[0], k.write_mask[1], k.write_mask[2], k.write_mask[3], k.blend_on, k.blend[0][0], k.blend[0][1], k.blend[0][2], k.blend[0][3], k.blend[0][4], k.blend[0][5], k.blend[0][6], k.blend[0][7], k.color[0], k.color[1], k.a2c);
-    k.topo_class = cls;
-    k.poly_fill = st.poly[2] != 1;
     uint64_t ph = hash_words(0xcbf29ce484222325ull, &k, sizeof k);
     if (!ph) ph = 1;
     uint32_t pslot = (uint32_t)(ph ^ (ph >> 29)) & (PIPE_TAB - 1);
     while (pipe_tab[pslot].key && pipe_tab[pslot].key != ph) pslot = (pslot + 1) & (PIPE_TAB - 1);
     Pipe *pp = pipe_tab[pslot].pipe;
     if (!pp) {
+        {   // (the prefetch scan's prediction of the pass: a miss shows here, a few times)
+            PassLayout pp_;
+            pass_layout(&st, &pp_);
+            if (memcmp(&pl, &pp_, sizeof pl)) {
+                static int nlog;
+                if (nlog++ < 10)
+                    LOG("[shader] pass_layout predicted %d/%d/%u, the pass has %d/%d/%u (colour 0, depth, samples)\n",
+                        pp_.color[0], pp_.depth, pp_.samples, pl.color[0], pl.depth, pl.samples);
+            }
+        }
         pp = calloc(1, sizeof *pp);
         pp->k = k;
         pipe_tab[pslot].key = ph;
         pipe_tab[pslot].pipe = pp;
-        run_job(build_pipeline, pp);
+        if (shader_mode() != SHADERS_SYNC) { pp->async = true; build_begin(); }
+        run_build(false, &pp->job, build_pipeline, pp);
     }
-    if (atomic_load(&pp->state) != 1) SKIP_DRAW();
+    if (shader_mode() == SHADERS_PREFETCH && atomic_load(&pp->state) == BUILD_PENDING) job_run_or_wait(g_wq, &pp->job);
+    if (atomic_load(&pp->state) != BUILD_READY) SKIP_DRAW();
     ss_enabled();
     if (ss_need(SS_PIPE, ss.pipe == pp->pipe)) { ss.pipe = pp->pipe; vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pp->pipe); }
     uint64_t prof_td_ = prof ? SDL_GetTicksNS() : 0;
@@ -3884,6 +3907,93 @@ void renderer_save_texture_tex(TexBackend *b, const char *path) {
 }
 
 // ================================================================== executor (renderer.m exec_list)
+// Binding-state commands: s updated, nothing else touched (the executor and the prefetch scan share it). false:
+// not one of them.
+static bool apply_state(ExecState *s, const CmdRec *r) {
+    void *x = (void *)r->extra;
+    switch (r->op) {
+        case CMD_BIND_PROGRAM: s->program = (NvnProgram *)(uintptr_t)r->x[0]; return true;
+        case CMD_BIND_BLEND: { uint8_t *b = x; memcpy(s->blend[b[0] & 7], b, 8); return true; }
+        case CMD_BIND_CHANNEL_MASK: memcpy(&s->channel_mask, x, 4); return true;
+        case CMD_BIND_COLOR: memcpy(s->color_state, x, 4); return true;
+        case CMD_BIND_DEPTH_STENCIL: memcpy(s->ds, x, 8); return true;
+        case CMD_BIND_MULTISAMPLE: memcpy(s->ms, x, 0x18); return true;
+        case CMD_BIND_POLYGON: memcpy(s->poly, x, 4); return true;
+        case CMD_BIND_VERTEX_ATTRIB:
+            s->nattrib = (int)r->x[0] > 16 ? 16 : (int)r->x[0];
+            memcpy(s->attrib, x, s->nattrib * 4);
+            return true;
+        case CMD_BIND_VERTEX_STREAM:
+            s->nstream = (int)r->x[0] > 16 ? 16 : (int)r->x[0];
+            memcpy(s->stream, x, s->nstream * 8);
+            return true;
+        case CMD_BIND_VERTEX_BUFFERS:
+            for (uint64_t i = 0; i < r->x[1] && r->x[0] + i < 16; i++) memcpy(&s->vbuf[r->x[0] + i], (uint8_t *)x + i * 16, 16);
+            return true;
+        case CMD_BIND_UNIFORM_BUFFERS:
+            for (uint64_t i = 0; i < r->x[2] && r->x[1] + i < 18 && r->x[0] < 6; i++)
+                memcpy(&s->ubuf[r->x[0]][r->x[1] + i], (uint8_t *)x + i * 16, 16);
+            return true;
+        case CMD_BIND_STORAGE_BUFFERS:
+            for (uint64_t i = 0; i < r->x[2] && r->x[1] + i < 16 && r->x[0] < 6; i++)
+                memcpy(&s->sbuf[r->x[0]][r->x[1] + i], (uint8_t *)x + i * 16, 16);
+            return true;
+        case CMD_BIND_TEXTURES:
+            for (uint64_t i = 0; i < r->x[2] && r->x[1] + i < 32 && r->x[0] < 6; i++)
+                memcpy(&s->tex[r->x[0]][r->x[1] + i], (uint8_t *)x + i * 8, 8);
+            return true;
+        case CMD_BIND_IMAGES:
+            for (uint64_t i = 0; i < r->x[2] && r->x[1] + i < 8 && r->x[0] < 6; i++)
+                memcpy(&s->img[r->x[0]][r->x[1] + i], (uint8_t *)x + i * 8, 8);
+            return true;
+        case CMD_SET_TEXTURE_POOL: s->tpool = (NvnDescPool *)(uintptr_t)r->x[0]; return true;
+        case CMD_SET_SAMPLER_POOL: s->spool = (NvnDescPool *)(uintptr_t)r->x[0]; return true;
+        case CMD_SET_RENDER_TARGETS: {
+            const struct { uint64_t tex[8]; NvnTextureView views[8]; uint8_t has_view[8]; uint64_t depth;
+                           NvnTextureView dview; uint8_t has_dview; } *rt = x;
+            RtState prev = s->rt;  // the same targets again: keep the pass (a restart = full barrier + reload)
+            memset(&s->rt, 0, sizeof s->rt);
+            s->rt.ncolor = (int)r->x[0] > 8 ? 8 : (int)r->x[0];
+            for (int i = 0; i < s->rt.ncolor; i++) {
+                s->rt.color[i] = (NvnTexture *)(uintptr_t)rt->tex[i];
+                s->rt.cview[i] = rt->views[i];
+                s->rt.has_cview[i] = rt->has_view[i];
+            }
+            s->rt.depth = (NvnTexture *)(uintptr_t)rt->depth;
+            s->rt.dview = rt->dview;
+            s->rt.has_dview = rt->has_dview;
+            static int always = -1;
+            if (always < 0) always = getenv("LARECOMP_VK_PASS_RESTART") != NULL;
+            if (always || memcmp(&prev, &s->rt, sizeof prev)) s->rt_dirty = true;
+            return true;
+        }
+        case CMD_SET_VIEWPORTS:
+            for (uint64_t i = 0; i < r->x[1] && r->x[0] + i < 16; i++) memcpy(s->viewport[r->x[0] + i], (uint8_t *)x + i * 16, 16);
+            return true;
+        case CMD_SET_SCISSORS:
+            for (uint64_t i = 0; i < r->x[1] && r->x[0] + i < 16; i++) memcpy(s->scissor[r->x[0] + i], (uint8_t *)x + i * 16, 16);
+            return true;
+        case CMD_SET_DEPTH_RANGES:
+            for (uint64_t i = 0; i < r->x[1] && r->x[0] + i < 16; i++) memcpy(s->depth_range[r->x[0] + i], (uint8_t *)x + i * 8, 8);
+            return true;
+        case CMD_SET_BLEND_COLOR: memcpy(s->blend_color, x, 16); return true;
+        case CMD_SET_STENCIL: {
+            int face = (int)r->x[0];
+            for (int f = 0; f < 2; f++) {
+                if (!(face & (1 << f))) continue;
+                if (r->x[6] == 0) s->stencil_ref[f] = (uint32_t)r->x[1];
+                else if (r->x[6] == 1) s->stencil_mask[f] = (uint32_t)r->x[1];
+                else s->stencil_vmask[f] = (uint32_t)r->x[1];
+            }
+            return true;
+        }
+        case CMD_SET_POLYGON_OFFSET: memcpy(s->poly_offset, r->f, sizeof s->poly_offset); return true;
+        case CMD_SET_PRIMITIVE_RESTART: s->prim_restart = r->x[0] != 0; s->restart_index = (uint32_t)r->x[1]; return true;
+        case CMD_SET_COPY_STRIDES: s->copy_row_stride = r->x[0]; s->copy_image_stride = r->x[1]; return true;
+    default: return false;
+    }
+}
+
 static void exec_list(uint64_t handle, int depth) {
     uint64_t p = handle;
     for (int guard = 0; guard < 10000000; guard++) {
@@ -3898,84 +4008,6 @@ static void exec_list(uint64_t handle, int depth) {
             for (uint64_t i = 0; i < r->x[0] && depth < 8; i++) exec_list(h[i], depth + 1);
             break;
         }
-        case CMD_BIND_PROGRAM: st.program = (NvnProgram *)(uintptr_t)r->x[0]; break;
-        case CMD_BIND_BLEND: { uint8_t *b = x; memcpy(st.blend[b[0] & 7], b, 8); break; }
-        case CMD_BIND_CHANNEL_MASK: memcpy(&st.channel_mask, x, 4); break;
-        case CMD_BIND_COLOR: memcpy(st.color_state, x, 4); break;
-        case CMD_BIND_DEPTH_STENCIL: memcpy(st.ds, x, 8); break;
-        case CMD_BIND_MULTISAMPLE: memcpy(st.ms, x, 0x18); break;
-        case CMD_BIND_POLYGON: memcpy(st.poly, x, 4); break;
-        case CMD_BIND_VERTEX_ATTRIB:
-            st.nattrib = (int)r->x[0] > 16 ? 16 : (int)r->x[0];
-            memcpy(st.attrib, x, st.nattrib * 4);
-            break;
-        case CMD_BIND_VERTEX_STREAM:
-            st.nstream = (int)r->x[0] > 16 ? 16 : (int)r->x[0];
-            memcpy(st.stream, x, st.nstream * 8);
-            break;
-        case CMD_BIND_VERTEX_BUFFERS:
-            for (uint64_t i = 0; i < r->x[1] && r->x[0] + i < 16; i++) memcpy(&st.vbuf[r->x[0] + i], (uint8_t *)x + i * 16, 16);
-            break;
-        case CMD_BIND_UNIFORM_BUFFERS:
-            for (uint64_t i = 0; i < r->x[2] && r->x[1] + i < 18 && r->x[0] < 6; i++)
-                memcpy(&st.ubuf[r->x[0]][r->x[1] + i], (uint8_t *)x + i * 16, 16);
-            break;
-        case CMD_BIND_STORAGE_BUFFERS:
-            for (uint64_t i = 0; i < r->x[2] && r->x[1] + i < 16 && r->x[0] < 6; i++)
-                memcpy(&st.sbuf[r->x[0]][r->x[1] + i], (uint8_t *)x + i * 16, 16);
-            break;
-        case CMD_BIND_TEXTURES:
-            for (uint64_t i = 0; i < r->x[2] && r->x[1] + i < 32 && r->x[0] < 6; i++)
-                memcpy(&st.tex[r->x[0]][r->x[1] + i], (uint8_t *)x + i * 8, 8);
-            break;
-        case CMD_BIND_IMAGES:
-            for (uint64_t i = 0; i < r->x[2] && r->x[1] + i < 8 && r->x[0] < 6; i++)
-                memcpy(&st.img[r->x[0]][r->x[1] + i], (uint8_t *)x + i * 8, 8);
-            break;
-        case CMD_SET_TEXTURE_POOL: st.tpool = (NvnDescPool *)(uintptr_t)r->x[0]; break;
-        case CMD_SET_SAMPLER_POOL: st.spool = (NvnDescPool *)(uintptr_t)r->x[0]; break;
-        case CMD_SET_RENDER_TARGETS: {
-            const struct { uint64_t tex[8]; NvnTextureView views[8]; uint8_t has_view[8]; uint64_t depth;
-                           NvnTextureView dview; uint8_t has_dview; } *rt = x;
-            RtState prev = st.rt;  // the same targets again: keep the pass (a restart = full barrier + reload)
-            memset(&st.rt, 0, sizeof st.rt);
-            st.rt.ncolor = (int)r->x[0] > 8 ? 8 : (int)r->x[0];
-            for (int i = 0; i < st.rt.ncolor; i++) {
-                st.rt.color[i] = (NvnTexture *)(uintptr_t)rt->tex[i];
-                st.rt.cview[i] = rt->views[i];
-                st.rt.has_cview[i] = rt->has_view[i];
-            }
-            st.rt.depth = (NvnTexture *)(uintptr_t)rt->depth;
-            st.rt.dview = rt->dview;
-            st.rt.has_dview = rt->has_dview;
-            static int always = -1;
-            if (always < 0) always = getenv("LARECOMP_VK_PASS_RESTART") != NULL;
-            if (always || memcmp(&prev, &st.rt, sizeof prev)) st.rt_dirty = true;
-            break;
-        }
-        case CMD_SET_VIEWPORTS:
-            for (uint64_t i = 0; i < r->x[1] && r->x[0] + i < 16; i++) memcpy(st.viewport[r->x[0] + i], (uint8_t *)x + i * 16, 16);
-            break;
-        case CMD_SET_SCISSORS:
-            for (uint64_t i = 0; i < r->x[1] && r->x[0] + i < 16; i++) memcpy(st.scissor[r->x[0] + i], (uint8_t *)x + i * 16, 16);
-            break;
-        case CMD_SET_DEPTH_RANGES:
-            for (uint64_t i = 0; i < r->x[1] && r->x[0] + i < 16; i++) memcpy(st.depth_range[r->x[0] + i], (uint8_t *)x + i * 8, 8);
-            break;
-        case CMD_SET_BLEND_COLOR: memcpy(st.blend_color, x, 16); break;
-        case CMD_SET_STENCIL: {
-            int face = (int)r->x[0];
-            for (int f = 0; f < 2; f++) {
-                if (!(face & (1 << f))) continue;
-                if (r->x[6] == 0) st.stencil_ref[f] = (uint32_t)r->x[1];
-                else if (r->x[6] == 1) st.stencil_mask[f] = (uint32_t)r->x[1];
-                else st.stencil_vmask[f] = (uint32_t)r->x[1];
-            }
-            break;
-        }
-        case CMD_SET_POLYGON_OFFSET: memcpy(st.poly_offset, r->f, sizeof st.poly_offset); break;
-        case CMD_SET_PRIMITIVE_RESTART: st.prim_restart = r->x[0] != 0; st.restart_index = (uint32_t)r->x[1]; break;
-        case CMD_SET_COPY_STRIDES: st.copy_row_stride = r->x[0]; st.copy_image_stride = r->x[1]; break;
         case CMD_SET_RENDER_ENABLE:  // (runtime/nvn/cmdbuf.c; as renderer.m)
             if (r->x[2]) {  // conditional: the counters at x1 and x1 + 16 (mode 0: render if equal, 1: if different)
                 const uint64_t *q = (const uint64_t *)(uintptr_t)r->x[1];
@@ -4139,7 +4171,7 @@ static void exec_list(uint64_t handle, int depth) {
             renderer_flush();
             memmove((void *)(uintptr_t)r->x[1], (void *)(uintptr_t)r->x[0], r->x[2]);
             break;
-        default: break;
+        default: apply_state(&st, r); break;
         }
         p += r->size;
     }
