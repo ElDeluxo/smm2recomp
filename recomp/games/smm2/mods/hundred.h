@@ -13,6 +13,7 @@
 struct hundred_credit {
     char name[66];   // course name, UTF-8
     char maker[22];  // maker name, UTF-8
+    char code[12];   // course ID, XXX-XXX-XXX ("" if unknown)
 };
 
 struct hundred_status {
