@@ -278,6 +278,9 @@ $(B)/mbedtls/%.o: $(MBEDTLS)/library/%.c runtime/net/mbedtls_user_config.h
 $(B)/rt/services/ssl.o: RTFLAGS += $(MBEDTLS_FLAGS)
 $(B)/rt/services/ssl.o: runtime/net/mbedtls_user_config.h
 $(B)/rt/net/token.o: RTFLAGS += $(MBEDTLS_FLAGS)
+$(B)/rt/net/http.o: RTFLAGS += $(MBEDTLS_FLAGS)
+$(B)/rt/net/http.o: runtime/net/mbedtls_user_config.h
+$(B)/rt/net/roots.o: RTFLAGS += $(MBEDTLS_FLAGS)
 
 # a game's own glue (games/<game>/*.c), compiled like the runtime
 $(B)/rt/games/%.o: games/%.c $(RT_HDRS)
