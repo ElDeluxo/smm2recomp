@@ -20,6 +20,7 @@
 #include "maxwell/shader.h"
 #include "nvn.h"
 #include "renderer.h"
+#include "buildsync.h"
 
 static id<MTLDevice> dev;
 static id<MTLCommandBuffer> cmdbuf;
@@ -756,8 +757,8 @@ static int cbuf_base = 3, tex_base = 8;
     id<MTLFunction> vs, fs;
     ShaderInfo *vi, *fi;
     ShaderInfo *gi;  // geometry stage (vi->msl is then the combined vertex function: maxwell/shader.h)
-    bool failed;
-    _Atomic bool ready;  // functions compiled (async compile: draws are skipped until then)
+    _Atomic int state;         // BUILD_PENDING / READY (vs, fs set) / FAILED (buildsync.h)
+    NSMutableArray *waiting;   // pipelines the prefetch scan asked for before the program was ready (@synchronized)
 }
 @end
 @implementation Prog
@@ -1216,8 +1217,11 @@ static id<MTLRenderPipelineState> pipeline_cache_find_render(MTLRenderPipelineDe
     id<MTLRenderPipelineState> ps = [dev newRenderPipelineStateWithDescriptor:pd options:MTLPipelineOptionFailOnBinaryArchiveMiss
                                                                    reflection:nil error:nil];
     pd.binaryArchives = nil;
-    stat_cached_ms += now_ms() - t0;
-    if (ps) { __atomic_fetch_add(&g_archive_hits, 1, __ATOMIC_RELAXED); stat_cached++; }
+    @synchronized(cache) {  // (also called from pipeline builds off the game thread)
+        stat_cached_ms += now_ms() - t0;
+        if (ps) stat_cached++;
+    }
+    if (ps) __atomic_fetch_add(&g_archive_hits, 1, __ATOMIC_RELAXED);
     return ps;
 }
 static void pipeline_cache_add(id desc) {
@@ -1324,17 +1328,12 @@ void shader_cache_warm(void) {
     });
 }
 
-// Programs compile on first use, blocking. SMM2 renders some things exactly once (its colour-correction LUT, light
-// probes), so a draw skipped while its program compiles in the background is never redrawn: the scene stayed black.
-// The shader caches above keep the blocking compiles short after the first run. LARECOMP_ASYNC_SHADERS=1: compile in
-// the background and skip the draws meanwhile (LAS's behaviour).
-static bool sync_shaders(void) {
-    static int v = -1;
-    if (v < 0) v = getenv("LARECOMP_ASYNC_SHADERS") == NULL;
-    return v;
-}
-
-static void compile_program(Prog *pr) {
+// Programs and pipelines build off the game thread and draws wait for theirs (shader_mode(), buildsync.h): SMM2
+// renders some things exactly once (its colour-correction LUT, light probes), so a draw skipped while its program
+// compiled in the background was never redrawn and the scene stayed black. LARECOMP_NO_SHADER_PREFETCH=1: build on
+// first use, inline; LARECOMP_ASYNC_SHADERS=1: in the background, skipping the draws meanwhile (LAS's behaviour).
+// The shader caches above keep all of it short after the first run.
+static int compile_program(Prog *pr) {  // (BUILD_READY or BUILD_FAILED; the caller publishes it in pr->state)
     NSError *err = nil;
     static MTLCompileOptions *vopts;
     static dispatch_once_t once;
@@ -1353,8 +1352,8 @@ static void compile_program(Prog *pr) {
                 completionHandler:^(id<MTLLibrary> l, NSError *e) { vl = l; verr = e; dispatch_semaphore_signal(vdone); }];
     if (!fl) fl = [dev newLibraryWithSource:entry_source('f', pr->fi->msl, salt) options:nil error:&err];
     if (vdone) dispatch_semaphore_wait(vdone, DISPATCH_TIME_FOREVER);
-    if (!vl) { LOG("[shader] VS compile failed: %s\n%s\n", verr.localizedDescription.UTF8String, pr->vi->msl); pr->failed = true; return; }
-    if (!fl) { LOG("[shader] FS compile failed: %s\n%s\n", err.localizedDescription.UTF8String, pr->fi->msl); pr->failed = true; return; }
+    if (!vl) { LOG("[shader] VS compile failed: %s\n%s\n", verr.localizedDescription.UTF8String, pr->vi->msl); return BUILD_FAILED; }
+    if (!fl) { LOG("[shader] FS compile failed: %s\n%s\n", err.localizedDescription.UTF8String, pr->fi->msl); return BUILD_FAILED; }
     pr->vs = [vl newFunctionWithName:entry_name('v', pr->vi->msl)];
     pr->fs = [fl newFunctionWithName:entry_name('f', pr->fi->msl)];
     __atomic_fetch_add(&stat_compiles, 1, __ATOMIC_RELAXED);
@@ -1362,7 +1361,14 @@ static void compile_program(Prog *pr) {
     @synchronized(cache) { stat_compile_ms += dt; }
     if (dt > 250) LOG("[shader] slow program: %.0f ms (VS %016llx %zu bytes, FS %016llx %zu bytes of MSL)\n", dt,
                       (unsigned long long)fnv64(pr->vi->msl), strlen(pr->vi->msl), (unsigned long long)fnv64(pr->fi->msl), strlen(pr->fi->msl));
-    pr->ready = true;
+    return BUILD_READY;
+}
+
+// A program draws can use now: in prefetch and sync mode after waiting for its build (sync: already built)
+static bool prog_usable(Prog *pr) {
+    if (!pr) return false;
+    if (shader_mode() == SHADERS_SKIP) return atomic_load(&pr->state) == BUILD_READY;
+    return build_wait(&pr->state, "program") == BUILD_READY;
 }
 
 static Prog *get_program(NvnProgram *p, ShaderKey *vkey, ShaderKey *fkey) {
@@ -1377,7 +1383,7 @@ static Prog *get_program(NvnProgram *p, ShaderKey *vkey, ShaderKey *fkey) {
     if (!h) h = 1;
     uint32_t slot = (uint32_t)(h ^ (h >> 31)) & (PROG_TAB - 1);
     while (prog_tab[slot].key && prog_tab[slot].key != h) slot = (slot + 1) & (PROG_TAB - 1);
-    if (prog_tab[slot].key) { Prog *fp = (__bridge Prog *)prog_tab[slot].prog; return fp->failed ? nil : fp; }
+    if (prog_tab[slot].key) { Prog *fp = (__bridge Prog *)prog_tab[slot].prog; return atomic_load(&fp->state) == BUILD_FAILED ? nil : fp; }
     NSString *key = [NSString stringWithFormat:@"%llx/%llx/%@/%@%s", p->stages[0].code_addr, p->stages[1].code_addr,
                      [NSData dataWithBytes:vkey length:sizeof *vkey], [NSData dataWithBytes:fkey->rt_kind length:8],
                      vkey->flip_x ? "/mirror" : ""];  // (NSData's description elides the middle of the key's bytes)
@@ -1385,7 +1391,7 @@ static Prog *get_program(NvnProgram *p, ShaderKey *vkey, ShaderKey *fkey) {
     if (pr) {
         prog_tab[slot].key = h;
         prog_tab[slot].prog = (__bridge void *)pr;
-        return pr->failed ? nil : pr;
+        return atomic_load(&pr->state) == BUILD_FAILED ? nil : pr;
     }
     pr = [Prog new];
     cache[key] = pr;
@@ -1418,7 +1424,7 @@ static Prog *get_program(NvnProgram *p, ShaderKey *vkey, ShaderKey *fkey) {
         pr->gi = maxwell_translate((const uint8_t *)(uintptr_t)p->stages[2].code_addr, gmax, STAGE_GEOMETRY, vkey);
         if (!pr->gi->msl) {
             LOG("[shader] GS translate failed: %s (code %llx)\n", pr->gi->error, p->stages[2].code_addr);
-            pr->failed = true;
+            atomic_store(&pr->state, BUILD_FAILED);
             return nil;
         }
         gvkey = *vkey;
@@ -1430,7 +1436,7 @@ static Prog *get_program(NvnProgram *p, ShaderKey *vkey, ShaderKey *fkey) {
     if (pr->vi->msl && pr->gi) {  // the combined vertex function: vertex shader for the point, then the geometry stage
         if ((pr->vi->cbuf_mask >> GS_CBUF_BASE) & pr->gi->cbuf_mask) {
             LOG("[shader] GS cbufs clash with the vertex shader's (code %llx)\n", p->stages[2].code_addr);
-            pr->failed = true;
+            atomic_store(&pr->state, BUILD_FAILED);
             return nil;
         }
         NSMutableString *m = [NSMutableString stringWithUTF8String:pr->vi->msl];
@@ -1455,12 +1461,12 @@ static Prog *get_program(NvnProgram *p, ShaderKey *vkey, ShaderKey *fkey) {
         snprintf(path, sizeof path, "build/shaders/fail_%llx_s0_code.bin", p->stages[0].code_addr);
         FILE *f = fopen(path, "wb");
         if (f) { fwrite((void *)(uintptr_t)p->stages[0].code_addr, 1, 0x4000, f); fclose(f); }
-        pr->failed = true;
+        atomic_store(&pr->state, BUILD_FAILED);
         return nil;
     }
     fkey->vs_out_mask = pr->vi->out_mask;
     pr->fi = maxwell_translate((const uint8_t *)(uintptr_t)p->stages[1].code_addr, fmax, STAGE_FRAGMENT, fkey);
-    if (!pr->fi->msl) { LOG("[shader] FS translate failed: %s\n", pr->fi->error); pr->failed = true; return nil; }
+    if (!pr->fi->msl) { LOG("[shader] FS translate failed: %s\n", pr->fi->error); atomic_store(&pr->state, BUILD_FAILED); return nil; }
     if (getenv("LARECOMP_SAVE_MSL")) {
         mkdir("build/msl", 0755);
         char path[256];
@@ -1483,15 +1489,15 @@ static Prog *get_program(NvnProgram *p, ShaderKey *vkey, ShaderKey *fkey) {
         f = fopen(path, "w"); if (f) { fputs(b && b->msl ? b->msl : b ? b->error : "", f); fclose(f); }
     }
     shader_cache_note(pr->vi->msl, pr->fi->msl);
-    if (sync_shaders()) {
-        compile_program(pr);
-        return pr->failed ? nil : pr;
+    if (shader_mode() == SHADERS_SYNC) {
+        atomic_store(&pr->state, compile_program(pr));
+        return atomic_load(&pr->state) == BUILD_FAILED ? nil : pr;
     }
-    // First-time compiles take ~40 ms each on Metal: build off the render thread; draws using this program are
-    // skipped until it's ready (the object appears a few frames later instead of the game stalling).
+    // First-time compiles take ~40 ms each on Metal: built off the game thread, side by side
     static dispatch_queue_t q;
     if (!q) q = dispatch_queue_create("larecomp.shaders", DISPATCH_QUEUE_CONCURRENT);
-    dispatch_async(q, ^{ compile_program(pr); });
+    build_begin();
+    dispatch_async(q, ^{ build_finish(&pr->state, compile_program(pr)); });
     return pr;
 }
 
@@ -2300,6 +2306,49 @@ static MTLRenderPipelineDescriptor *render_pipe_desc(const ExecState *s, const P
     return pd;
 }
 
+// A pipeline built off the game thread (prefetch mode), held in the pending table (buildsync.h) until a draw takes it
+@interface MPipe : NSObject {
+@public
+    _Atomic int state;  // BUILD_*
+    id<MTLRenderPipelineState> pipe;
+}
+@end
+@implementation MPipe
+@end
+static void mpipe_release(void *p) { CFRelease(p); }
+
+// The pipeline for (pd, key) in the pending table, its build started if it's new (pr must be ready: its functions
+// go into the pipeline). The archive lookup is part of the build, so a draw doesn't wait for that either.
+static MPipe *pipe_request(Prog *pr, MTLRenderPipelineDescriptor *pd, NSString *key, uint64_t phash) {
+    MPipe *fresh = [MPipe new];
+    void *fp = (__bridge_retained void *)fresh;
+    void *got = pend_get_or_put(phash, fp);
+    if (got != fp) { CFRelease(fp); return (__bridge MPipe *)got; }
+    pipeline_cache_open();
+    static dispatch_queue_t q;
+    if (!q) q = dispatch_queue_create("larecomp.pipelines", DISPATCH_QUEUE_CONCURRENT);
+    MTLRenderPipelineDescriptor *pdc = [pd copy];
+    pdc.vertexFunction = pr->vs;
+    pdc.fragmentFunction = pr->fs;
+    NSString *k = [key copy];
+    build_begin();
+    dispatch_async(q, ^{
+        double t0 = now_ms();
+        id<MTLRenderPipelineState> ps = pipeline_cache_find_render(pdc);
+        if (!ps) {
+            NSError *e = nil;
+            ps = [dev newRenderPipelineStateWithDescriptor:pdc error:&e];
+            if (ps) pipeline_cache_add_render(pdc);
+            else { static int n; if (n++ < 10) LOG("[metal] pipeline failed: %s (%s)\n", e.localizedDescription.UTF8String, k.UTF8String); }
+            @synchronized(cache) { stat_compile_ms += now_ms() - t0; }
+            __atomic_fetch_add(&stat_compiles, 1, __ATOMIC_RELAXED);
+        }
+        fresh->pipe = ps;
+        build_finish(&fresh->state, ps ? BUILD_READY : BUILD_FAILED);
+    });
+    return fresh;
+}
+
 static void draw(CmdRec *r, bool indexed) {
     if (!st.program) { stat_skipped++; return; }
     static bool logged_modes;
@@ -2315,7 +2364,7 @@ static void draw(CmdRec *r, bool indexed) {
     // 3D World background keeps a clear pipe's yellow stand-in mesh switched off this way.
     if (st.poly[0] == 3 && (uint32_t)r->x[0] >= 4) { stat_skipped++; return; }
     Prog *pr = get_program(st.program, &vkey, &fkey);
-    if (!pr || !pr->ready) { stat_skipped++; return; }
+    if (!prog_usable(pr)) { stat_skipped++; return; }
     {   // mirror mode (runtime/hle/mirror.c): the scene's composite into the window image is drawn mirrored - the
         // unblended full-screen draw sampling an image the window's size (the window images also serve as scratch
         // targets earlier in the frame: those draws sample smaller images; the HUD after it blends)
@@ -2330,7 +2379,7 @@ static void draw(CmdRec *r, bool indexed) {
         if (mirror_draw(composite)) {  // (the vertex flip mirrors a composite drawn with uvs, the fragment one a
             vkey.flip_x = fkey.flip_x = true;  // composite reading pixel positions; get_program keys on vkey)
             pr = get_program(st.program, &vkey, &fkey);
-            if (!pr || !pr->ready) { stat_skipped++; return; }
+            if (!prog_usable(pr)) { stat_skipped++; return; }
         }
     }
     {   // Interiors/dungeons draw a 16:9 backdrop quad over the still-rendered overworld: frames that
@@ -2437,12 +2486,20 @@ static void draw(CmdRec *r, bool indexed) {
         }
         if (pobj == pending) { stat_skipped++; return; }
     }
+    if (!pobj && shader_mode() == SHADERS_PREFETCH) {  // (built off the thread - maybe started by the scan - and waited for)
+        MPipe *m = pipe_request(pr, pd, pk, phash);
+        build_wait(&m->state, "pipeline");
+        void *t = pend_take(phash);
+        if (t) CFRelease(t);
+        pobj = m->pipe ? (id)m->pipe : (id)[NSNull null];
+        cache[pk] = pobj;
+    }
     if (!pobj) {
         pipeline_cache_open();
         pobj = pipeline_cache_find_render(pd);  // (in the cache: no compile, and no background build either)
         if (pobj) {
             cache[pk] = pobj;
-        } else if (sync_shaders()) {
+        } else if (shader_mode() == SHADERS_SYNC) {
             NSError *err;
             pobj = TIMED_COMPILE([dev newRenderPipelineStateWithDescriptor:pd error:&err]);
             if (pobj) pipeline_cache_add_render(pd);
@@ -3481,6 +3538,8 @@ static void exec_list(uint64_t handle, int depth) {
 // everything keyed by guest addresses or guest-owned objects - programs (by code address), pipelines (by program),
 // views, snapshots, bound state - so the next boot can't hit a stale entry. Metal's own shader cache stays warm.
 void renderer_reset(void) {
+    build_drain();  // (builds in flight finish first: they write into the objects dropped below)
+    pend_clear(mpipe_release);
     renderer_flush();
     pthread_mutex_lock(&gone_lock);
     ngone = 0;
