@@ -5,6 +5,7 @@
 #include <math.h>
 #include <stdarg.h>
 #include <pthread.h>
+#include <sched.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1015,6 +1016,9 @@ static void begin_pass(void) {
     uint32_t w = 0, minw = UINT32_MAX, minh = UINT32_MAX;  // w: first attachment seen
     pass_ncolor = (uint32_t)st.rt.ncolor;
     pass_samples = 1;
+    // (all eight: the formats past the targets bound are in pipeline keys too - an earlier pass's left there made one
+    // pipeline several, and the prefetch scan's keys miss)
+    for (int i = 0; i < 8; i++) pass_color[i] = VK_FORMAT_UNDEFINED;
     g_pass_ncolor = st.rt.ncolor;
     memcpy(g_pass_color, st.rt.color, sizeof g_pass_color);
     g_pass_depth = st.rt.depth;
@@ -1294,11 +1298,21 @@ typedef struct {
     _Atomic int state;  // BUILD_PENDING (translating, compiling), READY, FAILED (buildsync.h)
     BuildJob tjob, cjob;  // translation, compile (compute programs: cjob only)
     bool async;           // built on the queues: counted in flight until its state is final
+    struct PipeReq *waiting;  // pipelines the prefetch scan wants once it's compiled (g_wait_lock)
 } Prog;
 
-static void prog_state(Prog *p, int v) {  // (its final state, once)
+static pthread_mutex_t g_wait_lock = PTHREAD_MUTEX_INITIALIZER;  // Prog.waiting, and its state changing with it
+static uint64_t g_prog_creates, g_cs_creates;  // programs made (game thread): the scan's and the draws' share
+static void pipe_requests_run(struct PipeReq *w, int v);
+
+static void prog_state(Prog *p, int v) {  // (its final state, once; the scan's pipeline requests start or are dropped)
+    pthread_mutex_lock(&g_wait_lock);
+    struct PipeReq *w = p->waiting;
+    p->waiting = NULL;
     if (p->async) build_finish(&p->state, v);
     else atomic_store(&p->state, v);
+    pthread_mutex_unlock(&g_wait_lock);
+    if (w) pipe_requests_run(w, v);
 }
 
 static VkPipelineLayout make_layout(Prog *p, int nsets, VkShaderStageFlags s0, VkShaderStageFlags s1) {
@@ -1437,6 +1451,7 @@ static Prog *get_program(NvnProgram *np, ShaderKey *vkey, ShaderKey *fkey) {
     while (prog_tab[slot].key && prog_tab[slot].key != h) slot = (slot + 1) & (PROG_TAB - 1);
     if (prog_tab[slot].key) return prog_tab[slot].prog;
     Prog *p = calloc(1, sizeof *p);
+    g_prog_creates++;
     prog_tab[slot].key = h;
     prog_tab[slot].prog = p;
     for (int i = 0; i < (gs ? 3 : 2); i++) {
@@ -2683,6 +2698,7 @@ static CsProg *compute_program(NvnProgram *np) {
     int n = g_cs_n;
     for (int i = 0; i < n; i++) if (tab[i].addr == ss->code_addr) return tab[i].cp;
     CsProg *cp = calloc(1, sizeof *cp);
+    g_cs_creates++;
     if (n < 256) { tab[n].addr = ss->code_addr; tab[n].cp = cp; g_cs_n = n + 1; }
     maxwell_gmem_base = HEAP_BASE;
     maxwell_gmem_size = HEAP_MAX;
@@ -2710,7 +2726,9 @@ static CsProg *compute_program(NvnProgram *np) {
 static void dispatch_compute(uint32_t gx, uint32_t gy, uint32_t gz) {
     snap_reason = "compute"; snapshots_invalidate(NULL);
     if (!st.program || !gx || !gy || !gz) return;
+    uint64_t made = g_cs_creates;
     CsProg *cp = compute_program(st.program);
+    if (shader_mode() == SHADERS_PREFETCH) g_prefetch.unforeseen += g_cs_creates - made;
     if (cp && shader_mode() == SHADERS_PREFETCH && atomic_load(&cp->p.state) == BUILD_PENDING) job_run_or_wait(g_wq, &cp->p.cjob);
     if (!cp || atomic_load(&cp->p.state) != BUILD_READY) SKIP_DRAW();
     {   // LARECOMP_SKIP_CS=<code address hex> (debug): skip that compute shader's dispatches, to see what it does
@@ -2823,6 +2841,24 @@ static void lavapipe_mrt_split(Prog *pr) {
 }
 
 static void draw_(CmdRec *r, bool indexed);
+// A pipeline the prefetch scan wants for a program still compiling (Prog.waiting): started when it's ready, then
+// found by its draw in the pending table (buildsync.h)
+typedef struct PipeReq { struct PipeReq *next; uint64_t hash; PipeKey k; } PipeReq;
+static void pipe_requests_run(PipeReq *w, int v) {
+    while (w) {
+        PipeReq *next = w->next;
+        if (v == BUILD_READY) {
+            Pipe *pp = calloc(1, sizeof *pp);
+            pp->k = w->k;
+            pp->async = true;
+            if (pend_get_or_put(w->hash, pp) != pp) free(pp);  // (asked twice: built once)
+            else { build_begin(); run_build(false, &pp->job, build_pipeline, pp); }
+        }
+        free(w);
+        w = next;
+    }
+}
+
 // The program keys a draw in state s compiles its shaders with (the mirror flip is the draw's own)
 static void program_keys(const ExecState *s, ShaderKey *vkey, ShaderKey *fkey) {
     memset(vkey, 0, sizeof *vkey);
@@ -2896,7 +2932,9 @@ static void draw_(CmdRec *r, bool indexed) {
     if (st.poly[0] == 3 && (uint32_t)r->x[0] >= 4) SKIP_DRAW();
     ShaderKey vkey, fkey;
     program_keys(&st, &vkey, &fkey);
+    uint64_t made = g_prog_creates;
     Prog *pr = get_program(st.program, &vkey, &fkey);
+    if (shader_mode() == SHADERS_PREFETCH) g_prefetch.unforeseen += g_prog_creates - made;
     if (!prog_ready(pr)) SKIP_DRAW();
     g_mirror_w = 0;
     {   // mirror mode (runtime/hle/mirror.c; as renderer.m): the scene's composite into the window image is mirrored
@@ -2987,18 +3025,27 @@ static void draw_(CmdRec *r, bool indexed) {
             if (memcmp(&pl, &pp_, sizeof pl)) {
                 static int nlog;
                 if (nlog++ < 10)
-                    LOG("[shader] pass_layout predicted %d/%d/%u, the pass has %d/%d/%u (colour 0, depth, samples)\n",
-                        pp_.color[0], pp_.depth, pp_.samples, pl.color[0], pl.depth, pl.samples);
+                    LOG("[shader] pass_layout predicted %u: %d %d %d %d %d %d %d %d d%d s%d x%u, the pass has %u: %d %d %d %d %d %d %d %d d%d s%d x%u\n",
+                        pp_.ncolor, pp_.color[0], pp_.color[1], pp_.color[2], pp_.color[3], pp_.color[4], pp_.color[5], pp_.color[6],
+                        pp_.color[7], pp_.depth, pp_.stencil, pp_.samples, pl.ncolor, pl.color[0], pl.color[1], pl.color[2], pl.color[3],
+                        pl.color[4], pl.color[5], pl.color[6], pl.color[7], pl.depth, pl.stencil, pl.samples);
             }
         }
-        pp = calloc(1, sizeof *pp);
-        pp->k = k;
+        pp = shader_mode() == SHADERS_PREFETCH ? pend_take(ph) : NULL;  // (the scan's, started when its program was ready)
+        if (!pp) {
+            pp = calloc(1, sizeof *pp);
+            pp->k = k;
+            if (shader_mode() != SHADERS_SYNC) { pp->async = true; build_begin(); }
+            if (shader_mode() == SHADERS_PREFETCH) g_prefetch.unforeseen++;
+            run_build(false, &pp->job, build_pipeline, pp);
+        }
         pipe_tab[pslot].key = ph;
         pipe_tab[pslot].pipe = pp;
-        if (shader_mode() != SHADERS_SYNC) { pp->async = true; build_begin(); }
-        run_build(false, &pp->job, build_pipeline, pp);
     }
-    if (shader_mode() == SHADERS_PREFETCH && atomic_load(&pp->state) == BUILD_PENDING) job_run_or_wait(g_wq, &pp->job);
+    if (shader_mode() == SHADERS_PREFETCH && atomic_load(&pp->state) == BUILD_PENDING) {
+        while (atomic_load(&pp->job.state) == JOB_IDLE) sched_yield();  // (put in the table just before it's queued)
+        job_run_or_wait(g_wq, &pp->job);
+    }
     if (atomic_load(&pp->state) != BUILD_READY) SKIP_DRAW();
     ss_enabled();
     if (ss_need(SS_PIPE, ss.pipe == pp->pipe)) { ss.pipe = pp->pipe; vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pp->pipe); }
@@ -4177,9 +4224,118 @@ static void exec_list(uint64_t handle, int depth) {
     }
 }
 
-// Shader prefetch (renderer.m backend_prefetch): not on Vulkan yet
-void backend_prefetch(const uint64_t *handles, int n) { (void)handles; (void)n; }
-void renderer_prefetch_verify(void) {}
+// ================================================================== shader prefetch (as renderer.m)
+// Before a submission runs, its lists are walked on a copy of the state (the shadow) and the programs and pipelines
+// their draws will need start building, side by side (docs/superpowers/specs/2026-10-20-shader-prefetch-design.md).
+// Advisory only: a draw the scan got wrong builds its own and waits, as without it.
+static ExecState g_shadow;
+
+static void scan_draw(const CmdRec *r) {
+    ExecState *s = &g_shadow;
+    if (!s->program || (s->poly[0] == 3 && (uint32_t)r->x[0] >= 4)) return;  // (as draw_ skips)
+    g_prefetch.draws++;
+    ShaderKey vkey, fkey;
+    program_keys(s, &vkey, &fkey);
+    uint64_t made = g_prog_creates;
+    Prog *pr = get_program(s->program, &vkey, &fkey);  // (a new one: its translation queued)
+    g_prefetch.progs += g_prog_creates - made;
+    if (!pr) return;
+    // the key needs the translated shaders: translate here (one translator thread either way)
+    if (atomic_load(&pr->state) == BUILD_PENDING && atomic_load(&pr->tjob.state) != JOB_DONE) job_run_or_wait(g_tq, &pr->tjob);
+    if (atomic_load(&pr->state) == BUILD_FAILED) return;
+    VkPrimitiveTopology topo;
+    uint8_t cls;
+    uint32_t mode = (uint32_t)r->x[0];
+    if (!topology(mode, &topo, &cls) && mode != 6 && mode != 7 && mode != 9) return;
+    if (pr->gi && mode != 0) return;
+    PassLayout pl;
+    pass_layout(s, &pl);
+    PipeKey k;
+    pipe_key(s, &pl, pr, cls, &k);
+    uint64_t ph = hash_words(0xcbf29ce484222325ull, &k, sizeof k);
+    if (!ph) ph = 1;
+    uint32_t pslot = (uint32_t)(ph ^ (ph >> 29)) & (PIPE_TAB - 1);
+    while (pipe_tab[pslot].key && pipe_tab[pslot].key != ph) pslot = (pslot + 1) & (PIPE_TAB - 1);
+    if (pipe_tab[pslot].key) return;
+    pthread_mutex_lock(&g_wait_lock);
+    if (atomic_load(&pr->state) == BUILD_PENDING) {  // compiling: requested when it's done (prog_state)
+        PipeReq *q = malloc(sizeof *q);
+        q->hash = ph;
+        q->k = k;
+        q->next = pr->waiting;
+        pr->waiting = q;
+        pthread_mutex_unlock(&g_wait_lock);
+        g_prefetch.pipes++;
+        return;
+    }
+    pthread_mutex_unlock(&g_wait_lock);
+    if (atomic_load(&pr->state) != BUILD_READY) return;
+    Pipe *pp = calloc(1, sizeof *pp);  // (ready: into the table now, as the draw would)
+    pp->k = k;
+    pp->async = true;
+    build_begin();
+    pipe_tab[pslot].key = ph;
+    pipe_tab[pslot].pipe = pp;
+    run_build(false, &pp->job, build_pipeline, pp);
+    g_prefetch.pipes++;
+}
+
+static void scan_list(uint64_t handle, int depth) {
+    uint64_t p = handle;
+    for (int guard = 0; guard < 10000000; guard++) {
+        if (p < 0x100000 || (p & 7) || ((CmdRec *)(uintptr_t)p)->op >= CMD_COUNT) return;  // (exec_list says where)
+        CmdRec *r = (CmdRec *)(uintptr_t)p;
+        switch (r->op) {
+        case CMD_END: return;
+        case CMD_JUMP: p = r->x[0]; continue;
+        case CMD_CALL: {
+            const uint64_t *h = (const uint64_t *)r->extra;
+            for (uint64_t i = 0; i < r->x[0] && depth < 8; i++) if (h[i]) scan_list(h[i], depth + 1);
+            break;
+        }
+        case CMD_DRAW_ARRAYS: case CMD_DRAW_ELEMENTS: scan_draw(r); break;  // (render-enable ignored: a build too many)
+        case CMD_DISPATCH: {
+            uint64_t made = g_cs_creates;
+            if (g_shadow.program && r->x[0] && r->x[1] && r->x[2]) compute_program(g_shadow.program);
+            g_prefetch.progs += g_cs_creates - made;
+            break;
+        }
+        case CMD_CLEAR_TEXTURE: break;  // (binds its texture and puts the targets back)
+        default: apply_state(&g_shadow, r); break;
+        }
+        p += r->size;
+    }
+}
+
+void backend_prefetch(const uint64_t *handles, int n) {
+    if (shader_mode() != SHADERS_PREFETCH) return;
+    uint64_t t0 = SDL_GetTicksNS();
+    g_shadow = st;
+    for (int i = 0; i < n; i++) if (handles[i]) scan_list(handles[i], 0);
+    g_prefetch.submits++;
+    g_prefetch.scan_ns += SDL_GetTicksNS() - t0;
+}
+
+// LARECOMP_PREFETCH_VERIFY=1: after a submission ran, the scan's final state should be the executor's
+void renderer_prefetch_verify(void) {
+    static int on = -1;
+    if (on < 0) on = getenv("LARECOMP_PREFETCH_VERIFY") != NULL;
+    if (!on || shader_mode() != SHADERS_PREFETCH) return;
+    static int nlog;
+    #define VERIFY(f, n) if (memcmp(&g_shadow.f, &st.f, n) && nlog++ < 20) LOG("[shader] prefetch verify: %s differs\n", #f)
+    VERIFY(program, sizeof st.program);
+    VERIFY(nattrib, sizeof st.nattrib);
+    VERIFY(attrib, sizeof st.attrib[0] * (size_t)(st.nattrib < 16 ? st.nattrib : 16));
+    VERIFY(nstream, sizeof st.nstream);
+    VERIFY(stream, sizeof st.stream[0] * (size_t)(st.nstream < 16 ? st.nstream : 16));
+    VERIFY(rt, sizeof st.rt);
+    VERIFY(blend, sizeof st.blend);
+    VERIFY(color_state, sizeof st.color_state);
+    VERIFY(channel_mask, sizeof st.channel_mask);
+    VERIFY(ms, sizeof st.ms);
+    VERIFY(poly, sizeof st.poly);
+    #undef VERIFY
+}
 
 void backend_execute(uint64_t handle) {
     PROF_T0();

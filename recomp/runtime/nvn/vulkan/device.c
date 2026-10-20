@@ -660,6 +660,8 @@ void backend_present(NvnTexture *t) {
     }
     extern void vk_prof_frame(uint64_t frame, uint64_t present_ns);
     vk_prof_frame(total_frames, SDL_GetTicksNS() - t0);
+    extern void prefetch_stats_tick(uint64_t presented);
+    prefetch_stats_tick(total_frames);
     frames++;
     total_frames++;
     g_frame_counter++;
