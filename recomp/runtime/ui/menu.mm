@@ -35,6 +35,7 @@ void controls_bindings_draw(float scale);  // controls_ui.mm
 #include "../input_bind.h"
 #include "../paths.h"
 #include "../nvn/framegen.h"
+#include "system_font.h"
 }
 
 // ------------------------------------------------------------------ state shared with the main thread
@@ -352,14 +353,13 @@ static void init(void) {
     io.IniFilename = NULL;
     ImFontConfig cfg;
     cfg.OversampleH = 2;
-    const char *paths[] = {"/System/Library/Fonts/Avenir Next.ttc", "/System/Library/Fonts/Helvetica.ttc",
-                           "C:/Windows/Fonts/segoeui.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-                           "/usr/share/fonts/TTF/DejaVuSans.ttf", "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf"};
-    for (const char *p : paths) {
-        if (FILE *f = fopen(p, "rb")) fclose(f);  // a missing file is an assertion in ImGui, not a NULL return
-        else continue;
-        if (!g_font) g_font = io.Fonts->AddFontFromFileTTF(p, 34 * g_atlas_scale, &cfg);
-        if (g_font && !g_font_big) { ImFontConfig b = cfg; b.FontNo = 0; g_font_big = io.Fonts->AddFontFromFileTTF(p, 56 * g_atlas_scale, &b); }
+    char sys[1024];
+    int face = 0;
+    if (ui_system_font(sys, sizeof sys, &face)) {  // (system_font.mm: an existing file; a missing one asserts in ImGui)
+        cfg.FontNo = face;
+        g_font = io.Fonts->AddFontFromFileTTF(sys, 34 * g_atlas_scale, &cfg);
+        if (g_font) g_font_big = io.Fonts->AddFontFromFileTTF(sys, 56 * g_atlas_scale, &cfg);
+        LOG("[menu] font %s\n", sys);
     }
     // the menu window itself: Baloo 2 SemiBold, as on the start screen (shipped, OFL), at its Settings window's sizes; the
     // FPS counter, overlays and on-screen keyboard keep the fonts above
@@ -369,7 +369,12 @@ static void init(void) {
         g_menu_font = io.Fonts->AddFontFromFileTTF(baloo, 39 * g_atlas_scale, &cfg);
         g_menu_font_big = io.Fonts->AddFontFromFileTTF(baloo, 72 * g_atlas_scale, &cfg);
     }
-    if (!g_font) g_font = io.Fonts->AddFontDefault();
+    if (!g_font) {  // (no font file: ImGui's own, at the menu's size rather than its 13 px)
+        LOG("[menu] no system font: the built-in one\n");
+        ImFontConfig d;
+        d.SizePixels = 34 * g_atlas_scale;
+        g_font = io.Fonts->AddFontDefault(&d);
+    }
     if (!g_font_big) g_font_big = g_font;
     if (!g_menu_font || !g_menu_font_big) g_menu_font = g_font, g_menu_font_big = g_font_big;
     style_init();

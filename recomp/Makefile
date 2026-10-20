@@ -143,7 +143,7 @@ DEPINC   := -I$(SDL)/include
 OSFLAGS  := -DGAMELIB_STATIC
 RT_SRC   := $(filter-out runtime/gamebuild.c,$(RT_SRC))
 LDFLAGS  := -L$(SDL)/lib -lSDL3 -framework CoreFoundation -framework Foundation -framework Metal $(if $(filter ios,$(PLATFORM)),-framework MetalFX) \
-            -framework QuartzCore -framework UIKit -framework ImageIO -framework CoreGraphics -framework UniformTypeIdentifiers \
+            -framework QuartzCore -framework UIKit -framework CoreText -framework ImageIO -framework CoreGraphics -framework UniformTypeIdentifiers \
             -framework AVFoundation -framework AudioToolbox -framework CoreAudio -framework CoreHaptics -framework CoreMotion \
             -framework GameController -framework CoreBluetooth -framework OpenGLES -framework CoreVideo -framework CoreMedia -framework CoreServices
 BACKEND_SRC := $(wildcard runtime/nvn/*.m)
@@ -159,7 +159,7 @@ FFMPEG   := $(or $(DEPS),/opt/homebrew/opt/ffmpeg)
 EXE      := $(B)/$(GAME_ID)recomp
 DEPINC   := -I$(SDL)/include -I$(FFMPEG)/include
 LDFLAGS  := -L$(SDL)/lib -lSDL3 -Wl,-rpath,$(SDL)/lib $(if $(FFMPEG_LIBS),-L$(FFMPEG)/lib $(FFMPEG_LIBS) -Wl$(comma)-rpath$(comma)$(FFMPEG)/lib) \
-            -framework CoreFoundation -framework Foundation -framework Metal -framework MetalFX -framework QuartzCore -framework AppKit -framework ImageIO -framework CoreGraphics -framework UniformTypeIdentifiers
+            -framework CoreFoundation -framework Foundation -framework Metal -framework MetalFX -framework QuartzCore -framework AppKit -framework CoreText -framework ImageIO -framework CoreGraphics -framework UniformTypeIdentifiers
 BACKEND_SRC := $(wildcard runtime/nvn/*.m)
 BACKEND_OBJ := $(patsubst runtime/%.m,$(B)/rt/%.o,$(BACKEND_SRC))
 IMGUI_OBJ += $(B)/imgui/imgui_impl_metal.o
@@ -437,7 +437,15 @@ test-framegen: build/test_framegen_logic build/test_framegen
 	build/test_framegen_logic
 	build/test_framegen
 
+# The overlay menu's font file (runtime/ui/system_font.mm)
+build/test_system_font: tools/test_system_font.mm runtime/ui/system_font.mm runtime/ui/system_font.h
+	@mkdir -p build
+	clang++ -O1 -fobjc-arc -I runtime -framework CoreText -framework CoreFoundation -framework Foundation -o $@ \
+	    tools/test_system_font.mm runtime/ui/system_font.mm
+test-ui: build/test_system_font
+	build/test_system_font
+
 build/test_shaders: tools/test_shaders.m runtime/nvn/maxwell/translate.c runtime/nvn/maxwell/shader.h
 	clang -O1 -fobjc-arc -framework Metal -framework Foundation -o $@ tools/test_shaders.m runtime/nvn/maxwell/translate.c
 
-.PHONY: all venv setup gen clean-gen run gen-objs runtime-objs test-tools test-framegen smm2 run-smm2 package embed-server app app-macos apk install push-data
+.PHONY: all venv setup gen clean-gen run gen-objs runtime-objs test-tools test-framegen test-ui smm2 run-smm2 package embed-server app app-macos apk install push-data
