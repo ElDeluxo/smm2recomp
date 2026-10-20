@@ -305,6 +305,11 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
   controls (`recomp/runtime/ui/touchpad.mm`) don't keep clear of the safe area, so the L / ZL buttons are partly
   under the notch in landscape. Inset them by the window's safe area. The phone reached the title screen and ran
   well, then was killed for memory (jetsam `vm-pageshortage` at ~1.85 GB); owner isn't chasing that for now.
+- ⬜ **Rename the app to "SMMaker 2"** (owner, 2026-10-20): the name shown on every platform (iOS home screen,
+  macOS app / menu bar, Windows, Linux, Android, release packages) becomes "SMMaker 2" instead of "SMM2 Recomp".
+  Set in `recomp/games/smm2/game.mk` and the packaging scripts (`recomp/tools/make_ios_app.sh`, `bundle_macos.sh`,
+  `make_android_apk.sh`, `package.sh`, `package_lib.sh`) and `.github/workflows/release.yml`. Decide whether bundle
+  IDs, the data folder and release file names change too (changing the iOS bundle ID loses the installed app's data).
 
 | Platform | Builds | Boots to title | Plays courses | Frames match Ryujinx | Input replays in sync |
 |---|---|---|---|---|---|
