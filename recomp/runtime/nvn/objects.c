@@ -118,7 +118,9 @@ NVN(nvnQueueSubmitCommands) {
     const uint64_t *handles = AP(2);
     if (getenv("LARECOMP_TRACE_CALLS"))
         for (int i = 0; i < n; i++) LOG("[trace] Submit %d/%d handle %llx\n", i, n, (unsigned long long)handles[i]);
+    backend_prefetch(handles, n);
     for (int i = 0; i < n; i++) backend_execute(handles[i]);
+    renderer_prefetch_verify();
 }
 NVN(nvnQueueFlush) { (void)c; }
 NVN(nvnQueueFinish) { (void)c; renderer_sync(); }

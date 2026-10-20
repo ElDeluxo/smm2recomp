@@ -4145,6 +4145,10 @@ static void exec_list(uint64_t handle, int depth) {
     }
 }
 
+// Shader prefetch (renderer.m backend_prefetch): not on Vulkan yet
+void backend_prefetch(const uint64_t *handles, int n) { (void)handles; (void)n; }
+void renderer_prefetch_verify(void) {}
+
 void backend_execute(uint64_t handle) {
     PROF_T0();
     exec_list(handle, 0);
