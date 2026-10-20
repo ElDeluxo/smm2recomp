@@ -194,7 +194,8 @@ course-name keyboard of Save As. `RECOMP_EDIT_TRACE=1` logs the window's UI even
 ### The bridge (100 Mario)
 
 `hundred.h` is the interface between the run side (here) and the flow (SMM1's screens). With `ruleset=hundred`,
-when the game enters its Endless menu the run side calls `hundred_flow_open()`; the flow then shows SMM1's screens
+when Challenge Modes is chosen on Course World (its Endless sub-sequence's Activate, main+0x1a22730, before the menu
+comes in) the run side calls `hundred_flow_open()`; the flow then shows SMM1's screens
 and calls `hundred_run_start()`, `hundred_play_next()`, `hundred_play_skip()`, `hundred_run_finish()` and reads
 `hundred_run_status()`; the run side reports `hundred_flow_course_started()` and `hundred_course_result()`.
 
@@ -253,8 +254,11 @@ setting (`hundred_smm1_card=1`) the flow shows SMM1's card instead, and a course
 at its first play frame until `hundred_flow_ready_to_start()` (the card is up). **Transitions:** after the result screen's
 Next SMM2's own block wipe (`Cmn_Fade_00` OutBlock / InBlock from the game's romfs, drawn by the flow) covers it and
 uncovers the map (or the ending); the ending goes to the select the same way; the
-select fades in over SMM2's Endless menu when it opens and out when Challenge Modes switches or B leaves (B starts
-SMM2's way back to Course World at once, under the map's Out). **Challenge Modes input:** the buttons and the
+select fades in over Course World when it opens (SMM2's Activate is held until the select is in, so SMM2's Endless
+menu comes in under it unseen; it used to open on that menu's first Disp, which showed SMM2's menu for half a second
+first) and out over SMM2's Endless menu when Challenge Modes switches or B leaves (B starts SMM2's way back to Course
+World at once, under the map's Out; a B pressed while that menu is still coming in counts once it is in,
+`hundred_menu_in()`). **Challenge Modes input:** the buttons and the
 touch held when the flow opens count as held, not pressed, until they are let go: SMM2's menu acts on a ZL / ZR in
 the very frame it comes, before the flow has seen it held, so the select used to take the same press and switch
 straight back to Endless (half the switches back to 100 Mario bounced, in a test with the player's own key path); on SMM2's menu a
@@ -336,7 +340,7 @@ every difficulty draws from all of them.
   It is timed for `SMM2_SEED=4` and the save in `/Volumes/SSD/smm-work/recomp-mods/private/smm2/save` (Course
   World seen before, no first-visit intro): copy that `save/` over yours if the script lands elsewhere.
   `LARECOMP_HOST_INPUT=<frame>:shot:<name>,...` saves window shots into `private/smm2/build/`.
-- Entering the Endless menu under `ruleset=hundred` calls `hundred_flow_open()`: the flow takes over from there
+- Choosing Challenge Modes under `ruleset=hundred` calls `hundred_flow_open()`: the flow takes over from there
   (it calls `hundred_run_start()`, `hundred_play_next()` ...). `RECOMP_MOD_FLOW_TEST=<0..3>` instead plays the run
   without the flow (the stand-in in `bridge.c`).
 - `RECOMP_MOD_AUTOPLAY=jump` plays each course (right + run + jump) and skips it with the test input after
