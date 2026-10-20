@@ -231,6 +231,10 @@ GAMELIB_SRCS := tools/gen.py tools/lifter.py tools/analyze.py tools/nso.py tools
 GAMELIB_ID := $(shell (cat $(GAMELIB_SRCS); echo '$(GENFLAGS)') | (shasum -a 256 2>/dev/null || sha256sum) | cut -c1-16)
 
 RT_OBJ   := $(patsubst %.c,$(B)/rt/%.o,$(patsubst runtime/%,%,$(RT_SRC)))
+ifneq ($(filter ios iossim macos,$(PLATFORM)),)
+RT_OBJ   += $(B)/rt/net/secure_store_apple.o  # (the Keychain backend of runtime/net/secure_store.h)
+LDFLAGS  += -framework Security
+endif
 # TLS for the game's own ssl service (runtime/services/ssl.c): Mbed TLS 3.6 LTS, third_party/mbedtls (Apache-2.0),
 # built with runtime/net/mbedtls_user_config.h (a TLS 1.2 client)
 MBEDTLS  := third_party/mbedtls
@@ -281,6 +285,8 @@ $(B)/rt/net/token.o: RTFLAGS += $(MBEDTLS_FLAGS)
 $(B)/rt/net/http.o: RTFLAGS += $(MBEDTLS_FLAGS)
 $(B)/rt/net/http.o: runtime/net/mbedtls_user_config.h
 $(B)/rt/net/roots.o: RTFLAGS += $(MBEDTLS_FLAGS)
+$(B)/rt/net/nextendo.o: RTFLAGS += $(MBEDTLS_FLAGS)
+$(B)/rt/net/nextendo.o: runtime/net/mbedtls_user_config.h
 
 # a game's own glue (games/<game>/*.c), compiled like the runtime
 $(B)/rt/games/%.o: games/%.c $(RT_HDRS)
