@@ -18,6 +18,14 @@ if [ ! -f "$OUT/leaf.pem" ]; then
         -extfile "$OUT/leaf.ext" -out "$OUT/leaf.pem" 2>/dev/null
 fi
 
+# a second leaf, signed by the same CA, that names other.test only (the host-name check must refuse it for localhost)
+if [ ! -f "$OUT/bad.pem" ]; then
+    openssl req -newkey rsa:2048 -nodes -subj "/CN=other.test" -keyout "$OUT/bad.key" -out "$OUT/bad.csr" 2>/dev/null
+    printf 'subjectAltName=DNS:other.test\nbasicConstraints=CA:FALSE\n' > "$OUT/bad.ext"
+    openssl x509 -req -in "$OUT/bad.csr" -CA "$OUT/ca.pem" -CAkey "$OUT/ca.key" -CAcreateserial -days 30 \
+        -extfile "$OUT/bad.ext" -out "$OUT/bad.pem" 2>/dev/null
+fi
+
 # the test binary: http.c + json.c + roots.c + netcfg.c and the Mbed TLS sources, built as the Makefile does
 MBEDTLS=third_party/mbedtls
 FLAGS="-std=c11 -O1 -g -D_GNU_SOURCE -Wall -I$MBEDTLS/include -Iruntime/net -Iruntime -DMBEDTLS_USER_CONFIG_FILE=\"mbedtls_user_config.h\""
@@ -34,17 +42,19 @@ for p in "${pids[@]}"; do wait "$p"; done
 clang "$OUT"/obj/*.o -lpthread -o "$OUT/test_net$EXE"
 
 free_port() { python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])'; }
-export NET_TEST_TLS_PORT=$(free_port) NET_TEST_HTTP_PORT=$(free_port) NET_TEST_CA="$OUT/ca.pem"
+export NET_TEST_TLS_PORT=$(free_port) NET_TEST_HTTP_PORT=$(free_port) NET_TEST_BADHOST_PORT=$(free_port) NET_TEST_CA="$OUT/ca.pem"
 python3 tools/net_mock.py --port "$NET_TEST_TLS_PORT" --tls "$OUT/leaf.pem" "$OUT/leaf.key" > "$OUT/mock_tls.log" 2>&1 &
 M1=$!
 python3 tools/net_mock.py --port "$NET_TEST_HTTP_PORT" > "$OUT/mock_http.log" 2>&1 &
 M2=$!
-trap 'kill $M1 $M2 2>/dev/null' EXIT
+python3 tools/net_mock.py --port "$NET_TEST_BADHOST_PORT" --tls "$OUT/bad.pem" "$OUT/bad.key" > "$OUT/mock_bad.log" 2>&1 &
+M3=$!
+trap 'kill $M1 $M2 $M3 2>/dev/null' EXIT
 for i in $(seq 50); do
-    grep -q ready "$OUT/mock_tls.log" 2>/dev/null && grep -q ready "$OUT/mock_http.log" 2>/dev/null && break
+    grep -q ready "$OUT/mock_tls.log" 2>/dev/null && grep -q ready "$OUT/mock_http.log" 2>/dev/null && grep -q ready "$OUT/mock_bad.log" 2>/dev/null && break
     sleep 0.1
 done
 
-CASES="https_local_ok https_untrusted https_wrong_host http_plain_still_works"
-[ -n "$NET_TEST_LIVE" ] && CASES="$CASES https_live_nextendo https_live_selfsigned_refused"
+CASES="embedded_roots_valid https_local_ok https_untrusted https_wrong_host http_plain_still_works"
+[ -n "$NET_TEST_LIVE" ] && CASES="$CASES https_live_nextendo https_live_nextendo_embedded_only https_live_selfsigned_refused"
 if "$OUT/test_net$EXE" $CASES; then echo "ALL PASS"; else echo "FAILURES"; exit 1; fi

@@ -7,7 +7,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "mbedtls/x509_crt.h"
+
 #include "../runtime/net/http.h"
+#include "../runtime/net/roots.h"
 
 // what netcfg.c / http.c need from the runtime
 void rt_log(const char *fmt, ...) {
@@ -49,20 +52,47 @@ static void https_untrusted(void) {
     CHECK(strstr(r.error, "not trusted"), "error \"%s\"", r.error);
 }
 
-static void https_wrong_host(void) {  // the CA is right, the name in the URL is not on the certificate
+static void https_wrong_host(void) {  // the CA is right and the mock is reached, but the certificate names other.test
     char u[128];
-    url_for(u, sizeof u, "https://127.0.0.2:%s/hello", "NET_TEST_TLS_PORT");
+    url_for(u, sizeof u, "https://localhost:%s/hello", "NET_TEST_BADHOST_PORT");
     setenv("RECOMP_HTTPS_CA", getenv("NET_TEST_CA"), 1);
     HttpResponse r;
     int st = http_request("GET", u, NULL, NULL, 0, 5000, &r);
     unsetenv("RECOMP_HTTPS_CA");
     CHECK(st == 0, "status %d, wanted a refusal", st);
+    CHECK(strstr(r.error, "not trusted"), "error \"%s\"", r.error);
+}
+
+static void embedded_roots_valid(void) {  // exactly the five roots, none expired
+    mbedtls_x509_crt crt;
+    mbedtls_x509_crt_init(&crt);
+    const char *pem = net_root_pems();
+    int r = mbedtls_x509_crt_parse(&crt, (const unsigned char *)pem, strlen(pem) + 1);
+    CHECK(r == 0, "parse: %d", r);
+    int n = 0;
+    for (mbedtls_x509_crt *c = &crt; c && c->version; c = c->next) {
+        n++;
+        CHECK(!mbedtls_x509_time_is_past(&c->valid_to), "root %d expired", n);
+        CHECK(!mbedtls_x509_time_is_future(&c->valid_from), "root %d not yet valid", n);
+    }
+    mbedtls_x509_crt_free(&crt);
+    CHECK(n == 5, "%d roots, wanted 5", n);
 }
 
 static void https_live_nextendo(void) {
     unsetenv("RECOMP_HTTPS_CA");
     HttpResponse r;
     int st = http_request("GET", "https://nextendo.network/", NULL, NULL, 0, 15000, &r);
+    CHECK(st >= 200 && st <= 399, "status %d (%s)", st, r.error);
+    http_free(&r);
+}
+
+static void https_live_nextendo_embedded_only(void) {  // iOS / Android / Windows have no usable system bundle
+    unsetenv("RECOMP_HTTPS_CA");
+    setenv("RECOMP_HTTPS_NO_SYSTEM_ROOTS", "1", 1);
+    HttpResponse r;
+    int st = http_request("GET", "https://nextendo.network/", NULL, NULL, 0, 15000, &r);
+    unsetenv("RECOMP_HTTPS_NO_SYSTEM_ROOTS");
     CHECK(st >= 200 && st <= 399, "status %d (%s)", st, r.error);
     http_free(&r);
 }
@@ -87,7 +117,8 @@ static void http_plain_still_works(void) {
 
 static const struct { const char *name; void (*fn)(void); } cases[] = {
     {"https_local_ok", https_local_ok}, {"https_untrusted", https_untrusted}, {"https_wrong_host", https_wrong_host},
-    {"https_live_nextendo", https_live_nextendo}, {"https_live_selfsigned_refused", https_live_selfsigned_refused},
+    {"embedded_roots_valid", embedded_roots_valid},
+    {"https_live_nextendo", https_live_nextendo}, {"https_live_nextendo_embedded_only", https_live_nextendo_embedded_only}, {"https_live_selfsigned_refused", https_live_selfsigned_refused},
     {"http_plain_still_works", http_plain_still_works},
 };
 

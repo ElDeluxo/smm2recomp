@@ -6,7 +6,8 @@
 // URL's host (also sent as SNI). Trust is the system's CA bundle when the machine has one (/etc/ssl/cert.pem, ...)
 // plus the roots embedded in net/roots.c, so a machine with no bundle works too. RECOMP_HTTPS_CA=<pem file> replaces
 // both, for the test server; it is honoured only when the connection really goes to a local address, so it cannot be
-// used to point a real host at a forged certificate.
+// used to point a real host at a forged certificate. RECOMP_HTTPS_NO_SYSTEM_ROOTS=1 skips the system bundles (tests
+// only: it can only remove trust).
 #include "http.h"
 
 #include <errno.h>
@@ -216,7 +217,8 @@ static int load_trust(mbedtls_x509_crt *ca, int local) {
         if (local) return mbedtls_x509_crt_parse_file(ca, only) == 0;
         LOG("[http] RECOMP_HTTPS_CA is for local test servers only: ignored for this host\n");
     }
-    for (size_t i = 0; i < sizeof bundles / sizeof *bundles; i++)
+    const char *nosys = getenv("RECOMP_HTTPS_NO_SYSTEM_ROOTS");  // (tests: prove the embedded roots alone suffice)
+    for (size_t i = 0; i < sizeof bundles / sizeof *bundles && !(nosys && *nosys == '1'); i++)
         if (mbedtls_x509_crt_parse_file(ca, bundles[i]) >= 0 && ca->version) break;  // (a bad entry is skipped)
     const char *pem = net_root_pems();
     return mbedtls_x509_crt_parse(ca, (const unsigned char *)pem, strlen(pem) + 1) >= 0;
