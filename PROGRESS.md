@@ -292,6 +292,10 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     100 Mario shows Endless for about a second. The ZL / ZR switch itself is much better now.
   - ⬜ The transition from 100 Mario's map / card into the course isn't exact yet, and lags slightly. Needs
     more testing and tuning against SMM1 and SMM2.
+- ⬜ **Mac app won't open the game (owner, 2026-10-20):** the owner's local Mac build stops because the game files
+  aren't selected, and choosing them on the setup screen doesn't get it working. To check: which app it is
+  (/Applications release or a local build), its data folder (the dev one is a symlink to the SSD), what the
+  setup screen and `smm2recomp.log` say, and whether the chosen paths pass the 3.0.3 check.
 - ⬜ **3D World rendering on the iPad (owner's screenshot, 2026-10-20; 3D World ground course, Metal):**
   - ⬜ Mario's model has a grainy, speckled look across his face and overalls, like noise or broken dithering.
     It's not how he looks on the console. Compare the same frame with Ryujinx; suspects are his shading or AO
