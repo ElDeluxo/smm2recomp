@@ -425,7 +425,15 @@ run-smm2:
 	$(MAKE) GAME=smm2 run
 JOBS ?= $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 
+# Shader prefetch's build states / waits / pending table (runtime/nvn/buildsync.c), no game files
+build/test_buildsync: tools/test_buildsync.c runtime/nvn/buildsync.c runtime/nvn/buildsync.h
+	@mkdir -p build
+	$(HOSTCC_TEST) -O1 -Wall -pthread '-DLOG(...)=printf(__VA_ARGS__)' -o $@ tools/test_buildsync.c runtime/nvn/buildsync.c
+test-buildsync: build/test_buildsync
+	./build/test_buildsync
+HOSTCC_TEST ?= cc
+
 build/test_shaders: tools/test_shaders.m runtime/nvn/maxwell/translate.c runtime/nvn/maxwell/shader.h
 	clang -O1 -fobjc-arc -framework Metal -framework Foundation -o $@ tools/test_shaders.m runtime/nvn/maxwell/translate.c
 
-.PHONY: all venv setup gen clean-gen run gen-objs runtime-objs test-tools smm2 run-smm2 package embed-server app app-macos apk install push-data
+.PHONY: all venv setup gen clean-gen run gen-objs runtime-objs test-tools test-buildsync build/test_buildsync smm2 run-smm2 package embed-server app app-macos apk install push-data
