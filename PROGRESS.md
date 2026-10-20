@@ -284,6 +284,14 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
 - ⬜ **Bug (owner, 2026-10-19):** sound effects when opening a course and during course loading are
   slightly off (timing). Probably tied to the SLink sound trigger table not being decoded (sounds are
   placed by name, not frame-exact). Not started.
+- ⬜ **100 Mario polish (owner's test, 2026-10-20: "overall it's not bad"):**
+  - ⬜ The SMM1 screens (select, map, card) are louder than SMM2's. They should sound the same. SMM1's voices
+    are mixed into the output at full gain (`mods/smm1/smm1_audio.c`), not through SMM2's own volume levels.
+    Match them to SMM2's level (and to the Audio tab's volume).
+  - ⬜ Leaving Challenge Modes still flashes the other mode's screen for a moment. For example, closing it from
+    100 Mario shows Endless for about a second. The ZL / ZR switch itself is much better now.
+  - ⬜ The transition from 100 Mario's map / card into the course isn't exact yet, and lags slightly. Needs
+    more testing and tuning against SMM1 and SMM2.
 
 ### Future (owner's backlog, not scheduled)
 - 🔄 **120 fps output by frame generation** (owner, 2026-10-19): built 2026-10-20 (Video tab, `frame_gen`,
