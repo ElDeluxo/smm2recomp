@@ -31,8 +31,13 @@ bool secure_apple_get(const char *key, char *out, size_t cap) {
 
 bool secure_apple_set(const char *key, const char *val) {
     NSMutableDictionary *q = query(key);
-    SecItemDelete((__bridge CFDictionaryRef)q);  // (replace: add fails on a duplicate)
-    q[(__bridge id)kSecValueData] = [NSData dataWithBytes:val length:strlen(val)];
+    NSData *data = [NSData dataWithBytes:val length:strlen(val)];
+    OSStatus st = SecItemUpdate((__bridge CFDictionaryRef)q, (__bridge CFDictionaryRef)@{
+        (__bridge id)kSecValueData: data,
+        (__bridge id)kSecAttrAccessible: (__bridge id)kSecAttrAccessibleAfterFirstUnlock,
+    });
+    if (st != errSecItemNotFound) return st == errSecSuccess;
+    q[(__bridge id)kSecValueData] = data;
     q[(__bridge id)kSecAttrAccessible] = (__bridge id)kSecAttrAccessibleAfterFirstUnlock;
     return SecItemAdd((__bridge CFDictionaryRef)q, NULL) == errSecSuccess;
 }

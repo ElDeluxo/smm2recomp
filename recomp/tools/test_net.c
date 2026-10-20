@@ -1,8 +1,9 @@
 // Tests for runtime/net/http.c (http:// and https://) and runtime/net/nextendo.c (sign-in, against the OAuth mock). Run by tools/test_net.sh, which starts the mocks.
 // Usage: test_net <case>...   Environment: NET_TEST_TLS_PORT, NET_TEST_HTTP_PORT, RECOMP_HTTPS_CA (set per case),
-// NET_TEST_CA (the throwaway CA's file), NET_TEST_OAUTH_PORT / NET_TEST_OFFLINE_PORT (the OAuth mocks).
+// NET_TEST_CA (the throwaway CA's file), NET_TEST_OAUTH_PORT / NET_TEST_OFFLINE_PORT / NET_TEST_SLOW_PORT (the OAuth mocks).
 #include <stdarg.h>
 #include <stdbool.h>
+#include <pthread.h>
 #include <time.h>
 #include <unistd.h>
 #include <arpa/inet.h>
@@ -300,6 +301,56 @@ static void no_secret_in_logs(void) {
         CHECK(!strstr(logbuf, secrets[i]), "the log contains %s", secrets[i]);
 }
 
+static void *prepare_thread(void *arg) {
+    *(bool *)arg = nextendo_prepare_game_login(8000);
+    return NULL;
+}
+
+// a sign-out while a request is in flight must stay a sign-out: the late answer is dropped, not stored
+static void signout_during_refresh(void) {
+    nx_setup("NET_TEST_SLOW_PORT");
+    char v[64], t[64];
+    CHECK(nx_signin(NULL), "not signed in");  // (the listener's game-token fetch is slow: in flight now)
+    usleep(300000);
+    nextendo_sign_out();
+    sleep(3);
+    CHECK(!secure_get("refresh_token", v, sizeof v), "game-token answer re-stored the refresh token");
+    CHECK(!secure_get("username", v, sizeof v), "game-token answer re-stored the user name");
+    CHECK(nextendo_nex_token(t, sizeof t) == 0 && nextendo_pid() == 0, "game token survived the sign-out");
+    // and a refresh in flight
+    nx_test_reset();
+    CHECK(secure_set("refresh_token", "R1"), "store");
+    pthread_t th;
+    bool ok = true;
+    pthread_create(&th, NULL, prepare_thread, &ok);
+    usleep(300000);
+    nextendo_sign_out();
+    pthread_join(th, NULL);
+    CHECK(!ok, "prepare succeeded across a sign-out");
+    CHECK(!secure_get("refresh_token", v, sizeof v), "refresh answer re-stored the refresh token");
+    CHECK(nextendo_nex_token(t, sizeof t) == 0, "game token survived the sign-out");
+    NxStatus s;
+    nextendo_status(&s);
+    CHECK(s.state == NX_SIGNED_OUT && !nextendo_signed_in(), "state %d", s.state);
+}
+
+// RECOMP_NEXTENDO_API names a local test server only: look-alike hosts fall back to the real one
+static void api_override_rejects_lookalikes(void) {
+    static const char *const bad[] = {"http://localhost.example.com", "http://127.0.0.1.example.com", "http://127.0.0.1x/",
+                                      "ftp://127.0.0.1", "127.0.0.1", "http://8.8.8.8", "http://user@127.0.0.1.evil.test/"};
+    nx_setup("NET_TEST_OAUTH_PORT");
+    for (size_t i = 0; i < sizeof bad / sizeof *bad; i++) {
+        setenv("RECOMP_NEXTENDO_API", bad[i], 1);
+        char url[1024];
+        CHECK(nextendo_begin_sign_in(NULL, url, sizeof url), "begin (%s)", bad[i]);
+        CHECK(!strncmp(url, "https://nextendo.network/oauth/authorize?", 41), "%s accepted: %.60s", bad[i], url);
+    }
+    setenv("RECOMP_NEXTENDO_API", "http://localhost:1234", 1);  // (the genuine forms still work)
+    char url[1024];
+    CHECK(nextendo_begin_sign_in(NULL, url, sizeof url) && !strncmp(url, "http://localhost:1234/oauth/authorize?", 38), "localhost refused: %.60s", url);
+    nextendo_sign_out();
+}
+
 static const struct { const char *name; void (*fn)(void); } cases[] = {
     {"https_local_ok", https_local_ok}, {"https_untrusted", https_untrusted}, {"https_wrong_host", https_wrong_host},
     {"embedded_roots_valid", embedded_roots_valid},
@@ -309,6 +360,7 @@ static const struct { const char *name; void (*fn)(void); } cases[] = {
     {"refresh_rotates_and_persists", refresh_rotates_and_persists}, {"callback_state_mismatch", callback_state_mismatch},
     {"callback_error_denied", callback_error_denied}, {"begin_twice_cancels_first", begin_twice_cancels_first},
     {"prepare_offline_times_out", prepare_offline_times_out}, {"no_secret_in_logs", no_secret_in_logs},
+    {"signout_during_refresh", signout_during_refresh}, {"api_override_rejects_lookalikes", api_override_rejects_lookalikes},
 };
 
 int main(int argc, char **argv) {

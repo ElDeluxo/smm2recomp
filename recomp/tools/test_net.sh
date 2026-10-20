@@ -47,7 +47,7 @@ fi
 clang "$OUT"/obj/*.o $LIBS -o "$OUT/test_net$EXE"
 
 free_port() { python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])'; }
-export NET_TEST_TLS_PORT=$(free_port) NET_TEST_HTTP_PORT=$(free_port) NET_TEST_BADHOST_PORT=$(free_port) NET_TEST_OAUTH_PORT=$(free_port) NET_TEST_OFFLINE_PORT=$(free_port) NET_TEST_CA="$OUT/ca.pem"
+export NET_TEST_TLS_PORT=$(free_port) NET_TEST_HTTP_PORT=$(free_port) NET_TEST_BADHOST_PORT=$(free_port) NET_TEST_OAUTH_PORT=$(free_port) NET_TEST_OFFLINE_PORT=$(free_port) NET_TEST_SLOW_PORT=$(free_port) NET_TEST_CA="$OUT/ca.pem"
 python3 tools/net_mock.py --port "$NET_TEST_TLS_PORT" --tls "$OUT/leaf.pem" "$OUT/leaf.key" > "$OUT/mock_tls.log" 2>&1 &
 M1=$!
 python3 tools/net_mock.py --port "$NET_TEST_HTTP_PORT" > "$OUT/mock_http.log" 2>&1 &
@@ -58,13 +58,15 @@ python3 tools/net_mock.py --port "$NET_TEST_OAUTH_PORT" > "$OUT/mock_oauth.log" 
 M4=$!
 python3 tools/net_mock.py --port "$NET_TEST_OFFLINE_PORT" --offline > "$OUT/mock_offline.log" 2>&1 &
 M5=$!
-trap 'kill $M1 $M2 $M3 $M4 $M5 2>/dev/null' EXIT
+python3 tools/net_mock.py --port "$NET_TEST_SLOW_PORT" --slow-ms 1500 > "$OUT/mock_slow.log" 2>&1 &
+M6=$!
+trap 'kill $M1 $M2 $M3 $M4 $M5 $M6 2>/dev/null' EXIT
 for i in $(seq 50); do
-    grep -q ready "$OUT/mock_tls.log" 2>/dev/null && grep -q ready "$OUT/mock_http.log" 2>/dev/null && grep -q ready "$OUT/mock_bad.log" 2>/dev/null && grep -q ready "$OUT/mock_oauth.log" 2>/dev/null && grep -q ready "$OUT/mock_offline.log" 2>/dev/null && break
+    grep -q ready "$OUT/mock_tls.log" 2>/dev/null && grep -q ready "$OUT/mock_http.log" 2>/dev/null && grep -q ready "$OUT/mock_bad.log" 2>/dev/null && grep -q ready "$OUT/mock_oauth.log" 2>/dev/null && grep -q ready "$OUT/mock_offline.log" 2>/dev/null && grep -q ready "$OUT/mock_slow.log" 2>/dev/null && break
     sleep 0.1
 done
 
 CASES="embedded_roots_valid https_local_ok https_untrusted https_wrong_host http_plain_still_works"
-CASES="$CASES pkce_rfc7636 signin_loopback_full refresh_rotates_and_persists callback_state_mismatch callback_error_denied begin_twice_cancels_first prepare_offline_times_out no_secret_in_logs"
+CASES="$CASES pkce_rfc7636 signin_loopback_full refresh_rotates_and_persists callback_state_mismatch callback_error_denied begin_twice_cancels_first prepare_offline_times_out no_secret_in_logs signout_during_refresh api_override_rejects_lookalikes"
 [ -n "$NET_TEST_LIVE" ] && CASES="$CASES https_live_nextendo https_live_nextendo_embedded_only https_live_selfsigned_refused"
 if "$OUT/test_net$EXE" $CASES; then echo "ALL PASS"; else echo "FAILURES"; exit 1; fi

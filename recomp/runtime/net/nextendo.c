@@ -175,12 +175,15 @@ static const char *api_base(void) {
     static bool warned;
     const char *e = getenv("RECOMP_NEXTENDO_API");
     if (e && *e) {
-        const char *h = strstr(e, "://");
-        h = h ? h + 3 : e;
+        // http[s]://localhost or a local IPv4 literal, and the host must end there (not localhost.example.com)
+        const char *h = !strncmp(e, "http://", 7) ? e + 7 : !strncmp(e, "https://", 8) ? e + 8 : NULL;
         unsigned a, b, c, d;
-        bool ok = !strncmp(h, "localhost", 9);
-        if (!ok && sscanf(h, "%u.%u.%u.%u", &a, &b, &c, &d) == 4 && a < 256 && b < 256 && c < 256 && d < 256)
+        int n = 0;
+        bool ok = false;
+        if (h && !strncmp(h, "localhost", 9)) { n = 9; ok = true; }
+        else if (h && sscanf(h, "%u.%u.%u.%u%n", &a, &b, &c, &d, &n) == 4 && a < 256 && b < 256 && c < 256 && d < 256)
             ok = net_ip_is_local(a << 24 | b << 16 | c << 8 | d);
+        if (ok && h[n] != ':' && h[n] != '/' && h[n]) ok = false;
         if (ok && strlen(e) < sizeof base) {
             snprintf(base, sizeof base, "%s", e);
             size_t n = strlen(base);
@@ -224,13 +227,20 @@ static void load_store(void) {  // under `lock`
 // ---- tokens ----
 
 // store the answer of the token endpoint: the new refresh token first (rotation), then the access token
-static bool take_tokens(const HttpResponse *r, const char *what) {
+// (a result is dropped when the session changed meanwhile: a sign-out must not be undone by a late answer)
+static bool take_tokens(const HttpResponse *r, const char *what, unsigned session) {
     Json *j = json_parse(r->body ? r->body : "", r->len);
     const char *rt = json_str(json_get(j, "refresh_token"), ""), *at = json_str(json_get(j, "access_token"), "");
     double exp = json_num(json_get(j, "expires_in"), 3600);
     bool ok = at[0] && strlen(at) < sizeof S.access && strlen(rt) < sizeof S.refresh;
     if (ok) {
         pthread_mutex_lock(&lock);
+        if (S.session != session) {
+            pthread_mutex_unlock(&lock);
+            json_free(j);
+            LOG("[nextendo] %s: dropped (signed out meanwhile)\n", what);
+            return false;
+        }
         if (rt[0]) {
             if (!secure_set("refresh_token", rt)) LOG("[nextendo] could not save the refresh token\n");
             snprintf(S.refresh, sizeof S.refresh, "%s", rt);
@@ -247,7 +257,7 @@ static bool take_tokens(const HttpResponse *r, const char *what) {
 }
 
 // refresh_token -> new tokens. False on failure; a refused refresh token ends the session.
-static bool refresh_access(int timeout_ms) {  // under net_lock
+static bool refresh_access(int timeout_ms, unsigned session) {  // under net_lock
     char rt[600], enc[1300], form[1500];
     pthread_mutex_lock(&lock);
     snprintf(rt, sizeof rt, "%s", S.refresh);
@@ -258,7 +268,7 @@ static bool refresh_access(int timeout_ms) {  // under net_lock
     int st = token_post(form, timeout_ms, &r);
     bool ok = false;
     if (st == 200) {
-        ok = take_tokens(&r, "refresh");
+        ok = take_tokens(&r, "refresh", session);
     } else if (st == 0) {
         LOG("[nextendo] refresh: no answer (%s)\n", r.error);
     } else {
@@ -268,10 +278,12 @@ static bool refresh_access(int timeout_ms) {  // under net_lock
         LOG("[nextendo] refresh: server answered %d%s\n", st, gone ? " (session ended)" : "");
         if (gone) {
             pthread_mutex_lock(&lock);
-            secure_del("refresh_token");
-            S.refresh[0] = S.access[0] = S.nex[0] = 0;
-            S.pid = 0;
-            set_state(NX_ERROR, "Your Nextendo session ended. Sign in again.");
+            if (S.session == session) {
+                secure_del("refresh_token");
+                S.refresh[0] = S.access[0] = S.nex[0] = 0;
+                S.pid = 0;
+                set_state(NX_ERROR, "Your Nextendo session ended. Sign in again.");
+            }
             pthread_mutex_unlock(&lock);
         }
     }
@@ -280,7 +292,7 @@ static bool refresh_access(int timeout_ms) {  // under net_lock
 }
 
 // GET /api/nex-token with the access token. Returns the HTTP status (0: no answer).
-static int fetch_nex(int timeout_ms) {  // under net_lock
+static int fetch_nex(int timeout_ms, unsigned session) {  // under net_lock
     char url[300], hdr[1200];
     pthread_mutex_lock(&lock);
     snprintf(hdr, sizeof hdr, "Authorization: Bearer %s\r\nAccept: application/json\r\n", S.access);
@@ -294,6 +306,13 @@ static int fetch_nex(int timeout_ms) {  // under net_lock
         double pid = json_num(json_get(j, "pid"), 0), exp = json_num(json_get(j, "expires_in"), 3600);
         if (nt[0] && strlen(nt) < sizeof S.nex && pid > 0) {
             pthread_mutex_lock(&lock);
+            if (S.session != session) {
+                pthread_mutex_unlock(&lock);
+                json_free(j);
+                http_free(&r);
+                LOG("[nextendo] game token: dropped (signed out meanwhile)\n");
+                return 0;
+            }
             snprintf(S.nex, sizeof S.nex, "%s", nt);
             S.pid = (uint64_t)pid;
             S.nex_exp = time(NULL) + (time_t)(exp > 0 ? exp : 3600);
@@ -322,22 +341,26 @@ bool nextendo_prepare_game_login(int timeout_ms) {
     pthread_mutex_lock(&lock);
     load_store();
     bool have_refresh = S.refresh[0];
+    unsigned session = S.session;
     bool nex_ok = S.nex[0] && S.nex_exp - time(NULL) > NEX_MIN_LEFT_S;
     bool access_ok = S.access[0] && S.access_exp - time(NULL) > ACCESS_MIN_LEFT_S;
     pthread_mutex_unlock(&lock);
     if (nex_ok) ok = true;
     else if (have_refresh) {
         int left = (int)(end - now_ms());
-        if (!access_ok && left > 0) access_ok = refresh_access(left);
+        if (!access_ok && left > 0) access_ok = refresh_access(left, session);
         left = (int)(end - now_ms());
         if (access_ok && left > 0) {
-            int st = fetch_nex(left);
-            if (st == 401 && (left = (int)(end - now_ms())) > 0 && refresh_access(left) && (left = (int)(end - now_ms())) > 0)
-                st = fetch_nex(left);  // (the access token had expired early)
+            int st = fetch_nex(left, session);
+            if (st == 401 && (left = (int)(end - now_ms())) > 0 && refresh_access(left, session) && (left = (int)(end - now_ms())) > 0)
+                st = fetch_nex(left, session);  // (the access token had expired early)
             ok = st == 200;
         }
     }
     pthread_mutex_unlock(&net_lock);
+    pthread_mutex_lock(&lock);
+    if (S.session != session) ok = false;
+    pthread_mutex_unlock(&lock);
     return ok;
 }
 
@@ -468,14 +491,12 @@ static bool finish_core(const char *url, char *err, size_t errcap) {
     HttpResponse r;
     int status = token_post(form, 15000, &r);
     bool ok = false;
-    pthread_mutex_lock(&lock);
-    bool current = S.session == session;
-    pthread_mutex_unlock(&lock);
-    if (status == 200 && current) {
-        ok = take_tokens(&r, "sign-in");
-        if (!ok) snprintf(err, errcap, "Sign-in failed: unusable answer from Nextendo.");
-    } else if (status == 200) {
-        snprintf(err, errcap, "Sign-in was cancelled.");
+    if (status == 200) {
+        ok = take_tokens(&r, "sign-in", session);  // (false too when cancelled meanwhile)
+        pthread_mutex_lock(&lock);
+        bool current = S.session == session;
+        pthread_mutex_unlock(&lock);
+        if (!ok) snprintf(err, errcap, current ? "Sign-in failed: unusable answer from Nextendo." : "Sign-in was cancelled.");
     } else if (status == 0) {
         snprintf(err, errcap, "Sign-in failed: could not reach Nextendo.");
     } else {

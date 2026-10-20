@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """A tiny HTTP(S) mock for tools/test_net.sh (stdlib only).
-Usage: net_mock.py --port N [--tls cert.pem key.pem] [--offline]
+Usage: net_mock.py --port N [--tls cert.pem key.pem] [--offline] [--slow-ms N]
   GET /hello         -> 200 "hello"
   GET /echo-headers  -> 200, the request headers as received
 Nextendo OAuth (the sign-in tests):
   GET /oauth/authorize  -> 302 to redirect_uri?code=C1&state=.. (error=access_denied with deny=1); the Location is
                            also the body, since the test client does not follow redirects
   POST /oauth/token     -> authorization_code (code C1, PKCE checked) gives A1 / R1; refresh_token accepts only the
-                           latest refresh token and rotates R1 -> R2 -> ...; --offline: sleeps 30 s first
+                           latest refresh token and rotates R1 -> R2 -> ...; --offline: sleeps 30 s first;
+                           --slow-ms N: waits N ms on refresh_token grants and on /api/nex-token
   GET /api/nex-token    -> the game token for a Bearer A* access token
   GET /debug/latest-refresh -> the refresh token the mock would accept now
 Prints "ready" once it listens."""
@@ -16,6 +17,7 @@ import argparse, base64, hashlib, http.server, ssl, sys, time, urllib.parse
 CLIENT_ID = "nxc_R-JWtJ6JrrgY"
 oauth = {"challenge": None, "redirect": None, "n": 0}
 offline = False
+slow_ms = 0
 
 
 class H(http.server.BaseHTTPRequestHandler):
@@ -54,6 +56,7 @@ class H(http.server.BaseHTTPRequestHandler):
                 return self.reply(400, '{"error":"invalid_grant"}')
             oauth["n"] = 1
         elif form.get("grant_type") == "refresh_token":
+            time.sleep(slow_ms / 1000)
             if form.get("refresh_token") != "R%d" % oauth["n"] or oauth["n"] == 0:
                 return self.reply(400, '{"error":"invalid_grant"}')
             oauth["n"] += 1
@@ -73,6 +76,7 @@ class H(http.server.BaseHTTPRequestHandler):
                 return self.redirect(q["redirect_uri"] + "?" + urllib.parse.urlencode({"error": "access_denied", "state": q["state"]}))
             return self.redirect(q["redirect_uri"] + "?" + urllib.parse.urlencode({"code": "C1", "state": q["state"]}))
         if u.path == "/api/nex-token":
+            time.sleep(slow_ms / 1000)
             if not self.headers.get("Authorization", "").startswith("Bearer A"):
                 return self.reply(401, '{"error":"invalid_token"}')
             return self.reply(200, '{"nex_token":"nx2.test.sig","pid":1234567,"friend_code":"SW-0000-0000-0000","username":"tester","expires_in":86400}')
@@ -93,8 +97,10 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--port", type=int, required=True)
 ap.add_argument("--tls", nargs=2, metavar=("CERT", "KEY"))
 ap.add_argument("--offline", action="store_true")
+ap.add_argument("--slow-ms", type=int, default=0)
 a = ap.parse_args()
 offline = a.offline
+slow_ms = a.slow_ms
 srv = http.server.ThreadingHTTPServer(("127.0.0.1", a.port), H)
 if a.tls:
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)

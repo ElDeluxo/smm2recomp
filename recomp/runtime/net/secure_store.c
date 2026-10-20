@@ -8,8 +8,10 @@
 #include <string.h>
 #include <sys/stat.h>
 #ifdef _WIN32
-#include <io.h>
+#include <direct.h>
+#include <windows.h>
 #else
+#include <fcntl.h>
 #include <unistd.h>
 #endif
 
@@ -38,20 +40,26 @@ static int read_all(Entry *e) {
 }
 
 static bool write_all(const Entry *e, int n) {
-    mkdir("net", 0700);
     const char *tmp = STORE_FILE ".tmp";
+#ifdef _WIN32
+    _mkdir("net");
     FILE *f = fopen(tmp, "w");
-    if (!f) return false;
-#ifndef _WIN32
-    fchmod(fileno(f), 0600);
+#else
+    mkdir("net", 0700);
+    unlink(tmp);  // (a stale file keeps its old mode; a symlink is never followed)
+    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
+    FILE *f = fd < 0 ? NULL : fdopen(fd, "w");
+    if (fd >= 0 && !f) close(fd);
 #endif
+    if (!f) return false;
     fputs("# Private: Nextendo sign-in. Never share this file.\n", f);
     for (int i = 0; i < n; i++) fprintf(f, "%s %s\n", e[i].key, e[i].val);
     bool ok = fclose(f) == 0;
 #ifdef _WIN32
-    remove(STORE_FILE);  // (rename does not replace there)
-#endif
+    if (ok) ok = MoveFileExA(tmp, STORE_FILE, MOVEFILE_REPLACE_EXISTING) != 0;
+#else
     if (ok) ok = rename(tmp, STORE_FILE) == 0;
+#endif
     if (!ok) remove(tmp);
     return ok;
 }
