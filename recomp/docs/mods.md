@@ -463,8 +463,20 @@ MatchmakeExtension.AutoMatchmakeWithParam_Postpone with no `enl command` line. L
 TGRCode's Popular list and a course played, 100 Mario (New Game, a course with 100 lives); the game's TCP went only
 to 51.178.29.194. The NAT check's names come to sfdnsres as `nncs1-%` / `nncs2-%`: `net_resolve` reads `%` as nsd's
 environment (`lp1`), so `nncs2-%` reaches the NAT check (164.132.111.120, [obs] live) and `nncs1-%` the game server.
-Not working yet: the Co-op search screen stops presenting frames about 5 s in (offline too, and with the mod off,
-so not hybrid's).
+**The Co-op search freeze (fixed).** [obs] The Co-op search screen stopped presenting frames for good about 10 s
+after AutoMatchmake, offline (also with the mod off) and live alike. It was the runtime's kernel, not the network
+code: matchmaking's two worker threads poll a condition variable with 5 ms timed waits, and a timed-out
+svcWaitProcessWideKeyAtomic took the mutex back. Horizon returns 0xEA01 without it, and the game's SDK (nn::os
+TimedWait, sdk+0x32f240) then locks it itself, so each worker waited on itself (ArbitrateLock with itself as owner) at
+its first timeout; when matchmaking failed, the main thread blocked behind them in the error teardown. Now a
+timed-out wait returns without the mutex (`runtime/kernel.c`; tests: `tools/test_kernel_condvar.sh`), and a lock on a
+mutex the thread already owns is logged (`[kernel] guest locks a mutex it already owns`). [obs] offline the search
+now ends in the game's own error path (MatchMaking.2 is not implemented by the test server: enl `cSilentError`, a
+NEX disconnect) and the game is back on the Network Play menu at 60 fps. [obs] Live (Nextendo) the kernel deadlock is
+gone too, but Co-op still stops: the NAT check gets no UDP reply, the game tries again twice (enl `cSilentError`,
+`cLogIn`, `cAutoMatchReady`, about 17 s each), then goes to netplay `cError`, and from there it draws nothing new
+(the "Finding players" screen stays, the window stays responsive and NEX keeps pinging; the main thread waits in
+WaitForAddress, called from main+0x75f5b0). Not looked into yet.
 
 **The player's name.** SyncUserProfile (main+0x14cef40) sends the name in the NetObj string at +0x738e0 (buffer
 +0x738e8, capacity +0x738f0; 10 characters), the save's Maker name; a save whose avatar was made without the
