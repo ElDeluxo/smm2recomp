@@ -69,7 +69,8 @@ void *srv_get_bytes(const char *path, size_t *len) {
     HttpResponse r;
     int st = request("GET", path, NULL, 0, &r);
     if (st != 200) {
-        if (st) LOG("[mod] GET %s: HTTP %d\n", path, st);
+        if (st == 404) MLOG("GET %s: not there\n", path);
+        else if (st) LOG("[mod] GET %s: HTTP %d\n", path, st);
         http_free(&r);
         return NULL;
     }

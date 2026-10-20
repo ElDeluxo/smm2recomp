@@ -9,12 +9,14 @@
 //! | GET | `/api/courses?q=&style=&sort=new\|popular\|hard&limit=&offset=` | search |
 //! | GET | `/api/courses/<code>` | metadata |
 //! | GET | `/api/courses/<code>/data` | course data (bytes) |
+//! | GET | `/api/courses/<code>/thumbnail`, `/entire_thumbnail` (`?wait_ms=`, at most 20000) | the course's picture and its whole-course map (JPEG); one of an upstream course the server doesn't hold yet is fetched from the source, waited for up to `wait_ms` (404 meanwhile) |
 //! | POST | `/api/courses/<code>/play`, `/clear` | statistics |
 //! | GET | `/api/health` | liveness: counts and the replay engine version |
 //! | GET | `/api/pool?min=&max=&count=` | random courses by difficulty value (fail rate 0–100) |
 //! | POST | `/api/accounts` (body `{"name"}`) | new account → `{account, token}` (token shown once) |
 //! | GET | `/api/me` | the caller's account |
 //! | GET | `/api/makers/<maker id>` | a maker's profile and courses |
+//! | GET | `/api/makers/<maker id>/played`, `/liked` | the courses a player played (newest first: Course World and Endless) or liked |
 //! | POST | `/api/courses/<code>/like`, `/boo` | one vote per account (replaces its earlier vote) |
 //! | POST | `/api/courses/<code>/clear` (body `{"time_ms"}`, optional) | clear; first clear / record |
 //! | POST | `/api/courses/<code>/replay` (body: replay, `mmk_modes::replay`) | clear proven by a replay: re-simulated, its time can set a verified record |
@@ -161,6 +163,25 @@ pub struct Store {
     /// Told when a run's difficulty is short of courses ([`upstream`] fetches more); never
     /// blocks.
     wants: std::sync::OnceLock<Box<dyn Fn(mmk_modes::endless::Difficulty) + Send + Sync>>,
+    /// Told when a client wants an upstream course's thumbnail the store doesn't hold (code,
+    /// whole-course map?): [`upstream`] fetches it; never blocks.
+    thumbs_wanted: std::sync::OnceLock<ThumbsWanted>,
+}
+
+type ThumbsWanted = Box<dyn Fn(&str, bool) + Send + Sync>;
+
+/// The largest thumbnail the game takes (its thumbnail block: the JPEG, then its size and signature).
+pub const MAX_THUMBNAIL: usize = 0x1bf9c;
+
+/// The JPEG in a thumbnail as a source gives it: a plain JPEG, or the game's thumbnail block (the JPEG,
+/// zero padding, its size and signature at the end), up to the end-of-image marker.
+pub fn thumbnail_jpeg(b: &[u8]) -> Option<&[u8]> {
+    if !b.starts_with(&[0xFF, 0xD8]) {
+        return None;
+    }
+    let area = &b[..b.len().min(MAX_THUMBNAIL)];
+    let end = area.windows(2).rposition(|w| w == [0xFF, 0xD9])? + 2;
+    Some(&b[..end])
 }
 
 struct Inner {
@@ -175,10 +196,24 @@ struct Inner {
     comments: HashMap<String, Vec<Comment>>,
     /// maker ID → codes of the courses they cleared.
     cleared: HashMap<String, Vec<String>>,
+    /// maker ID → codes of the courses they played, newest first (at most [`PLAYED_KEPT`]).
+    played: HashMap<String, Vec<String>>,
     /// Endless Challenge: difficulty → maker ID → best run (courses cleared).
     endless: HashMap<String, HashMap<String, u64>>,
     /// Endless Challenge runs: maker ID → the four run records (`endless.json`).
     endless_runs: HashMap<String, mmk_modes::endless::EndlessSave>,
+}
+
+/// Courses kept on a player's played list.
+pub const PLAYED_KEPT: usize = 300;
+
+impl Inner {
+    pub(crate) fn note_played(&mut self, who: &str, code: &str) {
+        let list = self.played.entry(who.to_string()).or_default();
+        list.retain(|c| c != code);
+        list.insert(0, code.to_string());
+        list.truncate(PLAYED_KEPT);
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -286,24 +321,27 @@ impl Store {
                     .collect()
             })
             .unwrap_or_default();
-        let cleared = social["cleared"]
-            .as_object()
-            .map(|o| {
-                o.iter()
-                    .map(|(who, v)| {
-                        let codes = v
-                            .as_array()
-                            .map(|a| {
-                                a.iter()
-                                    .filter_map(|c| Some(c.as_str()?.to_string()))
-                                    .collect()
-                            })
-                            .unwrap_or_default();
-                        (who.clone(), codes)
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let codes_by_maker = |v: &Value| -> HashMap<String, Vec<String>> {
+            v.as_object()
+                .map(|o| {
+                    o.iter()
+                        .map(|(who, v)| {
+                            let codes = v
+                                .as_array()
+                                .map(|a| {
+                                    a.iter()
+                                        .filter_map(|c| Some(c.as_str()?.to_string()))
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+                            (who.clone(), codes)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let played = codes_by_maker(&social["played"]);
+        let cleared = codes_by_maker(&social["cleared"]);
         let endless = social["endless"]
             .as_object()
             .map(|o| {
@@ -323,6 +361,12 @@ impl Store {
             })
             .unwrap_or_default();
         let endless_runs = endless::load(&dir);
+        let mut played = played;
+        for (who, save) in &endless_runs {
+            played
+                .entry(who.clone())
+                .or_insert_with(|| endless::played_in_runs(save));
+        }
         Ok(Self {
             dir,
             inner: Mutex::new(Inner {
@@ -334,12 +378,14 @@ impl Store {
                 votes,
                 comments,
                 cleared,
+                played,
                 endless,
                 endless_runs,
             }),
             admin: None,
             verified_records: false,
             wants: std::sync::OnceLock::new(),
+            thumbs_wanted: std::sync::OnceLock::new(),
         })
     }
 
@@ -352,6 +398,112 @@ impl Store {
         if let Some(f) = self.wants.get() {
             f(d);
         }
+    }
+
+    /// Who to tell when a client wants an upstream course's thumbnail the store doesn't hold (once
+    /// per store).
+    pub fn on_thumbnail(&self, f: impl Fn(&str, bool) + Send + Sync + 'static) {
+        let _ = self.thumbs_wanted.set(Box::new(f));
+    }
+
+    fn thumbnail_path(&self, code: &str, entire: bool) -> PathBuf {
+        let kind = if entire { "-entire" } else { "" };
+        self.dir.join(format!("thumbnails/{code}{kind}.jpg"))
+    }
+
+    /// Whether a course's thumbnail (`entire`: its whole-course map) is held.
+    pub fn has_thumbnail(&self, code: &str, entire: bool) -> bool {
+        self.thumbnail_path(code, entire).exists()
+    }
+
+    /// A course's thumbnail (JPEG; `entire`: the whole-course map). One the store doesn't hold, of
+    /// an upstream course, is asked for from the source (and kept), waiting up to `wait` for it.
+    pub fn thumbnail(
+        &self,
+        code: &str,
+        entire: bool,
+        wait: std::time::Duration,
+    ) -> Option<Vec<u8>> {
+        let path = self.thumbnail_path(code, entire);
+        if let Ok(b) = fs::read(&path) {
+            return Some(b);
+        }
+        if !self.get(code)?.upstream {
+            return None;
+        }
+        (self.thumbs_wanted.get()?)(code, entire);
+        let t0 = std::time::Instant::now();
+        while t0.elapsed() < wait {
+            std::thread::sleep(std::time::Duration::from_millis(50).min(wait));
+            if let Ok(b) = fs::read(&path) {
+                return Some(b);
+            }
+        }
+        None
+    }
+
+    /// Keep a course's thumbnail (a JPEG, or the game's thumbnail block).
+    pub fn put_thumbnail(&self, code: &str, entire: bool, data: &[u8]) -> Result<(), StoreError> {
+        if self.get(code).is_none() {
+            return Err(StoreError::NotFound);
+        }
+        let jpeg = thumbnail_jpeg(data).ok_or_else(|| StoreError::Bad("not a JPEG".into()))?;
+        let path = self.thumbnail_path(code, entire);
+        let tmp = path.with_extension("tmp");
+        fs::create_dir_all(self.dir.join("thumbnails"))
+            .and_then(|_| fs::write(&tmp, jpeg))
+            .and_then(|_| fs::rename(&tmp, &path))
+            .map_err(|e| StoreError::Io(e.to_string()))
+    }
+
+    /// Upstream courses whose thumbnails aren't held yet, (code, entire), newest courses first.
+    pub fn missing_thumbnails(&self, limit: usize) -> Vec<(String, bool)> {
+        let codes: Vec<String> = {
+            let g = self.inner.lock().unwrap();
+            g.courses
+                .iter()
+                .rev()
+                .filter(|m| m.upstream)
+                .map(|m| m.code.clone())
+                .collect()
+        };
+        codes
+            .into_iter()
+            .flat_map(|c| [(c.clone(), false), (c, true)])
+            .filter(|(c, e)| !self.has_thumbnail(c, *e))
+            .take(limit)
+            .collect()
+    }
+
+    /// `who` played the course `code` (Course World or a challenge run): first on their list.
+    pub fn note_played(&self, who: &str, code: &str) -> Result<(), StoreError> {
+        let mut g = self.inner.lock().unwrap();
+        g.note_played(who, code);
+        self.save_social(&g)
+    }
+
+    /// The courses `maker_id` played (newest first) or liked, of those held.
+    pub fn courses_of_player(&self, maker_id: &str, liked: bool) -> Vec<Meta> {
+        let g = self.inner.lock().unwrap();
+        let codes: Vec<String> = if liked {
+            let Some(a) = g.accounts.by_maker_id(maker_id) else {
+                return Vec::new();
+            };
+            let mut v: Vec<String> = g
+                .votes
+                .iter()
+                .filter(|(_, m)| m.get(&a.id) == Some(&1))
+                .map(|(code, _)| code.clone())
+                .collect();
+            v.sort();
+            v
+        } else {
+            g.played.get(maker_id).cloned().unwrap_or_default()
+        };
+        codes
+            .iter()
+            .filter_map(|c| g.by_code.get(c).map(|&i| g.courses[i].clone()))
+            .collect()
     }
 
     /// Store a course from an upstream source under its own code (`meta.code`, the source's
@@ -436,7 +588,7 @@ impl Store {
         self.write_json(
             "social.json",
             &json!({ "votes": votes, "comments": comments, "cleared": g.cleared,
-                     "endless": g.endless }),
+                     "played": g.played, "endless": g.endless }),
         )
     }
 
@@ -1032,6 +1184,13 @@ pub fn handle(
             Some(a) => json(200, a.public_json()),
             None => err(401, "sign in"),
         },
+        ("GET", ["api", "makers", id, list @ ("played" | "liked")]) => {
+            let courses = store.courses_of_player(id, *list == "liked");
+            json(
+                200,
+                json!({ "courses": courses.iter().map(Meta::to_json).collect::<Vec<_>>() }),
+            )
+        }
         ("GET", ["api", "makers", id]) => match store.maker(id) {
             Some(v) => json(200, v),
             None => err(404, "no such maker"),
@@ -1180,8 +1339,35 @@ pub fn handle(
             Ok(b) => (200, "application/octet-stream", b),
             Err(_) => err(404, "no such course"),
         },
+        (
+            "GET",
+            [
+                "api",
+                "courses",
+                code,
+                kind @ ("thumbnail" | "entire_thumbnail"),
+            ],
+        ) => {
+            let wait = q
+                .get("wait_ms")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0u64)
+                .min(20_000);
+            let wait = std::time::Duration::from_millis(wait);
+            match store.thumbnail(code, *kind == "entire_thumbnail", wait) {
+                Some(b) => (200, "image/jpeg", b),
+                None => err(404, "no thumbnail"),
+            }
+        }
         ("POST", ["api", "courses", code, what]) => match store.record(code, what) {
-            Ok(m) => json(200, m.to_json()),
+            Ok(m) => {
+                if *what == "play"
+                    && let Some(who) = who
+                {
+                    let _ = store.note_played(who, code);
+                }
+                json(200, m.to_json())
+            }
             Err(_) => err(404, "no such course or action"),
         },
         ("GET", ["api", "pool"]) => {
@@ -1294,20 +1480,100 @@ fn start(
     addr: &str,
     opts: ServeOptions,
 ) -> Result<(u16, Vec<std::thread::JoinHandle<()>>), String> {
-    let server = std::sync::Arc::new(tiny_http::Server::http(addr).map_err(|e| e.to_string())?);
-    let port = server.server_addr().to_ip().map_or(0, |a| a.port());
-    let gate = std::sync::Arc::new(limits::Gate::new(opts.limits));
-    let workers = (0..opts.threads.max(1))
+    let server = tiny_http::Server::http(addr).map_err(|e| e.to_string())?;
+    let gate = limits::Gate::new(opts.limits);
+    Ok(listen(server, opts.threads, move |req| {
+        respond(&store, &gate, opts.trust_proxy, req)
+    }))
+}
+
+/// Run `server` on `threads` worker threads that hand each request to `handle`; returns the
+/// bound port and the workers (which run as long as the process does).
+fn listen(
+    server: tiny_http::Server,
+    threads: usize,
+    handle: impl Fn(tiny_http::Request) + Send + Sync + 'static,
+) -> (u16, Vec<std::thread::JoinHandle<()>>) {
+    let threads = threads.max(1);
+    let addr = server.server_addr().to_ip();
+    let listener = std::sync::Arc::new(Listener {
+        addr,
+        threads,
+        current: std::sync::Mutex::new(std::sync::Arc::new(server)),
+    });
+    let handle = std::sync::Arc::new(handle);
+    let workers = (0..threads)
         .map(|_| {
-            let (server, store, gate) = (server.clone(), store.clone(), gate.clone());
+            let (listener, handle) = (listener.clone(), handle.clone());
             std::thread::spawn(move || {
-                while let Ok(req) = server.recv() {
-                    respond(&store, &gate, opts.trust_proxy, req);
+                while let Some(req) = listener.recv() {
+                    handle(req);
                 }
             })
         })
         .collect();
-    Ok((port, workers))
+    (addr.map_or(0, |a| a.port()), workers)
+}
+
+/// The server the workers take requests from. tiny_http stops accepting for good after one
+/// failed accept (iOS reclaims a suspended app's sockets: after hours in the background the
+/// app's own course server answered nothing until a restart), so the first worker to see the
+/// failure listens on the same address again and moves the others onto the new server.
+struct Listener {
+    addr: Option<std::net::SocketAddr>,
+    threads: usize,
+    current: std::sync::Mutex<std::sync::Arc<tiny_http::Server>>,
+}
+
+impl Listener {
+    /// The next request; `None` when the server can't listen again.
+    fn recv(&self) -> Option<tiny_http::Request> {
+        loop {
+            let server = self.current.lock().unwrap().clone();
+            match server.recv() {
+                Ok(req) => return Some(req),
+                Err(e) => {
+                    if !self.relisten(&server, e) {
+                        return None;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Replace `failed` with a new server on its address (unless another worker has); false when
+    /// there is no address to listen on.
+    fn relisten(&self, failed: &std::sync::Arc<tiny_http::Server>, e: std::io::Error) -> bool {
+        let mut current = self.current.lock().unwrap();
+        if !std::sync::Arc::ptr_eq(&current, failed) {
+            return true;
+        }
+        let Some(addr) = self.addr else {
+            eprintln!("[server] accept: {e}; not a TCP address, stopping");
+            return false;
+        };
+        eprintln!("[server] accept on {addr}: {e}; listening again");
+        let mut wait = std::time::Duration::from_millis(100);
+        let server = loop {
+            match tiny_http::Server::http(addr) {
+                Ok(s) => break s,
+                Err(e) => {
+                    eprintln!(
+                        "[server] listen on {addr}: {e}; again in {} ms",
+                        wait.as_millis()
+                    );
+                    std::thread::sleep(wait);
+                    wait = (wait * 2).min(std::time::Duration::from_secs(5));
+                }
+            }
+        };
+        *current = std::sync::Arc::new(server);
+        // the other workers wait in the failed server's queue: one unblock wakes one
+        for _ in 1..self.threads {
+            failed.unblock();
+        }
+        true
+    }
 }
 
 fn respond(store: &Store, gate: &limits::Gate, trust_proxy: bool, mut req: tiny_http::Request) {
@@ -1376,6 +1642,46 @@ mod tests {
         ));
         let _ = fs::remove_dir_all(&d);
         d
+    }
+
+    /// A failed accept (iOS reclaiming a suspended app's listening socket) doesn't stop the
+    /// server: it listens on the same port again.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn listens_again_after_a_failed_accept() {
+        use std::io::{Read, Write};
+        use std::os::fd::AsRawFd;
+        let tcp = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let fd = tcp.as_raw_fd();
+        let server = tiny_http::Server::from_listener(tcp, None).unwrap();
+        let (port, _) = listen(server, 3, |req| {
+            let _ = req.respond(tiny_http::Response::from_string("ok"));
+        });
+        let get = || -> Option<String> {
+            let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).ok()?;
+            s.set_read_timeout(Some(std::time::Duration::from_secs(2)))
+                .ok()?;
+            s.write_all(b"GET / HTTP/1.0\r\n\r\n").ok()?;
+            let mut out = String::new();
+            s.read_to_string(&mut out).ok()?;
+            Some(out)
+        };
+        assert!(get().unwrap().ends_with("ok"));
+        // fail the waiting accept (Linux wakes it for a shut-down listener; on macOS only closing
+        // the fd under it does, and the listener's own close then aborts a debug build)
+        unsafe extern "C" {
+            fn shutdown(fd: i32, how: i32) -> i32;
+        }
+        assert_eq!(unsafe { shutdown(fd, 0) }, 0); // SHUT_RD
+        let t0 = std::time::Instant::now();
+        let mut answered = 0;
+        while answered < 5 && t0.elapsed() < std::time::Duration::from_secs(5) {
+            match get() {
+                Some(r) if r.ends_with("ok") => answered += 1,
+                _ => std::thread::sleep(std::time::Duration::from_millis(20)),
+            }
+        }
+        assert_eq!(answered, 5, "the server listens again on port {port}");
     }
 
     #[test]
@@ -1506,6 +1812,139 @@ mod tests {
             .find(|c| c["code"] == copy_code)
             .cloned();
         assert_eq!(row.unwrap()["based_on"], code.as_str());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn played_and_liked_lists_per_player() {
+        let dir = tmp("played");
+        let store = Store::open(&dir).unwrap();
+        let call = |method: &str, url: &str, token: Option<&str>| {
+            let headers: Vec<(String, String)> = token
+                .map(|t| vec![("Authorization".into(), format!("Bearer {t}"))])
+                .unwrap_or_default();
+            let (st, _, b) = handle(&store, method, url, &headers, b"{}");
+            (
+                st,
+                serde_json::from_slice::<Value>(&b).unwrap_or(Value::Null),
+            )
+        };
+        let (ada, token) = store.register("Ada").unwrap();
+        let me = ada["maker_id"].as_str().unwrap().to_string();
+        let codes: Vec<String> = ["M1", "M3", "WU"]
+            .iter()
+            .map(|st| {
+                store
+                    .upload(&Course::blank(st).to_bytes().unwrap(), "x")
+                    .unwrap()
+                    .code
+            })
+            .collect();
+        for c in [&codes[0], &codes[1], &codes[0]] {
+            assert_eq!(
+                call("POST", &format!("/api/courses/{c}/play"), Some(&token)).0,
+                200
+            );
+        }
+        call("POST", &format!("/api/courses/{}/play", codes[2]), None); // (anonymous: no list)
+        call(
+            "POST",
+            &format!("/api/courses/{}/like", codes[1]),
+            Some(&token),
+        );
+        let list = |kind: &str| -> Vec<String> {
+            call("GET", &format!("/api/makers/{me}/{kind}"), None).1["courses"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|m| m["code"].as_str().unwrap().to_string())
+                .collect()
+        };
+        assert_eq!(
+            list("played"),
+            vec![codes[0].clone(), codes[1].clone()],
+            "newest first, once each"
+        );
+        assert_eq!(list("liked"), vec![codes[1].clone()]);
+        drop(store);
+        let store = Store::open(&dir).unwrap();
+        assert_eq!(
+            store.courses_of_player(&me, false).len(),
+            2,
+            "kept across restarts"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn thumbnails_held_or_from_the_upstream() {
+        let dir = tmp("thumbs");
+        let store = Store::open(&dir).unwrap();
+        let jpeg = [0xFF, 0xD8, 1, 2, 3, 0xFF, 0xD9];
+        // the game's block: the JPEG, padding, its size and signature at the end
+        let mut block = vec![0u8; 0x1c000];
+        block[..jpeg.len()].copy_from_slice(&jpeg);
+        block[MAX_THUMBNAIL..MAX_THUMBNAIL + 4]
+            .copy_from_slice(&(MAX_THUMBNAIL as u32).to_le_bytes());
+        block[MAX_THUMBNAIL + 4..MAX_THUMBNAIL + 8].copy_from_slice(&[0xFF, 0xD9, 0xFF, 0xD9]);
+        assert_eq!(thumbnail_jpeg(&block), Some(&jpeg[..]));
+        assert_eq!(thumbnail_jpeg(b"<html>"), None);
+        let own = store
+            .upload(&Course::blank("M1").to_bytes().unwrap(), "x")
+            .unwrap();
+        let mut up = own.clone();
+        up.code = "ABC-DEF-GHJ".into();
+        store
+            .import(&Course::blank("M3").to_bytes().unwrap(), up)
+            .unwrap();
+        let asked = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let a = asked.clone();
+        store.on_thumbnail(move |code, entire| a.lock().unwrap().push((code.to_string(), entire)));
+        assert_eq!(
+            store.missing_thumbnails(10),
+            vec![("ABC-DEF-GHJ".into(), false), ("ABC-DEF-GHJ".into(), true)]
+        );
+        let get = |code: &str, kind: &str| {
+            handle(
+                &store,
+                "GET",
+                &format!("/api/courses/{code}/{kind}"),
+                &[],
+                b"",
+            )
+        };
+        assert_eq!(
+            get("ABC-DEF-GHJ", "thumbnail").0,
+            404,
+            "not held yet: asked for"
+        );
+        assert_eq!(
+            get(&own.code, "thumbnail").0,
+            404,
+            "not an upstream course: nothing to ask"
+        );
+        assert_eq!(
+            *asked.lock().unwrap(),
+            vec![("ABC-DEF-GHJ".to_string(), false)]
+        );
+        store.put_thumbnail("ABC-DEF-GHJ", false, &block).unwrap(); // (the fetcher's answer)
+        let (st, ty, body) = get("ABC-DEF-GHJ", "thumbnail");
+        assert_eq!(
+            (st, ty, body.as_slice()),
+            (200, "image/jpeg", &jpeg[..]),
+            "kept as its JPEG"
+        );
+        assert_eq!(asked.lock().unwrap().len(), 1, "held: not asked again");
+        // a client may wait for it
+        let t0 = std::time::Instant::now();
+        assert_eq!(get("ABC-DEF-GHJ", "entire_thumbnail?wait_ms=100").0, 404);
+        assert!(t0.elapsed() >= std::time::Duration::from_millis(100));
+        store.put_thumbnail(&own.code, true, &jpeg).unwrap();
+        assert_eq!(get(&own.code, "entire_thumbnail").2, jpeg);
+        assert_eq!(
+            store.missing_thumbnails(10),
+            vec![("ABC-DEF-GHJ".into(), true)]
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 

@@ -51,6 +51,9 @@ static void fake_course(int i, struct hundred_credit *c) {
     static const char *makers[8] = {"Luigi", "Toadette", "Peach", "Daisy", "Wario", "Yoshi", "Rosalina", "Kamek"};
     snprintf(c->name, sizeof c->name, "%s %d", names[i % 8], i + 1);
     snprintf(c->maker, sizeof c->maker, "%s", makers[i % 8]);
+    static const char *codes[8] = {"FL2-3HW-MFG", "7KD-QY4-0SG", "R9B-LMG-W1F", "C04-8XN-HJ6",
+                                   "VT3-Q0K-2PD", "M5Y-GJ7-K8R", "B1H-6WD-XQN", "4G0-YK4-T9C"};
+    snprintf(c->code, sizeof c->code, "%s", codes[i % 8]);
 }
 WEAK bool hundred_run_status(struct hundred_status *o) {
     fake.used = true;

@@ -43,6 +43,21 @@ pub(crate) fn load(dir: &Path) -> HashMap<String, EndlessSave> {
         .unwrap_or_default()
 }
 
+/// The courses a player passed in their challenge runs, newest first (a played list for a store
+/// kept before played lists were: seeded from the runs it holds).
+pub(crate) fn played_in_runs(save: &EndlessSave) -> Vec<String> {
+    let mut runs: Vec<&mmk_modes::endless::RunRecord> =
+        save.runs.iter().chain(&save.hundred).flatten().collect();
+    runs.sort_by_key(|r| r.status.updated_at);
+    let mut out: Vec<String> = Vec::new();
+    for code in runs.iter().rev().flat_map(|r| r.played.iter().rev()) {
+        if !out.contains(code) && out.len() < crate::PLAYED_KEPT {
+            out.push(code.clone());
+        }
+    }
+    out
+}
+
 fn run_err(e: RunError) -> StoreError {
     match e {
         RunError::NoRun => StoreError::NotFound,
@@ -300,6 +315,10 @@ impl Store {
             Ruleset::Hundred if applied.complete => g.add_completion(d, who),
             Ruleset::Hundred => g.board_score(&board(ruleset, d), who),
         };
+        let played = first && outcome != Outcome::Broken && ix.is_some();
+        if played {
+            g.note_played(who, &r.code);
+        }
         if let Some(i) = ix {
             let m = &mut g.courses[i];
             if first && outcome != Outcome::Broken {
@@ -323,7 +342,7 @@ impl Store {
             }
             self.save_index(&g)?;
         }
-        if outcome == Outcome::Clear || applied.game_over || applied.complete {
+        if played || outcome == Outcome::Clear || applied.game_over || applied.complete {
             self.save_social(&g)?;
         }
         self.save_endless(&g)?;
@@ -521,6 +540,23 @@ mod tests {
     use super::*;
     use crate::handle;
     use mmk_formats::smm2::Course;
+
+    #[test]
+    fn a_played_list_seeded_from_the_runs_is_newest_first() {
+        let run = |at: u64, codes: &[&str]| {
+            let mut r = mmk_modes::endless::RunRecord::default();
+            r.status.updated_at = at;
+            r.played = codes.iter().map(|c| c.to_string()).collect();
+            Some(r)
+        };
+        let mut save = EndlessSave::default();
+        save.runs[0] = run(10, &["AAA-AAA-AAA", "BBB-BBB-BBB"]);
+        save.hundred[1] = run(20, &["CCC-CCC-CCC", "AAA-AAA-AAA"]);
+        assert_eq!(
+            played_in_runs(&save),
+            ["AAA-AAA-AAA", "CCC-CCC-CCC", "BBB-BBB-BBB"]
+        );
+    }
 
     fn tmp(name: &str) -> std::path::PathBuf {
         let d = std::env::temp_dir().join(format!(

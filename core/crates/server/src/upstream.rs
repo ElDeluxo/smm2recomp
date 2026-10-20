@@ -9,9 +9,14 @@
 //! imports them under the source's code with its attempts and clears, so the pick's bands apply as
 //! to any course. One request at a time, `interval` apart; a difficulty is searched at most once per
 //! `cooldown`. When the source fails, it's logged and the runs play the courses the server holds.
+//!
+//! Thumbnails (a course's picture and its whole-course map, for Course World) come from the source
+//! too, one request at a time like the rest: first the ones a client asked for and the server
+//! doesn't hold (ahead of a course import under way), then, while the fetcher has nothing else to
+//! do, the ones of every course held. Both kinds are kept on disk.
 
 use std::collections::HashSet;
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use mmk_formats::smm2::crypto::{self, BCD_SIZE};
@@ -44,6 +49,11 @@ pub trait Source: Send {
     fn endless(&mut self, d: Difficulty, count: usize) -> Result<Vec<Value>, SourceError>;
     /// A course file by its code (no dashes): the encrypted `.bcd` or the plain body.
     fn course(&mut self, code: &str) -> Result<Vec<u8>, SourceError>;
+    /// A course's thumbnail by its code (no dashes; `entire`: the whole-course map): a JPEG, or the
+    /// game's thumbnail block.
+    fn thumbnail(&mut self, _code: &str, _entire: bool) -> Result<Vec<u8>, SourceError> {
+        Err(SourceError::Failed("no thumbnails".into()))
+    }
 }
 
 /// TGRCode's API.
@@ -128,6 +138,15 @@ impl Source for TgrCode {
     fn course(&mut self, code: &str) -> Result<Vec<u8>, SourceError> {
         self.get(&format!("/level_data/{code}"))
     }
+
+    fn thumbnail(&mut self, code: &str, entire: bool) -> Result<Vec<u8>, SourceError> {
+        let kind = if entire {
+            "level_entire_thumbnail"
+        } else {
+            "level_thumbnail"
+        };
+        self.get(&format!("/{kind}/{code}"))
+    }
 }
 
 /// The course key table: given, or found in the player's executable with the first download.
@@ -154,6 +173,8 @@ pub struct Options {
     /// Courses a search for a difficulty gathers before it stops (more searches while the source keeps
     /// answering full batches): about three runs' worth, so a player's next runs find fresh courses.
     pub pool: [usize; 4],
+    /// Before a thumbnail a client is waiting for (shorter than `interval`; one try, no retries).
+    pub thumbnail_interval: Duration,
 }
 
 impl Default for Options {
@@ -166,26 +187,60 @@ impl Default for Options {
             batch: 10,
             prime: true,
             pool: [24, 48, 48, 18], // (3 x the 100 Mario run lengths 8 / 16 / 16 / 6)
+            thumbnail_interval: Duration::from_millis(1500),
         }
     }
 }
 
+/// What the fetcher is told.
+enum Job {
+    /// A difficulty is short of courses.
+    Short(Difficulty),
+    /// A client is waiting for thumbnails (in the fetcher's queue).
+    Thumbnails,
+}
+
 /// Start the fetcher for `store` (a thread; it lives as long as the process).
 pub fn start(store: Arc<Store>, source: Box<dyn Source>, keys: Keys, opts: Options) {
-    let (tx, rx) = mpsc::channel::<Difficulty>();
+    let (tx, rx) = mpsc::channel::<Job>();
     if opts.prime {
         for d in Difficulty::ALL {
-            let _ = tx.send(d);
+            let _ = tx.send(Job::Short(d));
         }
     }
-    let tx = std::sync::Mutex::new(tx);
+    let tx = Arc::new(Mutex::new(tx));
+    let short = tx.clone();
     store.on_short(move |d| {
-        let _ = tx.lock().unwrap().send(d);
+        let _ = short.lock().unwrap().send(Job::Short(d));
+    });
+    let mut f = Fetcher::new(source, keys, opts);
+    let queue = f.wanted_thumbnails.clone();
+    store.on_thumbnail(move |code, entire| {
+        let mut q = queue.lock().unwrap();
+        let t = (code.to_string(), entire);
+        q.retain(|x| *x != t);
+        q.push_front(t); // (newest first: what the player looks at now)
+        drop(q);
+        let _ = tx.lock().unwrap().send(Job::Thumbnails);
     });
     std::thread::spawn(move || {
-        let mut f = Fetcher::new(source, keys, opts);
-        while let Ok(d) = rx.recv() {
-            f.wanted(&store, d);
+        loop {
+            // thumbnails a client waits for first, then a difficulty that's short; with nothing
+            // waiting, one thumbnail of a course held
+            f.serve_thumbnails(&store);
+            let job = match rx.try_recv() {
+                Ok(j) => Some(j),
+                Err(mpsc::TryRecvError::Empty) if f.warm_thumbnail(&store) => continue,
+                Err(mpsc::TryRecvError::Empty) => rx.recv().ok(),
+                Err(mpsc::TryRecvError::Disconnected) => None,
+            };
+            match job {
+                Some(Job::Short(d)) => {
+                    f.wanted(&store, d);
+                }
+                Some(Job::Thumbnails) => {}
+                None => return,
+            }
         }
     });
 }
@@ -197,6 +252,10 @@ struct Fetcher {
     opts: Options,
     searched: [Option<Instant>; 4],
     last_request: Option<Instant>,
+    /// Thumbnails clients asked for, (code, entire), the latest first.
+    wanted_thumbnails: Arc<Mutex<std::collections::VecDeque<(String, bool)>>>,
+    /// Thumbnails the source didn't give (not asked for again in the background).
+    no_thumbnail: HashSet<(String, bool)>,
 }
 
 impl Fetcher {
@@ -212,28 +271,93 @@ impl Fetcher {
             opts,
             searched: [None; 4],
             last_request: None,
+            wanted_thumbnails: Default::default(),
+            no_thumbnail: HashSet::new(),
         }
     }
 
-    fn pace(&mut self) {
+    /// One request to the source, at least `interval` after the one before.
+    fn request<T>(
+        &mut self,
+        interval: Duration,
+        req: impl FnOnce(&mut dyn Source) -> Result<T, SourceError>,
+    ) -> Result<T, SourceError> {
         if let Some(t) = self.last_request {
-            let left = self.opts.interval.saturating_sub(t.elapsed());
+            let left = interval.saturating_sub(t.elapsed());
             if !left.is_zero() {
                 std::thread::sleep(left);
             }
         }
+        let r = req(&mut *self.source);
         self.last_request = Some(Instant::now());
+        r
     }
 
-    /// One request, paced, retried while the source says it's busy.
+    /// One thumbnail into the store (a busy source: asked once more after its wait, if short).
+    fn fetch_thumbnail(&mut self, store: &Store, code: &str, entire: bool) -> bool {
+        let raw = code.replace('-', "");
+        let interval = self.opts.thumbnail_interval;
+        let mut r = self.request(interval, |s| s.thumbnail(&raw, entire));
+        if let Err(SourceError::Busy(after)) = &r {
+            let w = after.unwrap_or(self.opts.backoff);
+            if w <= Duration::from_secs(20) {
+                std::thread::sleep(w);
+                r = self.request(interval, |s| s.thumbnail(&raw, entire));
+            }
+        }
+        match r {
+            Ok(b) if store.put_thumbnail(code, entire, &b).is_ok() => true,
+            Ok(_) => {
+                eprintln!("[upstream] thumbnail {code}: not a JPEG");
+                false
+            }
+            Err(e) => {
+                eprintln!("[upstream] thumbnail {code}: {e}");
+                false
+            }
+        }
+    }
+
+    /// The thumbnails clients are waiting for.
+    fn serve_thumbnails(&mut self, store: &Store) {
+        loop {
+            let next = self.wanted_thumbnails.lock().unwrap().pop_front();
+            let Some((code, entire)) = next else { return };
+            if !store.has_thumbnail(&code, entire)
+                && !self.no_thumbnail.contains(&(code.clone(), entire))
+                && !self.fetch_thumbnail(store, &code, entire)
+            {
+                self.no_thumbnail.insert((code, entire));
+            }
+        }
+    }
+
+    /// One thumbnail of a held upstream course that the store doesn't have yet; false: none left.
+    fn warm_thumbnail(&mut self, store: &Store) -> bool {
+        let next = store
+            .missing_thumbnails(self.no_thumbnail.len() + 1)
+            .into_iter()
+            .find(|t| !self.no_thumbnail.contains(t));
+        let Some((code, entire)) = next else {
+            return false;
+        };
+        if !self.fetch_thumbnail(store, &code, entire) {
+            self.no_thumbnail.insert((code, entire));
+        }
+        true
+    }
+
+    /// One request, paced, retried while the source says it's busy; the thumbnails clients wait
+    /// for go first.
     fn call<T>(
         &mut self,
+        store: &Store,
         mut req: impl FnMut(&mut dyn Source) -> Result<T, SourceError>,
     ) -> Result<T, SourceError> {
         let mut wait = self.opts.backoff;
         for attempt in 0..=self.opts.retries {
-            self.pace();
-            match req(&mut *self.source) {
+            self.serve_thumbnails(store);
+            match self.request(self.opts.interval, &mut req) {
                 Err(SourceError::Busy(after)) if attempt < self.opts.retries => {
                     let w = after.unwrap_or(wait).min(Duration::from_secs(120));
                     eprintln!("[upstream] the source is busy: again in {} s", w.as_secs());
@@ -258,7 +382,7 @@ impl Fetcher {
         let mut records: Vec<Value> = Vec::new();
         let mut seen: HashSet<String> = HashSet::new();
         while seen.len() < self.opts.pool[d.index()] {
-            let round = match self.call(|s| s.endless(d, batch)) {
+            let round = match self.call(store, |s| s.endless(d, batch)) {
                 Ok(r) => r,
                 Err(e) => {
                     eprintln!(
@@ -288,7 +412,7 @@ impl Fetcher {
                 continue;
             }
             let code = meta.code.replace('-', "");
-            let raw = match self.call(|s| s.course(&code)) {
+            let raw = match self.call(store, |s| s.course(&code)) {
                 Ok(b) => b,
                 Err(e) => {
                     eprintln!("[upstream] {}: {e}", meta.code);
@@ -445,6 +569,16 @@ mod tests {
                 .cloned()
                 .ok_or_else(|| SourceError::Failed("HTTP 404".into()))
         }
+
+        fn thumbnail(&mut self, code: &str, entire: bool) -> Result<Vec<u8>, SourceError> {
+            // one course has both pictures, the other only its map
+            match (code, entire) {
+                ("N24N99PNF", _) | ("PDCYMMWDF", true) => {
+                    Ok(vec![0xFF, 0xD8, entire as u8, 0xFF, 0xD9])
+                }
+                _ => Err(SourceError::Failed("HTTP 404".into())),
+            }
+        }
     }
 
     fn record(id: &str, data_id: u64, attempts: u64, clears: u64) -> Value {
@@ -482,6 +616,7 @@ mod tests {
             batch: 10,
             prime: false,
             pool: [24, 48, 48, 18],
+            thumbnail_interval: Duration::ZERO,
         }
     }
 
@@ -530,6 +665,58 @@ mod tests {
         let mut fetch = Fetcher::new(Box::new(f), Keys::Find(vec![image]), quick());
         assert_eq!(fetch.wanted(&store, Difficulty::Expert), 2);
         assert_eq!(fetch.table, Some(table()));
+    }
+
+    #[test]
+    fn thumbnails_are_fetched_in_the_background_once_each() {
+        let store = Store::open(tmp("warm")).unwrap();
+        let (f, _) = fake(false);
+        let mut fetch = Fetcher::new(Box::new(f), Keys::Table(Box::new(table())), quick());
+        fetch.wanted(&store, Difficulty::Normal);
+        let mut rounds = 0;
+        while fetch.warm_thumbnail(&store) {
+            rounds += 1;
+            assert!(
+                rounds < 10,
+                "a thumbnail the source doesn't have isn't asked for again"
+            );
+        }
+        assert_eq!(rounds, 4);
+        assert!(
+            store.has_thumbnail("N24-N99-PNF", false) && store.has_thumbnail("N24-N99-PNF", true)
+        );
+        assert!(
+            store.has_thumbnail("PDC-YMM-WDF", true) && !store.has_thumbnail("PDC-YMM-WDF", false)
+        );
+    }
+
+    #[test]
+    fn thumbnails_clients_wait_for_go_first() {
+        let store = Store::open(tmp("urgent")).unwrap();
+        let (f, _) = fake(false);
+        let mut fetch = Fetcher::new(Box::new(f), Keys::Table(Box::new(table())), quick());
+        fetch.wanted(&store, Difficulty::Normal);
+        fetch
+            .wanted_thumbnails
+            .lock()
+            .unwrap()
+            .push_back(("PDC-YMM-WDF".into(), true));
+        fetch
+            .wanted_thumbnails
+            .lock()
+            .unwrap()
+            .push_back(("PDC-YMM-WDF".into(), false));
+        fetch.serve_thumbnails(&store);
+        assert!(store.has_thumbnail("PDC-YMM-WDF", true));
+        assert!(
+            fetch.no_thumbnail.contains(&("PDC-YMM-WDF".into(), false)),
+            "the source has none"
+        );
+        assert!(
+            !store.has_thumbnail("N24-N99-PNF", false),
+            "not asked for: left for later"
+        );
+        assert!(fetch.wanted_thumbnails.lock().unwrap().is_empty());
     }
 
     #[test]

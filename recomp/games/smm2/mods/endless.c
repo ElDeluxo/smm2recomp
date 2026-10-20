@@ -87,6 +87,7 @@ static void add_credit(uint32_t d, uint64_t id) {  // (state_lock held)
     c->maker[0] = 0;
     for (int i = 0; i < ncourse_names; i++)
         if (course_names[i].id == id) *c = course_names[i].c;
+    data_id_to_code((uint32_t)id, c->code);
 }
 
 static char own_maker_id[16];
