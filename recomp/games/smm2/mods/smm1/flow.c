@@ -14,7 +14,8 @@
 // Transitions: SMM2's screens and the flow's meet through SMM2's own block wipe (its Endless screens' way: the result
 // screen's Next -> the map or the ending, the ending -> the select), the map's iris goes to SMM2's card through
 // black, and the select fades in over SMM2's screens and out of them (opening: over Course World, the Endless menu
-// held back until it is in; Challenge Modes and B: over SMM2's Endless menu), so no screen cuts in at once.
+// held back until it is in; Challenge Modes and B: over SMM2's Endless menu), so no screen cuts in at once. After a
+// Save & Quit the select comes out of black: the flow's black takes over from SMM2's fade (hundred_flow_cover).
 //
 // The flow ticks once per presented frame (60 Hz). The mod's calls (game threads) are queued and handled at the
 // next tick.
@@ -97,7 +98,7 @@ WEAK void hundred_mode_switch(void) { fake.used = true; }
 WEAK bool hundred_smm1_card(void) { return getenv("RECOMP_HUNDRED_SMM1_CARD") && atoi(getenv("RECOMP_HUNDRED_SMM1_CARD")); }
 
 // ================================================================ queue (mod -> flow)
-enum { Q_OPEN = 1, Q_PAUSE, Q_STARTED, Q_RESULT, Q_ENDING, Q_COURSE_IN };
+enum { Q_OPEN = 1, Q_PAUSE, Q_STARTED, Q_RESULT, Q_ENDING, Q_COURSE_IN, Q_COVER };
 static pthread_mutex_t g_q = PTHREAD_MUTEX_INITIALIZER;
 static int g_queue[32][2], g_nq;
 static struct hundred_credit g_end_credits[16];
@@ -127,6 +128,8 @@ static struct {
     bool tap, touching;  // a touch lifted this frame (at tap_x, tap_y: game pixels); a touch is down
     bool touch_stale;    // the touch down began before the flow opened (its lift is no tap)
     bool back_due;       // B on the select while SMM2's menu underneath wasn't in yet: B once it is
+    bool covered;        // black over SMM2's way back to its Endless menu (hundred_flow_cover): the select lifts it
+    int cover_at;        // (F.ov.tick it came up)
     int tap_x, tap_y;
     char test[64];
     long test_at;
@@ -234,6 +237,7 @@ static void to_select(void) {
     F.sel = s;
     F.state = s ? S_SELECT : S_CLOSED;
     F.back_due = false;
+    if (F.covered) F.covered = false, X.veil_to = 0;  // (out of the black that hid SMM2's menu coming back)
     if (s && X.veil <= 0 && !WP.anim) fade_in();  // (over SMM2's screen; after the ending the dip covers it)
     static const int t[] = {60};
     static const char *w[] = {"select"};
@@ -336,7 +340,7 @@ static void on_result(int outcome) {
             if (!hundred_play_next()) LOGF("the run side did not take the next course\n");
         }
         break;
-    case HUNDRED_MISS:  // SMM2's retry; with no life left, SMM2's game over, then its Endless menu reopens the select
+    case HUNDRED_MISS:  // SMM2's retry; with no life left, SMM2's GAME OVER scene, then Course World [obs]
         if (F.st.lives > 0) F.state = S_PLAYING;
         else {
             close_scenes();
@@ -422,6 +426,9 @@ static void handle_queue(void) {
         case Q_STARTED:
             if (F.state == S_INTRO && F.intro) intro_started(F.intro);  // (the card goes: Out over the course)
             break;
+        case Q_COVER:
+            if (!F.full) X.veil = X.veil_to = 1, F.covered = true, F.cover_at = F.ov.tick;
+            break;
         case Q_COURSE_IN:
             if (F.state == S_INTRO && F.intro) intro_course_in(F.intro);  // (SMM2's card: the black may go)
             break;
@@ -501,6 +508,7 @@ static void tick(unsigned buttons) {
     F.prev = buttons;
     F.ov.tick++;
     shots_tick();
+    if (F.covered && F.ov.tick - F.cover_at > 300) F.covered = false, X.veil_to = 0;  // (no select came: let go)
     fades_tick();
     if (X.then) in.pressed = 0, F.tap = false;  // (a fade out under way: its screen takes nothing more)
     bool resume = false;
@@ -629,6 +637,7 @@ bool hundred_flow_overlay(void) { return !F.full && F.captured; }
 void hundred_flow_pause(void) { post(Q_PAUSE, 0); }
 void hundred_flow_course_started(void) { post(Q_STARTED, 0); }
 void hundred_flow_course_in(void) { post(Q_COURSE_IN, 0); }
+void hundred_flow_cover(void) { post(Q_COVER, 0); }
 void hundred_course_result(int outcome) { post(Q_RESULT, outcome); }
 void hundred_ending_show(int d, int n, const struct hundred_credit *c) {
     pthread_mutex_lock(&g_q);

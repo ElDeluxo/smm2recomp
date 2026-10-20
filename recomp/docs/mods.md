@@ -258,7 +258,10 @@ select fades in over Course World when it opens (SMM2's Activate is held until t
 menu comes in under it unseen; it used to open on that menu's first Disp, which showed SMM2's menu for half a second
 first) and out over SMM2's Endless menu when Challenge Modes switches or B leaves (B starts SMM2's way back to Course
 World at once, under the map's Out; a B pressed while that menu is still coming in counts once it is in,
-`hundred_menu_in()`). **Challenge Modes input:** the buttons and the
+`hundred_menu_in()`). After a Save & Quit (the pause's, or Quit on the result screen) SMM2's way back skips that
+Activate and shows its menu as it fades in from black; the flow's black comes up on SMM2's black (the scene fade's
+waiting state, enter main+0x192f580: `hundred_flow_cover()`) and the select comes out of it. A won run goes back under
+the ending; a game over goes to Course World through SMM2's GAME OVER scene. **Challenge Modes input:** the buttons and the
 touch held when the flow opens count as held, not pressed, until they are let go: SMM2's menu acts on a ZL / ZR in
 the very frame it comes, before the flow has seen it held, so the select used to take the same press and switch
 straight back to Endless (half the switches back to 100 Mario bounced, in a test with the player's own key path); on SMM2's menu a

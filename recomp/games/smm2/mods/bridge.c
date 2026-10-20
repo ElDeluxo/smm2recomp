@@ -461,6 +461,33 @@ static void seq_activate(Cpu *c) {
     guest_call_orig(c, SEQ_ACTIVATE_EXEC);
 }
 
+// ---- back from a run's Save & Quit (from the pause, or Quit on the result screen): black until the select
+// SMM2's scene changes go through its resident fade (ResidentSeq/UISceneFadeSeq): Out (enter main+0x192f1a0, exec
+// main+0x192f470: the Out animation, 30 frames for the plain black one), then a state that only waits, the screen
+// black, while the next scene loads (enter main+0x192f580), then In (main+0x192f5a0) [obs research/decomp (the
+// fade's state functions); frames 8730 / 8761 / 8771 for Out, black and In on the way back after a Quit]. The way
+// back to the Endless menu skips Activate (above): the menu is up under SMM2's fade from black, and the select used
+// to come over it ~0.3 s later. So on that black the flow's own black comes up and stays, and the select comes out
+// of it when the menu reports the run (menu_disp: HUNDRED_GIVEUP_SAVE). (A won run goes back under the flow's
+// ending; a game over goes through SMM2's GAME OVER scene to Course World, not the menu [obs]: neither shows it.)
+#define FADE_OUT_ENTER MAIN_ADDR(0x192f1a0)
+#define FADE_BLACK_ENTER MAIN_ADDR(0x192f580)
+__attribute__((weak)) void hundred_flow_cover(void) {}
+static volatile uint64_t fade_page;  // the fade's page (its Out's this): the black state's enter is a bare return
+
+static void fade_out(Cpu *c) {
+    fade_page = c->x[0];
+    guest_call_orig(c, FADE_OUT_ENTER);
+}
+static void fade_black(Cpu *c) {
+    guest_call_orig(c, FADE_BLACK_ENTER);
+    if (c->x[0] != fade_page || test_difficulty() >= 0 || !mod_hundred_rules() || leaving_won) return;
+    if (suspending && run_d >= 0) {
+        LOG("[mod] bridge: SMM2 goes back to its Endless menu: the flow keeps the screen black\n");
+        hundred_flow_cover();
+    }
+}
+
 // ---- the course's start with SMM2's course-in card (the "SMM1 course card" setting off)
 // The Endless menu's CourseIn state (index 0xb of its machine; exec main+0x1a258f0) posts 0x80 (to the course) every
 // frame once the map Mario's Decide animation is over [obs research/decomp/mods/menu]. The flow's map and iris come
@@ -965,6 +992,8 @@ static void tab_probe(Cpu *c) {
 void bridge_register(void) {
     hle_override(MENU_DISP_EXEC, menu_disp, "mod: Endless menu Disp (bridge)");
     hle_override(SEQ_ACTIVATE_EXEC, seq_activate, "mod: Course World's Endless Activate (bridge)");
+    hle_override(FADE_OUT_ENTER, fade_out, "mod: scene fade Out (bridge)");
+    hle_override(FADE_BLACK_ENTER, fade_black, "mod: scene fade black (bridge)");
     hle_override(PAUSE_EXEC, pause_exec, "mod: Endless pause (bridge)");
     hle_override(PLAY_EXEC, play_exec, "mod: Endless play state (bridge)");
     hle_override(MENU_DISAPPEAR_EXEC, menu_disappear, "mod: Endless menu Disappear (bridge)");

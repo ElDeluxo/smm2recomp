@@ -47,6 +47,8 @@ bool hundred_flow_overlay(void);         // an SMM1 overlay is up over the cours
 void hundred_flow_pause(void);           // the player paused during a run (the mod keeps SMM2's own pause from opening)
 void hundred_flow_course_started(void);  // the course is on screen and playing (the start card may go)
 void hundred_flow_course_in(void);       // SMM2 has left its map for the course scene (SMM2's course-in card comes)
+void hundred_flow_cover(void);           // SMM2's screen is black on its way back to its Endless menu after a Save &
+                                         // Quit: keep it black until the select comes out of it
 void hundred_course_result(int outcome);
 bool hundred_flow_ready_to_start(void);  // the course may start playing (the card is up, or no SMM1 screen is): SMM2
                                          // loads underneath the map and holds the course's first play frame until
