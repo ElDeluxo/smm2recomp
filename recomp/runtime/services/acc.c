@@ -1,10 +1,12 @@
-// acc:u0 (one local user) and the preselected-user launch parameter.
+// acc:u0 (one local user) and the preselected-user launch parameter. With backend nextendo (runtime/net/netcfg.h)
+// the user is the signed-in Nextendo account: its user name is the nickname, its PID the network service account ID.
 #include <stdlib.h>
 #include <string.h>
 
 #include "../hle.h"
 #include "../ipc.h"
 #include "../net/netcfg.h"
+#include "../net/nextendo.h"
 #include "../net/online.h"
 #include "../net/token.h"
 
@@ -17,6 +19,17 @@ static void write_uid_list(IpcReq *req) {
     if (c->size >= 16) memcpy((void *)(uintptr_t)c->addr, g_user_id, 16);
 }
 
+// the nickname field holds 32 bytes of UTF-8 and a NUL: cut before a character that does not fit whole
+static void put_nickname(char *dst, const char *name) {
+    size_t n = strlen(name);
+    if (n > 32) {
+        n = 32;
+        while (n && ((unsigned char)name[n] & 0xc0) == 0x80) n--;
+    }
+    memcpy(dst, name, n);
+    dst[n] = 0;
+}
+
 static void profile(Service *s, IpcReq *req, IpcResp *resp) {
     (void)s;
     switch (req->cmd) {
@@ -24,7 +37,9 @@ static void profile(Service *s, IpcReq *req, IpcResp *resp) {
         memset(resp->data, 0, 0x38);
         memcpy(resp->data, g_user_id, 16);
         *(uint64_t *)(resp->data + 16) = 1600000000;
-        strcpy((char *)resp->data + 24, getenv("RECOMP_USER_NAME") ? getenv("RECOMP_USER_NAME") : "Player");
+        char nx[64];
+        if (net_backend() == NET_BACKEND_NEXTENDO && nextendo_username(nx, sizeof nx)) put_nickname((char *)resp->data + 24, nx);
+        else strcpy((char *)resp->data + 24, getenv("RECOMP_USER_NAME") ? getenv("RECOMP_USER_NAME") : "Player");
         resp_size(resp, 0x38);
         if (req->cmd == 0 && out_buf(req, 0)) memset((void *)(uintptr_t)out_buf(req, 0)->addr, 0, out_buf(req, 0)->size);
         break;
@@ -38,7 +53,9 @@ static void profile(Service *s, IpcReq *req, IpcResp *resp) {
 // Pretend online (runtime/net/online.h): the user has a network service account whose ID token is ready. The token
 // is a local placeholder (no Nintendo service is asked; mods answer the game's online calls themselves). With the
 // game's own network stack on (backend local-nex) the account ID and the token are the local account's
-// (runtime/net/token.h): a JWT the local NEX test server can check.
+// (runtime/net/token.h): a JWT the local NEX test server can check. With backend nextendo they are the Nextendo
+// account's PID and an ID token carrying its game token; loading the token first makes sure the game token is fresh
+// (nextendo_prepare_game_login: the network, at most 10 s; the game asks once per login).
 static void async_context(Service *s, IpcReq *req, IpcResp *resp) {
     (void)s;
     switch (req->cmd) {
@@ -65,6 +82,8 @@ static bool online_manager(IpcReq *req, IpcResp *resp) {
         static char jwt[2048];
         const char *t = token;
         uint32_t n = sizeof token - 1;
+        if (net_backend() == NET_BACKEND_NEXTENDO && !nextendo_prepare_game_login(10000))
+            LOG("[acc] Nextendo: no game token (offline, or the sign-in has ended)\n");
         if (net_real_sockets() && (n = (uint32_t)net_id_token(jwt, sizeof jwt))) t = jwt;
         else n = sizeof token - 1;
         if (b && b->size) {
@@ -96,10 +115,18 @@ static void manager(Service *s, IpcReq *req, IpcResp *resp) {
     if (net_online() && online_manager(req, resp)) return;
     switch (req->cmd) {
     case 0: break;  // CheckAvailability
-    case 1:  // GetAccountId (the network service account)
-        OUT(uint64_t, 0) = net_real_sockets() ? net_nsa_id() : 0x1234567890abcdefull;
+    case 1: {  // GetAccountId (the network service account; nextendo: the PID, known once a game token is)
+        uint64_t id = 0x1234567890abcdefull;
+        if (net_backend() == NET_BACKEND_NEXTENDO) {
+            static bool asked;  // (asked before the ID token: one fetch, not one per call when offline)
+            if (!(id = nextendo_pid()) && !asked) asked = true, nextendo_prepare_game_login(10000), id = nextendo_pid();
+        } else if (net_real_sockets()) {
+            id = net_nsa_id();
+        }
+        OUT(uint64_t, 0) = id;
         resp_size(resp, 8);
         break;
+    }
     default: LOG("[acc] IManagerForApplication cmd %u (ok)\n", req->cmd); resp_size(resp, 0x10);
     }
 }

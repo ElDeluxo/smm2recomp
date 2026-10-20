@@ -1,6 +1,8 @@
 #!/bin/bash
 # Tests for runtime/net/http.c (http:// and https://) and runtime/net/nextendo.c (sign-in) against local mocks (tools/net_mock.py) and a throwaway CA made
-# in build/net_test/. NET_TEST_LIVE=1 adds the cases that reach nextendo.network and 51.178.29.194.
+# in build/net_test/; then tools/test_netcfg.c: the backends in netcfg.c, the Nextendo ID token (token.c) and the
+# certificate pin (ssl.c), with a stand-in account (tools/test_nextendo_stub.c). NET_TEST_LIVE=1 adds the cases that
+# reach nextendo.network and 51.178.29.194.
 # Usage: tools/test_net.sh
 set -e
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -46,6 +48,20 @@ if [ "$(uname -s)" = Darwin ]; then  # (the Keychain backend is linked too; the 
 fi
 clang "$OUT"/obj/*.o $LIBS -o "$OUT/test_net$EXE"
 
+# the second binary: netcfg.c + token.c + ssl.c + json.c with the stand-in account, and the same Mbed TLS objects
+mkdir -p "$OUT/obj_cfg"
+pids=()
+for f in runtime/net/netcfg.c runtime/net/token.c runtime/net/json.c runtime/services/ssl.c tools/test_netcfg.c tools/test_nextendo_stub.c; do
+    clang $FLAGS -c "$f" -o "$OUT/obj_cfg/$(basename "$f" .c).o" &
+    pids+=($!)
+done
+for p in "${pids[@]}"; do wait "$p"; done
+MBEDTLS_OBJS=""
+for f in $MBEDTLS/library/*.c; do MBEDTLS_OBJS="$MBEDTLS_OBJS $OUT/obj/$(basename "$f" .c).o"; done
+clang $MBEDTLS_OBJS "$OUT"/obj_cfg/*.o -lpthread -o "$OUT/test_netcfg$EXE"
+export NET_TEST_LEAF="$ROOT/$OUT/leaf.pem"
+export NET_TEST_LEAF_PIN=$(openssl x509 -in "$OUT/leaf.pem" -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -r | cut -d' ' -f1)
+
 free_port() { python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])'; }
 export NET_TEST_TLS_PORT=$(free_port) NET_TEST_HTTP_PORT=$(free_port) NET_TEST_BADHOST_PORT=$(free_port) NET_TEST_OAUTH_PORT=$(free_port) NET_TEST_OFFLINE_PORT=$(free_port) NET_TEST_SLOW_PORT=$(free_port) NET_TEST_CA="$OUT/ca.pem"
 python3 tools/net_mock.py --port "$NET_TEST_TLS_PORT" --tls "$OUT/leaf.pem" "$OUT/leaf.key" > "$OUT/mock_tls.log" 2>&1 &
@@ -69,4 +85,10 @@ done
 CASES="embedded_roots_valid https_local_ok https_untrusted https_wrong_host http_plain_still_works"
 CASES="$CASES pkce_rfc7636 signin_loopback_full refresh_rotates_and_persists callback_state_mismatch callback_error_denied begin_twice_cancels_first prepare_offline_times_out no_secret_in_logs signout_during_refresh api_override_rejects_lookalikes"
 [ -n "$NET_TEST_LIVE" ] && CASES="$CASES https_live_nextendo https_live_nextendo_embedded_only https_live_selfsigned_refused"
-if "$OUT/test_net$EXE" $CASES; then echo "ALL PASS"; else echo "FAILURES"; exit 1; fi
+CFG_CASES="ours_default_untouched nextendo_routes nextendo_hosts_local_only nextendo_dest nextendo_overrides nextendo_not_signed_in_falls_back"
+CFG_CASES="$CFG_CASES id_token_rs256 id_token_key_kept id_token_no_nex_token pin_mismatch_refused"
+[ -n "$NET_TEST_LIVE" ] && CFG_CASES="$CFG_CASES pin_live_ok"
+ok=true
+"$OUT/test_net$EXE" $CASES || ok=false
+"$OUT/test_netcfg$EXE" $CFG_CASES || ok=false
+if $ok; then echo "ALL PASS"; else echo "FAILURES"; exit 1; fi

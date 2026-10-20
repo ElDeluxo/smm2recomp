@@ -1,5 +1,10 @@
 // The game network stack's configuration (runtime/net/netcfg.h): backend, redirect table, destination policy, TLS
 // trust. Read once, the first time anything asks.
+//
+// Nextendo's addresses and their game server's key [obs, 2026-10-20]: the game server 51.178.29.194:443 presents a
+// self-signed certificate (CN=nintendo-private-server) over TLS 1.2; the pin is the SHA-256 of its
+// SubjectPublicKeyInfo (`openssl x509 -pubkey | openssl pkey -pubin -outform der | sha256`). Their NAT check answers
+// on 164.132.111.120 for nncs2-* (nncs1-* is the game server).
 #include "netcfg.h"
 
 #include <ctype.h>
@@ -9,6 +14,7 @@
 #include <string.h>
 
 #include "../hle.h"
+#include "nextendo.h"
 
 // a game's own settings store (runtime/game_hooks.c, weak: none): SMM2 keeps these in smm2mods.ini
 bool game_net_config(const char *key, char *out, size_t cap);
@@ -16,6 +22,11 @@ void game_net_config_set(const char *key, const char *val);
 
 #define MAX_RULES 32
 typedef struct { char pattern[128]; uint32_t ip; } Rule;  // "name" or "*.domain"
+
+#define NEXTENDO_SERVER "51.178.29.194"
+#define NEXTENDO_NAT "164.132.111.120"
+#define NEXTENDO_NAT_HOST "nncs2-lp1.n.n.srv.nintendo.net"
+#define NEXTENDO_PIN "d2e7388e48ee30cfbecfbeb522874f2cc6b85f7aa1105c57669f3c2aa85fb30e"
 
 static pthread_once_t once = PTHREAD_ONCE_INIT;
 static NetBackend backend_set = NET_BACKEND_OURS, backend_eff = NET_BACKEND_OURS;
@@ -26,6 +37,8 @@ static uint16_t test_port = 44300;
 static Rule rules[MAX_RULES];
 static int nrules;
 static char ca_path[512] = "net/test-ca.pem", token_file[512], nex_token_file[512];
+static uint32_t nx_server, nx_nat;  // nextendo: the game server and the NAT check (host order)
+static uint8_t pin[32];
 
 static pthread_mutex_t rev_lock = PTHREAD_MUTEX_INITIALIZER;
 static struct { uint32_t ip; char name[128]; } rev[16];
@@ -43,6 +56,8 @@ void ip_to_str(uint32_t ip, char out[16]) {
     snprintf(out, 16, "%u.%u.%u.%u", ip >> 24, ip >> 16 & 255, ip >> 8 & 255, ip & 255);
 }
 
+static int hexval(char c) { return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1; }
+
 static bool parse_ip(const char *s, uint32_t *ip) {
     unsigned a, b, c, d;
     char tail;
@@ -56,10 +71,21 @@ bool net_ip_is_local(uint32_t ip) {
            (ip >> 16) == (169 << 8 | 254) || (ip >> 22) == (100u << 2 | 1);  // (100.64.0.0/10: CGNAT, e.g. Tailscale)
 }
 
-static void add_rule(const char *pattern, uint32_t ip, const char *why) {
+static bool parse_pin(const char *s, uint8_t out[32]) {
+    if (strlen(s) != 64) return false;
+    for (int i = 0; i < 32; i++) {
+        int h = hexval(s[2 * i]), l = hexval(s[2 * i + 1]);
+        if (h < 0 || l < 0) return false;
+        out[i] = (uint8_t)(h << 4 | l);
+    }
+    return true;
+}
+
+// allow_public: the backend's own targets (Nextendo's servers); the user's net_hosts= entries stay local-only
+static void add_rule(const char *pattern, uint32_t ip, const char *why, bool allow_public) {
     char a[16];
     ip_to_str(ip, a);
-    if (!net_ip_is_local(ip)) {
+    if (!allow_public && !net_ip_is_local(ip)) {
         LOG("[net] redirect %s -> %s refused: not a local address (only loopback / private test servers)\n", pattern, a);
         return;
     }
@@ -79,9 +105,8 @@ static void load(void) {
         if (!strcmp(v, "localnex") || !strcmp(v, "local_nex")) backend_set = NET_BACKEND_LOCAL_NEX;
     }
     backend_eff = backend_set;
-    if (backend_set == NET_BACKEND_NEXTENDO) {
-        LOG("[net] backend \"nextendo\": not available yet (awaiting Nextendo's permission and an app registration); "
-            "using our server\n");
+    if (backend_set == NET_BACKEND_NEXTENDO && !nextendo_signed_in()) {  // (the store only: no network)
+        LOG("[net] backend nextendo: not signed in; using our server\n");
         backend_eff = NET_BACKEND_OURS;
     }
     if (cfg("RECOMP_NET_TEST_SERVER", "nex_test_server", v, sizeof v)) {
@@ -96,21 +121,43 @@ static void load(void) {
     if (cfg("RECOMP_NET_TLS_CA", "tls_ca", v, sizeof v) && v[0]) snprintf(ca_path, sizeof ca_path, "%s", v);
     if (cfg("RECOMP_NET_ID_TOKEN_FILE", "id_token_file", v, sizeof v)) snprintf(token_file, sizeof token_file, "%s", v);
     if (cfg("RECOMP_NET_NEX_TOKEN_FILE", "nex_token_file", v, sizeof v)) snprintf(nex_token_file, sizeof nex_token_file, "%s", v);
-    if (backend_eff != NET_BACKEND_LOCAL_NEX) return;  // (ours: no name resolves, no game socket reaches the host)
-    // explicit entries first (first match wins), then the game's hosts -> the test server
+    if (backend_eff == NET_BACKEND_OURS) return;  // (no name resolves, no game socket reaches the host)
+    // explicit entries first (first match wins), then the game's hosts -> the test server / Nextendo
     if (cfg("RECOMP_NET_HOSTS", "net_hosts", v, sizeof v)) {
         for (char *tok = strtok(v, ";, "); tok; tok = strtok(NULL, ";, ")) {
             char *eq = strchr(tok, '=');
             uint32_t ip;
             if (!eq || !parse_ip(eq + 1, &ip)) { LOG("[net] net_hosts entry \"%s\": name=ip wanted\n", tok); continue; }
             *eq = 0;
-            add_rule(tok, ip, "net_hosts");
+            add_rule(tok, ip, "net_hosts", false);
         }
     }
     static const char *const game_domains[] = {"*.nintendo.net", "*.nintendo.com", "*.nintendowifi.net",
                                                "*.nintendo.co.jp", "*.nintendoswitch.cn"};
-    for (size_t i = 0; i < sizeof game_domains / sizeof *game_domains; i++) add_rule(game_domains[i], test_ip, "test server");
     char a[16];
+    if (backend_eff == NET_BACKEND_NEXTENDO) {
+        parse_ip(NEXTENDO_SERVER, &nx_server), parse_ip(NEXTENDO_NAT, &nx_nat), parse_pin(NEXTENDO_PIN, pin);
+        uint32_t ip;
+        if (cfg("RECOMP_NEXTENDO_SERVER", "nextendo_server", v, sizeof v)) {
+            if (parse_ip(v, &ip) && ip) nx_server = ip;
+            else LOG("[net] nextendo_server=%s: an IPv4 address wanted; using " NEXTENDO_SERVER "\n", v);
+        }
+        if (cfg("RECOMP_NEXTENDO_NAT", "nextendo_nat", v, sizeof v)) {
+            if (parse_ip(v, &ip) && ip) nx_nat = ip;
+            else LOG("[net] nextendo_nat=%s: an IPv4 address wanted; using " NEXTENDO_NAT "\n", v);
+        }
+        if (cfg("RECOMP_NEXTENDO_TLS_PIN", "nextendo_tls_pin", v, sizeof v) && !parse_pin(v, pin))
+            LOG("[net] nextendo_tls_pin: 64 hex digits wanted (the SPKI SHA-256); using the built-in pin\n");
+        add_rule(NEXTENDO_NAT_HOST, nx_nat, "Nextendo NAT check", true);
+        for (size_t i = 0; i < sizeof game_domains / sizeof *game_domains; i++)
+            add_rule(game_domains[i], nx_server, "Nextendo game server", true);
+        trust = NET_TRUST_PINNED;
+        ip_to_str(nx_server, a);
+        LOG("[net] backend nextendo: the game's own NEX client against Nextendo Network (game server %s, TLS: pinned "
+            "certificate)\n", a);
+        return;
+    }
+    for (size_t i = 0; i < sizeof game_domains / sizeof *game_domains; i++) add_rule(game_domains[i], test_ip, "test server", false);
     ip_to_str(test_ip, a);
     LOG("[net] backend local-nex: the game's own NEX client against the local test server %s:%u (TLS trust: %s)\n", a, test_port,
         trust == NET_TRUST_ANY ? "any certificate" : "local test CA");
@@ -121,29 +168,41 @@ static void init(void) { pthread_once(&once, load); }
 NetBackend net_backend(void) { init(); return backend_eff; }
 NetBackend net_backend_setting(void) { init(); return backend_set; }
 const char *net_backend_key(NetBackend b) { return b < NET_BACKEND_COUNT ? backend_keys[b] : "?"; }
-bool net_real_sockets(void) { return net_backend() == NET_BACKEND_LOCAL_NEX; }
+bool net_real_sockets(void) { NetBackend b = net_backend(); return b == NET_BACKEND_LOCAL_NEX || b == NET_BACKEND_NEXTENDO; }
 bool net_log_on(void) { init(); return log_on; }
 uint32_t net_test_server_ip(void) { init(); return test_ip; }
-uint16_t net_dest_port(uint32_t ip, uint16_t port) { init(); return ip == test_ip && port == 443 ? test_port : port; }
+uint16_t net_dest_port(uint32_t ip, uint16_t port) {
+    init();
+    return backend_eff == NET_BACKEND_LOCAL_NEX && ip == test_ip && port == 443 ? test_port : port;
+}
 NetTrust net_tls_trust(void) { init(); return trust; }
 const char *net_tls_ca_path(void) { init(); return ca_path; }
 const char *net_id_token_file(void) { init(); return token_file[0] ? token_file : NULL; }
 const char *net_nex_token_file(void) { init(); return nex_token_file[0] ? nex_token_file : NULL; }
 const char *net_nsd_environment(void) { return "lp1"; }
 
+bool net_tls_pin(uint8_t out[32]) {
+    init();
+    if (trust != NET_TRUST_PINNED) return false;
+    memcpy(out, pin, 32);
+    return true;
+}
+
 int net_backend_options(const NetBackendOption **out) {
-    static const NetBackendOption opts[] = {
-        {NET_BACKEND_OURS, "ours", "Our server",
-         "Course World against your course server (the mod's server= setting), answered by the mod. Nothing else "
-         "goes online.", true},
-        {NET_BACKEND_LOCAL_NEX, "local-nex", "Local NEX test server (developers)",
-         "The game's own online code talks to a NEX test server on this computer or your local network "
-         "(tools/nex_test_server). For development; Course World needs our server.", true},
-        {NET_BACKEND_NEXTENDO, "nextendo", "Nextendo Network",
-         "Awaiting registration: available once Nextendo Network has given permission and registered the app.", false},
-    };
-    *out = opts;
-    return (int)(sizeof opts / sizeof *opts);
+#define OPTS(nextendo_available)                                                                                      \
+    {{NET_BACKEND_OURS, "ours", "Our server",                                                                         \
+      "Course World against your course server (the mod's server= setting), answered by the mod. Nothing else "      \
+      "goes online.", true},                                                                                          \
+     {NET_BACKEND_LOCAL_NEX, "local-nex", "Local NEX test server (developers)",                                       \
+      "The game's own online code talks to a NEX test server on this computer or your local network "                \
+      "(tools/nex_test_server). For development; Course World needs our server.", true},                             \
+     {NET_BACKEND_NEXTENDO, "nextendo", "Nextendo Network",                                                           \
+      "Nextendo Network: Course World and online play on the community servers. Needs a Nextendo account (sign in "  \
+      "below).", nextendo_available}}
+    static const NetBackendOption signed_out[] = OPTS(false), signed_in[] = OPTS(true);
+#undef OPTS
+    *out = nextendo_signed_in() ? signed_in : signed_out;
+    return (int)(sizeof signed_in / sizeof *signed_in);
 }
 
 bool net_backend_select(NetBackend b) {
@@ -200,11 +259,18 @@ bool net_name_for_ip(uint32_t ip, char *out, size_t cap) {
     return found;
 }
 
+// (nextendo: the table's targets are Nextendo's game server, their NAT check and any local net_hosts= entries)
 bool net_dest_allowed(uint32_t ip) {
     init();
-    if (backend_eff != NET_BACKEND_LOCAL_NEX) return false;
-    if ((ip >> 24) == 127) return true;
+    if (backend_eff == NET_BACKEND_OURS) return false;
+    if (backend_eff == NET_BACKEND_LOCAL_NEX && (ip >> 24) == 127) return true;
     for (int i = 0; i < nrules; i++)
         if (rules[i].ip == ip) return true;
     return false;
+}
+
+bool net_dest_allowed_udp(uint32_t ip) {
+    init();
+    if (backend_eff == NET_BACKEND_NEXTENDO) return true;  // (PIA: peer to peer, the addresses come from the server)
+    return net_dest_allowed(ip);
 }

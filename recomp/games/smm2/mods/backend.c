@@ -25,7 +25,8 @@ static const char *ini_path(void) { return getenv("RECOMP_MOD_INI") ? getenv("RE
 
 bool game_net_config(const char *key, char *out, size_t cap) {
     static const char *const keys[] = {"backend", "nex_test_server", "net_hosts", "tls_trust", "tls_ca",
-                                       "id_token_file", "nex_token_file", "net_log"};
+                                       "id_token_file", "nex_token_file", "net_log", "nextendo_server",
+                                       "nextendo_nat", "nextendo_tls_pin"};
     bool known = false;
     for (size_t i = 0; i < sizeof keys / sizeof *keys; i++) known |= !strcmp(keys[i], key);
     FILE *f = known ? fopen(ini_path(), "r") : NULL;
