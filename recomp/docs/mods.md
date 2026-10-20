@@ -99,7 +99,7 @@ calls (read from the client vtable slot it uses):
 
 | Request (method id) | Function (main+) | Answered from |
 |---|---|---|
-| course lists: PickUp (84, "Hot"), PointRanking (71, "Popular", by difficulty), Latest (73, "New"), Advanced (72, detailed search: difficulty, style, sort), PostedBy (74, a maker's courses), BestTime / FirstClear (81 / 80) | 0x14d8550 (search type +0x746e8) | `GET /api/courses?sort=popular\|new&style=&offset=&limit=100`, filtered into the game's difficulty bands; a maker's courses from `GET /api/makers/<id>`; followed / liked / played-by lists and versus: empty |
+| course lists: PickUp (84, "Hot"), PointRanking (71, "Popular", by difficulty), Latest (73, "New"), Advanced (72, detailed search: difficulty, style, sort), PostedBy (74, a maker's courses), BestTime / FirstClear (81 / 80) | 0x14d8550 (search type +0x746e8) | `GET /api/courses?sort=popular\|new&style=&offset=&limit=100`, filtered into the game's difficulty bands; a maker's courses from `GET /api/makers/<id>`; a player's Played Courses / Liked Courses (PlayedBy 76, PositiveRatedBy 75) from `GET /api/makers/<id>/played` / `liked`; followed makers and versus: empty |
 | GetUserOrCourse (131): the ID search | 0x14dc0d0 | `GET /api/courses/<code>`, else `GET /api/makers/<code>` |
 | GetUsers (48): the makers of listed courses, a maker's page | 0x14d02d0, 0x14d7780, 0x14d2f00 | `GET /api/makers/<id>`: name, maker code, likes received and maker points from their courses; the default Mii |
 | SearchUsers* (50, 51, 57, 58): leaderboards | 0x14d1820 (kind +0x73a14) | `GET /api/rankings/maker_points` (makers, also the period's board), `endless_<d>` (Endless), `clears` |
@@ -108,19 +108,37 @@ calls (read from the client vtable slot it uses):
 | PostPlayResult (96) | 0x14e30e0 | `POST /api/courses/<code>/play`, and `/clear {time_ms}` on a clear (not for Endless courses: those are counted by the Endless reports) |
 | SearchComments (94 / 95), PostCommentText (91) | 0x14e8ec0, 0x14e96b0 | `GET` / `POST /api/courses/<code>/comments` (text) |
 | CanPostCourse (60), the course upload (66 + upload + 67), DeleteObject | 0x14e0d40, 0x14de3f0, 0x14e0c50 | allowed; the game's own course (header "SCDL", not yet encrypted) to `POST /api/courses` as the signed-in maker (`?based_on=` for an edited copy, below), its code back as the upload's data id; `DELETE /api/courses/<code>` |
-| GetReqGetInfoHeadersInfo (134) + HTTP: thumbnails ("relation objects") | 0x14e0e70 (`edit.c`) | none on our server; the course being downloaded gets a stand-in (below), the lists keep the game's placeholder |
+| GetReqGetInfoHeadersInfo (134) + HTTP: a course's picture ("relation objects", 5 at a time) | 0x14e0e70 (`edit.c`) | `GET /api/courses/<code>/thumbnail?wait_ms=` (below) |
+| the same for a course's whole-course map (More info) | 0x14e2cf0 (`edit.c`) | `GET /api/courses/<code>/entire_thumbnail?wait_ms=` |
 
-Course World courses download and play exactly like the Endless ones (the same GetObject). Not served: thumbnails
-(the game shows its placeholder), Super Worlds, Ninji speedruns, notifications, follows, Network Play.
+Course World courses download and play exactly like the Endless ones (the same GetObject). Not served: Super Worlds,
+Ninji speedruns, notifications, follows, Network Play.
+
+**Thumbnails** (a course's picture on its card and course page, its whole-course map under More info): the server
+keeps them as JPEGs (`thumbnails/<code>.jpg`, `<code>-entire.jpg` in its folder). For a course from TGRCode's archive
+the server fetches both from TGRCode (`level_thumbnail` is the game's thumbnail block, `level_entire_thumbnail` a
+plain JPEG), one request at a time with the course imports: first those a player is waiting for, then, while it has
+nothing else to do, those of every course it holds. TGRCode takes a second or more a picture and rate-limits, so the
+mod asks with `wait_ms` (a few seconds in all for a list's five, 6 s for a map): what hasn't come by then shows the
+game's placeholder this time and is there next time. The mod signs each JPEG into the block the game checks (the
+JPEG, then in the last 0x64 bytes its size, HMAC-SHA256 under a key from four seed words, the seeds; main+0x1698a80)
+with the game's own functions; the map's 0x19000-byte block takes the same tail [obs: the map shows]. Our own
+uploads have no thumbnails yet (the game uploads them with the course; not kept).
 
 **Download** (the course page's Download, into the Coursebot's Downloaded Courses) works: SMM2 waits for the
 course's thumbnail before it hands the download to the Coursebot (cDownload, main+0x17661f0, needs a valid entry in
-the thumbnail cache) and keeps a course only with a thumbnail it can check (JPEG size 1..0x1bf9c, HMAC-SHA256 under a
-key from four seed words, main+0x1698a80; otherwise "Corrupt data was found so the course has been deleted."). Our
-server has no thumbnails, so `edit.c` answers the thumbnail request with a stand-in for the course being downloaded:
-a 640 x 360 one-colour JPEG encoded by the mod (grey-blue [inf]), signed with the game's own functions as its blank
-thumbnail is. [obs] the course is saved (`course_data_120.bcd` + `course_thumb_120.btl`) and shows in Downloaded
-Courses after a restart, with the stand-in thumbnail.
+the thumbnail cache, slots of 0x1c1b8 bytes: +0x1c000 data id, +0x1c1b2 failed, +0x1c1b4 valid) and keeps a course
+only with a thumbnail it can check (otherwise "Corrupt data was found so the course has been deleted."). A course the
+server has no picture for gets a stand-in: a 640 x 360 one-colour JPEG encoded by the mod (grey-blue [inf]), signed
+the same way. A course whose picture didn't come with the list stopped the download at "A communication error
+occurred." [obs]: the download asks for the picture again and the cache takes it, but keeps the list's failed mark,
+which cDownload checks first; the mod clears that mark (and fills a slot still without a picture) while cDownload
+waits. [obs] downloads saved (`course_data_120.bcd` + `course_thumb_120.btl`, the real picture; `_121` after a
+withheld picture, `RECOMP_MOD_TEST_NO_THUMB=<code>`, the stand-in).
+
+**Played Courses** (a maker page's tab): the server keeps each player's played courses, newest first (300): a play
+posted from Course World, and every course of a challenge run (Endless, 100 Mario) on its first report; a store from
+before this starts from the courses its runs passed. **Liked Courses**: the courses the player liked.
 
 ### Edit any course (`games/smm2/mods/edit.c`)
 
@@ -351,9 +369,11 @@ every difficulty draws from all of them.
 ### Limits
 
 - Not online yet: Network Play (plan: `DECISIONS.md` "Online multiplayer"), Super Worlds, Ninji speedruns,
-  thumbnails, follows, notifications; they answer "not connected" or empty.
+  follows, notifications; they answer "not connected" or empty.
 - The Maker avatar is the console's default Mii with your account's name (creating one needs the Mii editor applet,
-  which the runtime doesn't have).
+  which the runtime doesn't have). `online.c` puts it in the save's user settings (+0x60) when there is none, so the
+  avatar icon at the top left of Course World's menus shows it from the start (it was a white box until a maker page
+  brought the record's Mii).
 - No SMM2 Mii-costume rewards (the server sends no notifications).
 
 ## SMM1 extras: one setting per SMM1 feature
