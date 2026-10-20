@@ -44,10 +44,14 @@ bool hundred_flow_active(void);          // an SMM1 full screen is up: the game'
 bool hundred_flow_overlay(void);         // an SMM1 overlay is up over the course (pause, skip, clear, card): input to it
 void hundred_flow_pause(void);           // the player paused during a run (the mod keeps SMM2's own pause from opening)
 void hundred_flow_course_started(void);  // the course is on screen and playing (the start card may go)
+void hundred_flow_course_in(void);       // SMM2 has left its map for the course scene (SMM2's course-in card comes)
 void hundred_course_result(int outcome);
 bool hundred_flow_ready_to_start(void);  // the course may start playing (the card is up, or no SMM1 screen is): SMM2
                                          // loads underneath the map and holds the course's first play frame until
-                                         // this is true (asked every frame; the mod's stand-in says yes)
+                                         // this is true (asked every frame; the mod's stand-in says yes). With
+                                         // SMM2's card SMM2 waits on its map instead (its Endless menu's CourseIn)
+bool hundred_smm1_card(void);  // the "SMM1 course card" setting (mods/smm1_extras.c): SMM1's start card at a course's
+                               // start; off: SMM2's own course-in card (lives, loading), as after a miss
 
 // ---- the mod's, called by the flow
 bool hundred_run_status(struct hundred_status *out);        // any time (unlocks / continue data with no run)

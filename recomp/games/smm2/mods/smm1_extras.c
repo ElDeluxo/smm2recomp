@@ -4,6 +4,8 @@
 //
 //   RECOMP_SMM1_SHELL_JUMPS=1   smm1_shell_jumps=1     mid-air shell jumps as in SMM1
 //   RECOMP_SMM1_PIPES=1         smm1_overlap_pipes=1   pipes may overlap pipes (Course Maker and courses)
+//   RECOMP_HUNDRED_SMM1_CARD=1  hundred_smm1_card=1    100 Mario: SMM1's start card at a course's start (off: SMM2's
+//                                                      own course-in card, as after a miss; mods/smm1/flow.c)
 //
 // The behaviour comes from the game's own code: host hooks after single instructions (games/smm2/mods/smm1_extras.py
 // lists them) change a register or the flags while a setting is on, and do nothing otherwise. What SMM1 does was
@@ -17,7 +19,7 @@
 
 typedef struct { const char *label, *desc; bool *value; bool def; } GameModToggle;  // (runtime/game_hooks.c)
 
-static bool shell_jumps, overlap_pipes;
+static bool shell_jumps, overlap_pipes, smm1_card;
 
 static const struct Setting {
     const char *key, *env;
@@ -25,6 +27,7 @@ static const struct Setting {
 } settings[] = {
     {"smm1_shell_jumps", "RECOMP_SMM1_SHELL_JUMPS", &shell_jumps},
     {"smm1_overlap_pipes", "RECOMP_SMM1_PIPES", &overlap_pipes},
+    {"hundred_smm1_card", "RECOMP_HUNDRED_SMM1_CARD", &smm1_card},
 };
 #define NSETTINGS (sizeof settings / sizeof *settings)
 
@@ -55,6 +58,11 @@ static void load(void) {  // (the game's threads and the menu: once)
 
 void mod_ini_set(const char *key, const char *val);  // (settings.c: replace or add one key=value line)
 
+bool hundred_smm1_card(void) {  // (hundred.h; the flow asks on its render thread)
+    load();
+    return smm1_card;
+}
+
 // ---- the Mods tab (settings.c appends these to its own)
 static bool shown[NSETTINGS];  // what the tab last showed, to see which one changed
 
@@ -69,6 +77,10 @@ int smm1_extras_toggles(GameModToggle *out, int room) {
          "Pipes may overlap other pipes, in the Course Maker and in courses, as in SMM1 (SMM2 refuses the placement "
          "and treats such a course as broken). From the next course start.",
          &shown[1], false},
+        {"SMM1 course card (100 Mario)",
+         "In the 100 Mario Challenge, SMM1's course card (the course, its maker and the lives) after the map instead "
+         "of SMM2's own course-in card. From the next course.",
+         &shown[2], false},
     };
     load();
     int n = 0;

@@ -224,8 +224,27 @@ records) and SMM2's screens. ZL / ZR or a tap on the header switch: on SMM2's me
 (`hundred_flow_exit()`: the run side presses B on SMM2's menu underneath, back to Course World). **After a win**
 the last result screen's Next is turned into its Quit (cPostRatingCheckCan exec, the screen's choice 5 -> 8) while the
 flow plays the ending, so SMM2 goes back to its Endless menu for the next run; `hundred_run_start()` waits until it
-is. **Course start:** a course SMM2 loads underneath the flow's map waits at its first play frame until
-`hundred_flow_ready_to_start()` (the card is up).
+is. **Course start** (owner, 2026-10-20: SMM2's own course-in card, the lives / loading card it shows after a miss,
+also at a course's start): the map Mario's Play is pressed on SMM2's map underneath, and the menu's CourseIn state
+(index 0xb, exec main+0x1a258f0: it posts 0x80, to the course, once the Decide animation is over) is held until
+`hundred_flow_ready_to_start()`, which turns true when the flow's iris has closed on Mario; SMM2 then changes scene
+under the flow's black, and the course scene's first state (cCourseListDownLoad enter main+0x1bbb820 or
+cCourseDataDownLoad enter main+0x1bbb9a0, else the course start request) goes to the flow as
+`hundred_flow_course_in()`, which lets the black go: SMM2's card comes up out of it. With the "SMM1 course card"
+setting (`hundred_smm1_card=1`) the flow shows SMM1's card instead, and a course SMM2 loads underneath the map waits
+at its first play frame until `hundred_flow_ready_to_start()` (the card is up). **Transitions:** after the result screen's
+Next SMM2's own block wipe (`Cmn_Fade_00` OutBlock / InBlock from the game's romfs, drawn by the flow) covers it and
+uncovers the map (or the ending); the ending goes to the select the same way; the
+select fades in over SMM2's Endless menu when it opens and out when Challenge Modes switches or B leaves (B starts
+SMM2's way back to Course World at once, under the map's Out). **Challenge Modes input:** the buttons and the
+touch held when the flow opens count as held, not pressed, until they are let go: SMM2's menu acts on a ZL / ZR in
+the very frame it comes, before the flow has seen it held, so the select used to take the same press and switch
+straight back to Endless (half the switches back to 100 Mario bounced, in a test with the player's own key path); on SMM2's menu a
+press is caught on the run side's driver thread as well as on the menu's Disp and is good for a second (the Disp
+doesn't run while the menu changes difficulty or redraws its map, as right after a switch, and a press then was
+lost). `RECOMP_MOD_TEST_SWITCH=<letters>` makes switches as a player does (z ZL, Z ZR, t a tap on the header, . a
+pause), `RECOMP_MOD_SHOT_BURST=<frames>` takes a window shot every few frames after Next and after SMM2 leaves its
+map.
 
 **The RomFS overlay** (`romfs_overlay.{h,c}`): the mods' generated game files (the Challenge Modes texts,
 `relabel.c`; costumes; layout edits) come from the player's own dump at the first launch that needs them, into
@@ -347,6 +366,7 @@ menu's Mods tab (always shown), kept in `smm2mods.ini`; an environment variable 
 |---|---|---|---|
 | Overlapping pipes (SMM1) | `smm1_overlap_pipes=1` | `RECOMP_SMM1_PIPES=1` | from the next course load / placement |
 | Mid-air shell jumps (SMM1) | `smm1_shell_jumps=1` | `RECOMP_SMM1_SHELL_JUMPS=1` | immediately |
+| SMM1 course card (100 Mario) | `hundred_smm1_card=1` | `RECOMP_HUNDRED_SMM1_CARD=1` | from the next course |
 
 `RECOMP_SMM1_LOG=1` logs every decision the hooks see (`[smm1] ...`), on or off.
 
