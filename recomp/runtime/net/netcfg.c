@@ -193,7 +193,7 @@ int net_backend_options(const NetBackendOption **out) {
     {{NET_BACKEND_OURS, "ours", "Our server",                                                                         \
       "Course World against your course server (the mod's server= setting), answered by the mod. Nothing else "      \
       "goes online.", true},                                                                                          \
-     {NET_BACKEND_LOCAL_NEX, "local-nex", "Local NEX test server (developers)",                                       \
+     {NET_BACKEND_LOCAL_NEX, "local-nex", "Local test server",                                       \
       "The game's own online code talks to a NEX test server on this computer or your local network "                \
       "(tools/nex_test_server). For development; Course World needs our server.", true},                             \
      {NET_BACKEND_NEXTENDO, "nextendo", "Nextendo Network",                                                           \

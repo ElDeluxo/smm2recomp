@@ -129,7 +129,7 @@ bool net_pretend_online(void) { return mod_hundred() || (getenv("RECOMP_PRETEND_
 // off: SMM2's own Endless Challenge, against our server under SMM2's rules); costumes, mid-air shell jumps and
 // overlapping pipes will follow.
 typedef struct { const char *label, *desc; bool *value; bool def; } GameModToggle;
-static bool t_hundred = true, t_tgrcode, t_local_nex;
+static bool t_hundred = true, t_tgrcode;
 static bool t_costumes;  // (mods/costume.c)
 bool costumes_setting(void);
 void costumes_set_setting(bool on);
@@ -174,11 +174,6 @@ static int mod_toggles(const GameModToggle **out) {
          "(no account needed). Off: the course server set in smm2mods.ini (server=, token=). Takes effect at the "
          "next start.",
          &t_tgrcode, false},
-        {"Online: local NEX test server (developers)",
-         "On: the game's own online code talks to a NEX test server on this computer (tools/nex_test_server) and "
-         "the mod's Course World answers are off. Off: our server (the mod). Nextendo Network: greyed out, awaiting "
-         "registration. Takes effect at the next start.",
-         &t_local_nex, false},
         // (costumes: mods/costume.c)
         {"Mystery Mushroom costumes",
          "SMM1's costumes in Super Mario Bros. style courses: the Big Mushroom becomes the Mystery Mushroom, and a "
@@ -188,7 +183,6 @@ static int mod_toggles(const GameModToggle **out) {
     // (the mod is off and the backend is ours: nothing to switch)
     mod_settings_load();
     if (!g_mod.hundred && net_backend_setting() == NET_BACKEND_OURS) { *out = NULL; return 0; }
-    t_local_nex = net_backend_setting() == NET_BACKEND_LOCAL_NEX;
     t_hundred = !strcmp(g_mod.ruleset, "hundred");
     t_tgrcode = !strcmp(g_mod.courses, "tgrcode");
     t_costumes = costumes_setting();
@@ -205,8 +199,6 @@ static void mod_toggles_changed(void) {
         mod_ini_set("courses", courses);
         LOG("[mod] courses from %s at the next start\n", t_tgrcode ? "TGRCode" : "your server");
     }
-    if (t_local_nex != (net_backend_setting() == NET_BACKEND_LOCAL_NEX))
-        net_backend_select(t_local_nex ? NET_BACKEND_LOCAL_NEX : NET_BACKEND_OURS);  // (saved; the next start)
     costumes_set_setting(t_costumes);
 }
 

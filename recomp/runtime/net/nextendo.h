@@ -18,6 +18,7 @@ bool nextendo_signed_in(void);        // a refresh token is stored
 // ("smm2recomp://callback"): no listener, the app calls nextendo_finish_sign_in with the URL it gets back.
 bool nextendo_begin_sign_in(const char *redirect_uri, char *url_out, size_t cap);
 bool nextendo_finish_sign_in(const char *callback_url);  // "...?code=..&state=.."; the listener calls it too
+void nextendo_sign_in_aborted(const char *msg);          // the sign-in sheet ended without a redirect: shown as the error
 void nextendo_sign_out(void);                            // forget the tokens (store and memory), cancel a pending sign-in
 
 // Launch: refresh -> access token -> GET /api/nex-token. Blocks for at most timeout_ms. True when a game token is

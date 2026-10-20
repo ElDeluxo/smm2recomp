@@ -683,6 +683,13 @@ void nextendo_sign_out(void) {
     LOG("[nextendo] signed out\n");
 }
 
+// The platform's sign-in sheet ended without a redirect (cancelled, failed): the pending sign-in becomes an error.
+void nextendo_sign_in_aborted(const char *msg) {
+    pthread_mutex_lock(&lock);
+    if (S.state == NX_WAITING_BROWSER) { S.pending = false; set_state(NX_ERROR, msg); }
+    pthread_mutex_unlock(&lock);
+}
+
 void nx_test_reset(void) {
     stop_listener();
     pthread_mutex_lock(&net_lock);

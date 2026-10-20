@@ -131,7 +131,7 @@ RT_HDRS  := $(wildcard runtime/*.h) $(wildcard runtime/platform/*.h) $(wildcard 
             $(wildcard runtime/nvn/maxwell/*.h) $(wildcard runtime/nvn/vulkan/*.h) $(wildcard runtime/ui/*.h) \
             $(wildcard runtime/net/*.h) \
             $(GAMEDIR)/game.mk
-UI_SRC   := $(wildcard runtime/ui/*.mm)
+UI_SRC   := $(filter-out runtime/ui/nextendo_ios.mm,$(wildcard runtime/ui/*.mm))
 UI_OBJ   := $(patsubst runtime/%.mm,$(B)/rt/%.o,$(UI_SRC))
 IMGUI_OBJ := $(B)/imgui/imgui.o $(B)/imgui/imgui_draw.o $(B)/imgui/imgui_tables.o $(B)/imgui/imgui_widgets.o \
              $(B)/imgui/imgui_impl_sdl3.o
@@ -231,6 +231,10 @@ GAMELIB_SRCS := tools/gen.py tools/lifter.py tools/analyze.py tools/nso.py tools
 GAMELIB_ID := $(shell (cat $(GAMELIB_SRCS); echo '$(GENFLAGS)') | (shasum -a 256 2>/dev/null || sha256sum) | cut -c1-16)
 
 RT_OBJ   := $(patsubst %.c,$(B)/rt/%.o,$(patsubst runtime/%,%,$(RT_SRC)))
+ifneq ($(IOS),)
+UI_OBJ   += $(B)/rt/ui/nextendo_ios.o  # (the sign-in sheet: ASWebAuthenticationSession)
+LDFLAGS  += -framework AuthenticationServices
+endif
 ifneq ($(filter ios iossim macos,$(PLATFORM)),)
 RT_OBJ   += $(B)/rt/net/secure_store_apple.o  # (the Keychain backend of runtime/net/secure_store.h)
 LDFLAGS  += -framework Security
