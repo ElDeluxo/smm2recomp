@@ -35,31 +35,37 @@ static void *finish_thread(void *arg) {  // the code exchange and game-token fet
     return NULL;
 }
 
+static unsigned g_gen;  // the sheet that is up (a late completion of an older one must not touch the newer)
+
 extern "C" void nextendo_ios_sign_in(void) {
-    char url[1024];
-    if (!nextendo_begin_sign_in("smm2recomp://callback", url, sizeof url)) return;  // (the status says why)
-    NSURL *start = [NSURL URLWithString:[NSString stringWithUTF8String:url]];
     dispatch_async(dispatch_get_main_queue(), ^{
+        if (g_session) return;  // (a sheet is up: the gamepad's A can reach the row behind it)
+        char url[1024];
+        if (!nextendo_begin_sign_in("smm2recomp://callback", url, sizeof url)) return;  // (the status says why)
+        NSURL *start = [NSURL URLWithString:[NSString stringWithUTF8String:url]];
         if (!g_anchor) g_anchor = [[NxAnchor alloc] init];
-        g_session = [[ASWebAuthenticationSession alloc]
+        unsigned gen = ++g_gen;
+        ASWebAuthenticationSession *ses = [[ASWebAuthenticationSession alloc]
                 initWithURL:start
                 callbackURLScheme:@"smm2recomp"
                 completionHandler:^(NSURL *cb, NSError *err) {
-                    g_session = nil;
+                    if (gen == g_gen) g_session = nil;
                     if (cb) {
                         pthread_t th;
                         char *copy = strdup(cb.absoluteString.UTF8String);
                         if (pthread_create(&th, NULL, finish_thread, copy) == 0) pthread_detach(th);
                         else free(copy);
-                    } else if (err.code == ASWebAuthenticationSessionErrorCodeCanceledLogin) {
+                    } else if ([err.domain isEqualToString:ASWebAuthenticationSessionErrorDomain] &&
+                               err.code == ASWebAuthenticationSessionErrorCodeCanceledLogin) {
                         nextendo_sign_in_aborted("Sign-in cancelled");
                     } else {
                         nextendo_sign_in_aborted(err.localizedDescription.UTF8String);
                     }
                 }];
-        g_session.presentationContextProvider = g_anchor;
-        g_session.prefersEphemeralWebBrowserSession = NO;
-        if (![g_session start]) {
+        g_session = ses;
+        ses.presentationContextProvider = g_anchor;
+        ses.prefersEphemeralWebBrowserSession = NO;
+        if (![ses start]) {
             g_session = nil;
             nextendo_sign_in_aborted("Could not open the sign-in sheet.");
         }

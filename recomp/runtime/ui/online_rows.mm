@@ -32,7 +32,7 @@ static void sign_in(void) {
 extern "C" void online_rows(void) {
     opt_section("Online");
 
-    // the choices: what can be chosen now, and the one that is set when it can't (greyed text, so the row doesn't lie)
+    // the choices: what can be chosen now, and the one that is set when it can't (labelled "(sign in)", so the row doesn't lie about what is set)
     const NetBackendOption *o;
     int n = net_backend_options(&o);
     NetBackend cur = net_backend_setting();
@@ -43,7 +43,7 @@ extern "C" void online_rows(void) {
     for (int i = 0; i < n && m < NET_BACKEND_COUNT; i++) {
         if (!o[i].available && o[i].id != cur) continue;
         if (o[i].available) names[m] = o[i].label;
-        else snprintf(names_buf[m], sizeof names_buf[m], "%s (sign in to use)", o[i].label), names[m] = names_buf[m];
+        else snprintf(names_buf[m], sizeof names_buf[m], "%s (sign in)", o[i].label), names[m] = names_buf[m];
         ids[m] = o[i].id;
         if (o[i].id == cur) sel = m, desc = o[i].desc;
         m++;
@@ -55,13 +55,19 @@ extern "C" void online_rows(void) {
     NxStatus st;
     nextendo_status(&st);
     const char *val = "Sign in";
-    if (st.state == NX_WAITING_BROWSER) val = "Waiting for the browser…";
+    if (st.state == NX_WAITING_BROWSER) val = "Waiting for the browser...";
     else if (st.state == NX_SIGNED_IN) val = st.username[0] ? st.username : "Signed in";
-    else if (st.state == NX_ERROR) val = st.message[0] ? st.message : "Sign-in failed";
-    if (opt_action("Nextendo account", val,
-                   "Sign in on nextendo.network in your browser. The game never sees your password; it keeps a "
-                   "sign-in token for this device.", false)) {
+    else if (st.state == NX_ERROR) val = "Sign-in failed";  // (short: the full message is in the description)
+    static char ad[400];
+    snprintf(ad, sizeof ad, "%s%sSign in on nextendo.network in your browser. The game never sees your password; it "
+             "keeps a sign-in token for this device.", st.state == NX_ERROR ? st.message : "",
+             st.state == NX_ERROR && st.message[0] ? "\n\n" : "");
+    if (opt_action("Nextendo account", val, ad)) {
+#ifdef NX_SHEET
+        if (st.state != NX_SIGNED_IN && st.state != NX_WAITING_BROWSER) sign_in();  // (the sheet may be up)
+#else
         if (st.state != NX_SIGNED_IN) sign_in();
+#endif
     }
     if (st.state == NX_SIGNED_IN &&
         opt_action("Sign out", "", "Forget this computer's Nextendo sign-in."))

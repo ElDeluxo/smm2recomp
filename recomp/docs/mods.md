@@ -435,7 +435,7 @@ Nintendo's servers: only the redirect table's names resolve, every other name is
 | `local-nex` | the mod's online overrides switch **off** (`mod_hundred()` is false), so the game's own enl / NEX code runs on real host sockets against a local NEX test server |
 | `nextendo` | with a signed-in Nextendo account (`runtime/net/nextendo.h`): the mod's online overrides switch off and the game's own NEX client logs in to Nextendo's SMM2 server (below). Not signed in: logged ("not signed in; using our server") and the backend is `ours` |
 
-In the Mods tab: "Online: local NEX test server (developers)" (the next start). For the app-level settings page,
+In the Mods tab's Online section: the "Online backend" choice (the next start) and the Nextendo account (Sign in / Sign out). For the app-level settings page,
 `net_backend_options()` / `net_backend_select()` (`runtime/net/netcfg.h`) list the three; Nextendo can be chosen
 while an account is signed in.
 
