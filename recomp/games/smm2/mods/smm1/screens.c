@@ -229,7 +229,7 @@ int select_step(Select *s, const UiIn *in, const struct hundred_status *st, bool
         lay_play(s->maps[s->d]->l, "Out", s->tick);
         lay_play(s->title, "Out", s->tick);
         s->exit_at = s->tick + 32;
-        return EV_NONE;
+        return EV_BACK;
     }
     if (p & BT_A) {
         *resume = s->focus == 0 && s->cont;
@@ -255,14 +255,16 @@ void select_draw(Select *s, LQuads *out) {
 
 // ---------------------------------------------------------------- map demos + the card
 enum { P_MAPIN, P_COUNTIN, P_TELOP, P_KURIBO, P_CASTLE, P_ANIMB, P_JUMP, P_DOTIN, P_WALK, P_TWOJUMP, P_GO, P_FADE,
-       P_CARD_IN, P_CARD_HOLD, P_CARD_OUT, P_DONE };
+       P_CARD_IN, P_CARD_HOLD, P_CARD_OUT, P_DONE, P_HANDOFF };
 #define FADE 30  // the iris wipe to the card [inf: its length]
+#define HANDOFF_WAIT 600  // (SMM2's card) the longest the black waits for SMM2's course scene
 
 struct Intro {
     WorldMap *map;
     Lay *title, *card;
     int d, entry, cleared, tick, phase, end, from_dot, to_dot, kuribo_walk, kuribo_stand, card_intro;
     bool had_continue, started, skip;
+    bool smm2, course_in, fetched;  // SMM2's card; its course scene has begun; EV_FETCH was returned
 };
 
 static const int KURIBO_STAND[4] = {156, 268, 268, 174};  // MoveKuribo frame the Goombas stop walking
@@ -372,6 +374,7 @@ static void phase(Intro *s, int p) {
         lay_play(s->card, "Out", t);
         s->end = t + (int)lay_length(s->card, "Out");
         break;
+    case P_HANDOFF: s->end = t + HANDOFF_WAIT; break;  // (SMM2's card) black: SMM2 changes to its course scene
     default: break;
     }
 }
@@ -403,15 +406,17 @@ static void cancel_demo(Intro *s) {
     phase(s, P_GO);
 }
 
-Intro *intro_new(int entry, int d, const CardInfo *info, int cleared, bool had_continue, Select *handoff) {
+Intro *intro_new(int entry, int d, const CardInfo *info, int cleared, bool had_continue, Select *handoff, bool smm2_card) {
     Lay *card = lay_open("Play_CourseIn100Mario_00");
     if (!card) return NULL;
     Intro *s = calloc(1, sizeof *s);
     s->card = card, s->d = d, s->entry = entry, s->cleared = cleared, s->had_continue = had_continue;
     s->card_intro = info->intro;
+    s->smm2 = smm2_card;
     card_configure(card, info);
+    const int card_phase = smm2_card ? P_HANDOFF : P_CARD_IN;
     if (entry == ENTRY_DIRECT) {
-        phase(s, P_CARD_IN);
+        phase(s, card_phase);
         return s;
     }
     if ((entry == ENTRY_NEW || entry == ENTRY_RESUME) && handoff && handoff->d == d && handoff->maps[d]) {
@@ -421,7 +426,7 @@ Intro *intro_new(int entry, int d, const CardInfo *info, int cleared, bool had_c
         s->map = wm_new(d);
     WorldMap *m = s->map;
     if (!m) {
-        phase(s, P_CARD_IN);
+        phase(s, card_phase);
         return s;
     }
     if (entry == ENTRY_NEW) {
@@ -457,11 +462,14 @@ void intro_card(Intro *s, const CardInfo *info) {
     if (s->map) wm_set_counters(s->map, info->lives, s->cleared);
 }
 void intro_started(Intro *s) {
-    s->started = true;
+    s->started = s->course_in = true;
     if (s->phase == P_CARD_HOLD) phase(s, P_CARD_OUT);
 }
-bool intro_full(const Intro *s) { return s->phase < P_CARD_OUT; }
-bool intro_card_up(const Intro *s) { return s->phase >= P_CARD_IN; }
+void intro_course_in(Intro *s) { s->course_in = true; }
+bool intro_full(const Intro *s) {  // (SMM2's card: black until the flow lets go of it)
+    return s->phase < P_CARD_OUT || s->phase == P_HANDOFF || (s->smm2 && s->phase == P_DONE);
+}
+bool intro_card_up(const Intro *s) { return s->smm2 ? s->phase >= P_HANDOFF : s->phase >= P_CARD_IN; }
 Lay *intro_map_layout(Intro *s) { return s->map && s->phase < P_CARD_IN ? s->map->l : NULL; }
 int intro_tick(const Intro *s) { return s->tick; }
 
@@ -469,6 +477,11 @@ int intro_step(Intro *s, const UiIn *in) {
     s->tick++;
     int t = s->tick;
     if (s->phase == P_DONE) return EV_NONE;
+    if (s->phase == P_HANDOFF) {  // (SMM2's card) black until SMM2's course scene has begun: the course may come now
+        if (!s->fetched) return s->fetched = true, EV_FETCH;
+        if (s->course_in || t >= s->end) return s->phase = P_DONE, EV_DONE;
+        return EV_NONE;
+    }
     if (s->map && s->phase == P_KURIBO) {  // the Goombas walk from MoveKuribo frame 60, stand again at 156 / 268 / 174
         if (t == s->kuribo_walk) {
             lay_play(s->map->l, KURIBO "/Default", t);
@@ -494,14 +507,16 @@ int intro_step(Intro *s, const UiIn *in) {
             s->phase = P_DONE;
             return EV_DONE;
         } else {
-            phase(s, next_phase(s, s->phase));
-            if (s->phase == P_CARD_IN) return EV_FETCH;  // the card is up: the course may come
+            int n = next_phase(s, s->phase);
+            phase(s, s->smm2 && n == P_CARD_IN ? P_HANDOFF : n);
+            if (s->phase == P_CARD_IN) return s->fetched = true, EV_FETCH;  // the card is up: the course may come
         }
     }
     return EV_NONE;
 }
 void intro_draw(Intro *s, LQuads *out) {
     int t = s->tick;
+    if (s->phase == P_HANDOFF || (s->smm2 && s->phase == P_DONE)) return;  // (black)
     if (s->phase >= P_CARD_IN) {
         lay_draw(s->card, t, out);
         return;
@@ -545,6 +560,13 @@ static void black_quad(LQuads *out, float x0, float y0, float x1, float y1, int 
     q.flags = LQ_LINEAR | LQ_BLEND_NORMAL | LQ_COMB_NONE << LQ_COMB_C | LQ_COMB_NONE << LQ_COMB_A;
     if (out->n == out->cap) out->cap = out->cap ? out->cap * 2 : 256, out->q = realloc(out->q, sizeof(LQuad) * (size_t)out->cap);
     out->q[out->n++] = q;
+}
+void fade_quad(LQuads *out, float a) {
+    if (a <= 0) return;
+    size_t n = (size_t)out->n;
+    black_quad(out, -640, 360, 640, -360, -1);
+    if ((size_t)out->n > n) out->q[n].col[0][3] = out->q[n].col[1][3] = out->q[n].col[2][3] = out->q[n].col[3][3] =
+        (uint8_t)(a >= 1 ? 255 : a * 255 + 0.5f);
 }
 static void iris(LQuads *out, float cx, float cy, float r) {
     const float L = -640, R = 640, T = 360, B = -360;

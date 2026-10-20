@@ -23,9 +23,6 @@ On top of the original game it adds:
 A download is a **launcher plus the recompiler**, not the game: on first start it takes your dump,
 checks it, recompiles the game code on your computer, and then runs it.
 
-> No release has been published yet. The packages are built by GitHub Actions when a release is
-> tagged; until the first one, build it yourself ([Building](#building)).
-
 1. **Download** the package for your system from
    [Releases](https://github.com/smm2recomp/smm2recomp/releases):
 

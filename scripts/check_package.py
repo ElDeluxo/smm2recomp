@@ -58,8 +58,9 @@ def check_member(rel: str, size: int, read) -> list[str]:
     parts = [p for p in rel.split('/') if p]
     name = parts[-1].lower() if parts else ''
     suffix = os.path.splitext(name)[1]
-    in_zig = 'zig' in parts[:3]  # (zig's own C library sources and headers)
-    in_python = 'python' in parts[:3]
+    # zig's own C library sources and headers; [:4]: the macOS .zip has them at SMM2Recomp.app/Contents/Resources/zig/
+    in_zig = 'zig' in parts[:4]
+    in_python = 'python' in parts[:4]
     for d in parts[:-1]:
         if d in DATA_DIRS and not (in_zig or in_python):
             problems.append(f'inside a "{d}" folder (a data folder\'s, made from a dump)')

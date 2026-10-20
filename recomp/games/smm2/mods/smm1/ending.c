@@ -165,21 +165,6 @@ int ending_step(Ending *e, const UiIn *in) {
     return EV_NONE;
 }
 
-static void fade_quad(LQuads *out, float a) {  // black over everything, alpha a
-    if (a <= 0) return;
-    LQuad q;
-    memset(&q, 0, sizeof q);
-    float c[4][2] = {{-640, 360}, {640, 360}, {-640, -360}, {640, -360}};
-    memcpy(q.pos, c, sizeof c);
-    for (int k = 0; k < 4; k++) q.col[k][0] = q.col[k][1] = q.col[k][2] = 255, q.col[k][3] = (uint8_t)(a > 1 ? 255 : a * 255);
-    memset(q.black, 0, 4);
-    q.white[3] = 255;
-    q.tex0 = q.tex1 = -1;
-    q.flags = LQ_BLEND_NORMAL | LQ_COMB_NONE << LQ_COMB_C | LQ_COMB_NONE << LQ_COMB_A;
-    if (out->n == out->cap) out->cap = out->cap ? out->cap * 2 : 256, out->q = realloc(out->q, sizeof(LQuad) * (size_t)out->cap);
-    out->q[out->n++] = q;
-}
-
 static uint8_t g_bg[4] = {0, 0, 0, 255};
 void ending_draw(Ending *e, LQuads *out) {
     int t = e->tick;

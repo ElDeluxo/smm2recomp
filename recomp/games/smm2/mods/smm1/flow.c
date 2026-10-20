@@ -7,6 +7,15 @@
 // retry, the clear and its result screen). While a screen takes input the game gets none (runtime/hle/input.c,
 // game_overlay_captured).
 //
+// The course's card is SMM2's own (owner, 2026-10-20: the same lives / loading card as after a miss): after the map's
+// iris the screen stays black while SMM2 leaves its map for the course scene (hundred_flow_course_in), then SMM2's
+// card shows. SMM1's card stays for the "SMM1 course card" setting (hundred_smm1_card(), mods/smm1_extras.c).
+//
+// Transitions: SMM2's screens and the flow's meet through SMM2's own block wipe (its Endless screens' way: the result
+// screen's Next -> the map or the ending, the ending -> the select), the map's iris goes to SMM2's card through
+// black, and the select fades in over SMM2's Endless menu and out of it (opening, Challenge Modes, B), so no screen
+// cuts in at once.
+//
 // The flow ticks once per presented frame (60 Hz). The mod's calls (game threads) are queued and handled at the
 // next tick.
 //
@@ -80,9 +89,11 @@ WEAK void hundred_flow_exit(void) { fake.used = true; }
 // Challenge Modes (the mod): SMM2's Endless as the other mode on Course World's "Challenge Modes" button
 WEAK bool hundred_modes_available(void) { return getenv("RECOMP_HUNDRED_TEST_MODES") != NULL; }
 WEAK void hundred_mode_switch(void) { fake.used = true; }
+// the "SMM1 course card" setting (mods/smm1_extras.c): SMM1's start card instead of SMM2's course-in card
+WEAK bool hundred_smm1_card(void) { return getenv("RECOMP_HUNDRED_SMM1_CARD") && atoi(getenv("RECOMP_HUNDRED_SMM1_CARD")); }
 
 // ================================================================ queue (mod -> flow)
-enum { Q_OPEN = 1, Q_PAUSE, Q_STARTED, Q_RESULT, Q_ENDING };
+enum { Q_OPEN = 1, Q_PAUSE, Q_STARTED, Q_RESULT, Q_ENDING, Q_COURSE_IN };
 static pthread_mutex_t g_q = PTHREAD_MUTEX_INITIALIZER;
 static int g_queue[32][2], g_nq;
 static struct hundred_credit g_end_credits[16];
@@ -108,11 +119,62 @@ static struct {
     int intro_ticks, peek, last_hb, koopa_next;
     bool fetched;  // the run side was already asked for this intro's course
     bool card_up;        // (for the run side's thread) the intro's card is up
+    bool may_start;      // (for the run side's thread) hundred_flow_ready_to_start()
     bool tap, touching;  // a touch lifted this frame (at tap_x, tap_y: game pixels); a touch is down
+    bool touch_stale;    // the touch down began before the flow opened (its lift is no tap)
     int tap_x, tap_y;
     char test[64];
     long test_at;
 } F;
+
+// ---- transitions. veil: black over what the flow shows (over the game's frame when it shows nothing), going to
+// veil_to; opacity: the whole image's (a fade over SMM2's screens), going to op_to. `then` runs when a fade out is
+// complete (the veil black, or the image gone), and the fade turns back in.
+enum { T_NONE, T_AFTER_CLEAR, T_ENDING, T_SELECT, T_MODE, T_EXIT };
+#define DIP_FRAMES 20.0f   // a fade through black, each way [inf: SMM2's scene fades are about this long]
+#define CROSS_FRAMES 16.0f  // the select fading in over SMM2's menu, or out
+static struct {
+    float veil, veil_to, op, op_to, op_speed;
+    int then;
+} X = {.op = 1, .op_to = 1};
+// SMM2's block wipe (its own between the Endless screens: the result screen's Next, the map): Cmn_Fade_00 from the
+// game's romfs, OutBlock (black squares sweep in diagonally from the bottom left until they cover the screen) and
+// InBlock (they sweep out again), 56 frames each [obs layout]; the other fades of the layout hidden. Without it the
+// dips are a plain fade through black.
+#define WIPE_FRAMES 56
+enum { WIPE_NONE, WIPE_OUT, WIPE_IN };
+static struct {
+    Lay *l;
+    bool tried;
+    int anim, t0;  // WIPE_*, F.ov.tick it began
+} WP;
+static Lay *wipe_layout(void) {
+    if (!WP.tried) {
+        WP.tried = true;
+        if ((WP.l = lay_open("nx:Cmn_Fade_00"))) {
+            static const char *other[] = {"P_FadeB_00", "P_FadeW_00", "W_CircleB_00", "W_CircleW_00", "N_Capture_00",
+                                          "N_CaptureFade_00"};
+            for (int i = 0; i < 6; i++) lay_show(WP.l, other[i], false);
+        } else
+            LOGF("no Cmn_Fade_00: plain fades\n");
+    }
+    return WP.l;
+}
+static int wipe_frame(void);
+// through black: SMM2's block wipe out (from `delay` frames on), then (`then`) in. After the result screen's Next
+// SMM2 starts the same wipe 6 frames after its cNextScene [obs], so the flow's blocks fall on SMM2's own.
+static void dip(int then, int delay) {
+    X.then = then;
+    if (wipe_layout()) {
+        lay_stop(WP.l, "InBlock");
+        WP.anim = WIPE_OUT, WP.t0 = wipe_frame() + delay;
+        lay_play(WP.l, "OutBlock", WP.t0);
+    } else
+        X.veil_to = 1;
+}
+static void fade_in(void) { X.op = 0, X.op_to = 1, X.op_speed = 1 / CROSS_FRAMES; }
+static void fade_out(int then, float frames) { X.op_to = 0, X.op_speed = 1 / frames, X.then = then; }
+static bool fading(void) { return X.then || X.veil > 0 || X.op < 1 || WP.anim; }
 
 static void status(void) { hundred_run_status(&F.st); }
 // the lives to show: a run being started has none on record yet, and SMM1's start is 100 (a run with none left is
@@ -166,6 +228,7 @@ static void to_select(void) {
     ov_hide(&F.ov);
     F.sel = s;
     F.state = s ? S_SELECT : S_CLOSED;
+    if (s && X.veil <= 0 && !WP.anim) fade_in();  // (over SMM2's Endless menu; after the ending the dip covers it)
     static const int t[] = {60};
     static const char *w[] = {"select"};
     shots_at(1, t, w);
@@ -175,7 +238,7 @@ static void to_intro(int entry) {
     CardInfo c = card_info();
     c.intro = entry == ENTRY_NEW ? CARD_NEW_RUN : entry == ENTRY_RESUME ? CARD_RETRY : CARD_STATIC;
     bool had_continue = F.sel && F.sel->cont;
-    Intro *in = intro_new(entry, F.d, &c, F.st.cleared, had_continue, F.sel);
+    Intro *in = intro_new(entry, F.d, &c, F.st.cleared, had_continue, F.sel, !hundred_smm1_card());
     close_scenes();
     ov_hide(&F.ov);
     F.intro = in;
@@ -257,12 +320,13 @@ static void on_result(int outcome) {
         F.state = S_PLAYING;
         break;
     case HUNDRED_NEXT:
-        if (F.st.cleared >= (F.st.total ? F.st.total : RUN_LENGTHS[F.d])) to_ending(F.d, F.st.lives, F.st.ncredits, F.st.credits);
+        // SMM2's result screen goes to black (as SMM2's own Next does), then the map or the ending comes out of it
+        if (F.st.cleared >= (F.st.total ? F.st.total : RUN_LENGTHS[F.d])) dip(T_ENDING, 6);
         else {
             // the next course loads under the map (SMM2 shows nothing of it: the map and card are full screen), so
-            // most of the load is over by the time the card comes; the card stays up until the course plays
-            to_intro(ENTRY_AFTER_CLEAR);
-            F.fetched = true;
+            // most of the load is over by the time the card comes; the card stays up until the course plays (with
+            // SMM2's card, SMM2 waits on its map with Mario's Play pressed until the flow's iris has closed)
+            dip(T_AFTER_CLEAR, 6);
             if (!hundred_play_next()) LOGF("the run side did not take the next course\n");
         }
         break;
@@ -282,6 +346,55 @@ static void on_result(int outcome) {
     }
 }
 
+// a fade out is complete: what it was for
+static void fade_then(int what) {
+    switch (what) {
+    case T_AFTER_CLEAR:
+        to_intro(ENTRY_AFTER_CLEAR);
+        F.fetched = true;  // (asked for at HUNDRED_NEXT)
+        break;
+    case T_ENDING: to_ending(F.d, F.st.lives, F.st.ncredits, F.st.credits); break;
+    case T_SELECT: to_select(); break;
+    case T_MODE:  // Challenge Modes: SMM2's Endless menu is underneath
+        hundred_mode_switch();
+        close_scenes();
+        F.state = S_CLOSED;
+        smm1_bgm(NULL, false);
+        break;
+    case T_EXIT:  // B: SMM2's menu underneath is already leaving for Course World
+        close_scenes();
+        F.state = S_CLOSED;
+        smm1_bgm(NULL, false);
+        break;
+    }
+}
+static int wipe_frame(void) { return F.ov.tick; }
+static void fades_tick(void) {
+    if (WP.anim == WIPE_OUT && wipe_frame() - WP.t0 >= WIPE_FRAMES) {  // covered: the next screen, the blocks go
+        int then = X.then;
+        X.then = T_NONE;
+        lay_stop(WP.l, "OutBlock");
+        lay_play(WP.l, "InBlock", wipe_frame());
+        WP.anim = WIPE_IN, WP.t0 = wipe_frame();
+        fade_then(then);
+    } else if (WP.anim == WIPE_IN && wipe_frame() - WP.t0 >= WIPE_FRAMES) {
+        WP.anim = WIPE_NONE;
+    }
+    if (X.veil != X.veil_to) {
+        float k = 1 / DIP_FRAMES;
+        X.veil = X.veil < X.veil_to ? fminf(X.veil + k, X.veil_to) : fmaxf(X.veil - k, X.veil_to);
+    }
+    if (X.op != X.op_to) X.op = X.op < X.op_to ? fminf(X.op + X.op_speed, X.op_to) : fmaxf(X.op - X.op_speed, X.op_to);
+    int then = X.then;
+    if (then && X.veil_to >= 1 && X.veil >= 1) {  // black: the next screen, and the veil lifts off it
+        X.then = T_NONE, X.veil_to = 0;
+        fade_then(then);
+    } else if (then && X.op_to <= 0 && X.op <= 0) {  // gone: the flow's screen closes
+        X.then = T_NONE, X.op = X.op_to = 1;
+        fade_then(then);
+    }
+}
+
 static void handle_queue(void) {
     int q[32][2], n;
     pthread_mutex_lock(&g_q);
@@ -291,11 +404,20 @@ static void handle_queue(void) {
     for (int i = 0; i < n; i++) {
         switch (q[i][0]) {
         case Q_OPEN:
-            if (F.state == S_CLOSED && open_data()) F.ending_only = false, to_select();
+            if (F.state == S_CLOSED && open_data()) {
+                // (the buttons and the touch held as it opens are no presses: SMM2's menu acts on a ZL / ZR or a tap
+                // in the very frame it comes, before the flow has seen it held, and its select would switch back)
+                F.ending_only = false, F.touch_stale = F.touching, F.prev = ~0u;
+                X.veil = X.veil_to = 0, X.then = T_NONE;
+                to_select();
+            }
             break;
         case Q_PAUSE: break;  // (SMM2's own pause)
         case Q_STARTED:
             if (F.state == S_INTRO && F.intro) intro_started(F.intro);  // (the card goes: Out over the course)
+            break;
+        case Q_COURSE_IN:
+            if (F.state == S_INTRO && F.intro) intro_course_in(F.intro);  // (SMM2's card: the black may go)
             break;
         case Q_RESULT:
             if (F.state == S_PLAYING || F.state == S_INTRO) on_result(q[i][1]);
@@ -373,6 +495,8 @@ static void tick(unsigned buttons) {
     F.prev = buttons;
     F.ov.tick++;
     shots_tick();
+    fades_tick();
+    if (X.then) in.pressed = 0, F.tap = false;  // (a fade out under way: its screen takes nothing more)
     bool resume = false;
     switch (F.state) {
     case S_SELECT: {
@@ -388,8 +512,16 @@ static void tick(unsigned buttons) {
         int ev = select_step(F.sel, &in, &F.st, &resume);
         if (ev == EV_NONE && F.tap && select_header_hit(F.sel, F.tap_x, F.tap_y)) smm1_se("SE_PageNext1"), ev = EV_MODE;
         if (ev == EV_TAB) smm1_bgm_track(track_for(F.sel->d));
-        if (ev == EV_MODE) { hundred_mode_switch(); close_scenes(); F.state = S_CLOSED; smm1_bgm(NULL, false); }
-        if (ev == EV_EXIT) { close_scenes(); F.state = S_CLOSED; smm1_bgm(NULL, false); hundred_flow_exit(); }
+        if (ev == EV_MODE) {
+            LOGF("Challenge Modes on the select (buttons %#x, before %#x, tap %d, select tick %d)\n", buttons,
+                 buttons & ~in.pressed, F.tap, F.sel->tick);
+            fade_out(T_MODE, CROSS_FRAMES), smm1_bgm_fade(16);
+        }
+        if (ev == EV_BACK) {  // B: SMM2's menu underneath leaves for Course World while the map plays its Out
+            hundred_flow_exit();
+            fade_out(T_EXIT, 32), smm1_bgm_fade(32);
+        }
+        if (ev == EV_EXIT && !X.then) { close_scenes(); F.state = S_CLOSED; }
         else if (ev == EV_START) {
             F.d = F.sel->d;
             if (hundred_run_start(F.d, resume)) to_intro(resume ? ENTRY_RESUME : ENTRY_NEW);
@@ -397,6 +529,8 @@ static void tick(unsigned buttons) {
         break;
     }
     case S_INTRO: {
+        // (coming out of black: the demo starts once the map is seen)
+        if (X.veil > 0 || (WP.anim == WIPE_IN && wipe_frame() - WP.t0 < WIPE_FRAMES / 2)) break;
         int iev = intro_step(F.intro, &in);
         // the card is up: the run side fetches the course and SMM2 starts it under the card (at the run's start; after
         // a clear it was asked for when the map began, HUNDRED_NEXT); after a skip SMM2 starts the next course itself
@@ -405,9 +539,11 @@ static void tick(unsigned buttons) {
             if (!hundred_play_next()) LOGF("the run side did not take the next course\n");
         }
         if (iev == EV_DONE) {
+            bool black = intro_full(F.intro);  // (SMM2's card: from black to SMM2's course scene)
             intro_free(F.intro), F.intro = NULL;
             F.state = S_PLAYING;
             smm1_bgm_fade(30);  // the course's own music
+            if (black) X.veil = 1, X.veil_to = 0;
         } else if (++F.intro_ticks % 1800 == 0) {  // a long wait for the course: say so, photograph what the game shows
             LOGF("still waiting for the course to start (%d s)\n", F.intro_ticks / 60);
             F.peek = 3;
@@ -435,9 +571,9 @@ static void tick(unsigned buttons) {
         if (gameover_step(F.go, &in) == EV_BACK) to_select();
         break;
     case S_ENDING:
-        if (ending_step(F.end, &in) == EV_DONE) {
+        if (!X.then && ending_step(F.end, &in) == EV_DONE) {
             if (F.ending_only) { close_scenes(); F.state = S_CLOSED; F.ending_done = true; }
-            else { hundred_run_finish(); to_select(); }
+            else { hundred_run_finish(); dip(T_SELECT, 0); }
         }
         break;
     default: break;
@@ -445,6 +581,8 @@ static void tick(unsigned buttons) {
     F.full = F.state == S_SELECT || (F.state == S_INTRO && F.intro && intro_full(F.intro)) || F.state == S_GAMEOVER ||
              F.state == S_ENDING;
     F.card_up = F.state == S_INTRO && F.intro && intro_card_up(F.intro);
+    // the course may start playing: none of the flow's screens is up or coming, or the card is
+    F.may_start = F.card_up || F.state == S_CLOSED || (F.state == S_PLAYING && !X.then);
     smm1_game_sound(!F.full);  // SMM1's screens have their own sound
     F.captured = F.full;
 }
@@ -467,6 +605,8 @@ static bool build(LQuads *q, uint8_t bg[4]) {
     case S_ENDING: ending_background(F.end, bg), ending_draw(F.end, q); break;
     default: break;
     }
+    if (WP.anim && wipe_frame() >= WP.t0) lay_draw(WP.l, wipe_frame(), q);
+    fade_quad(q, X.veil);
     return F.full || q->n > 0;
 }
 
@@ -476,6 +616,7 @@ bool hundred_flow_active(void) { return F.full; }
 bool hundred_flow_overlay(void) { return !F.full && F.captured; }
 void hundred_flow_pause(void) { post(Q_PAUSE, 0); }
 void hundred_flow_course_started(void) { post(Q_STARTED, 0); }
+void hundred_flow_course_in(void) { post(Q_COURSE_IN, 0); }
 void hundred_course_result(int outcome) { post(Q_RESULT, outcome); }
 void hundred_ending_show(int d, int n, const struct hundred_credit *c) {
     pthread_mutex_lock(&g_q);
@@ -545,10 +686,15 @@ static bool g_front_full, g_has_front;
 static LQuads g_job;
 static uint8_t g_job_bg[4];
 static bool g_job_full, g_job_pending;
+static float g_job_op;
 
-static void raster_to(const LQuads *q, const uint8_t bg[4], uint8_t *px) {
+static void raster_to(const LQuads *q, const uint8_t bg[4], uint8_t *px, float op) {
     lyt_clear(px, W, H, bg);
     lyt_raster(q, px, W, H, 1280, 720);
+    if (op < 1) {  // (a fade over SMM2's screens: the renderers blend the image by its alpha)
+        unsigned k = (unsigned)(op * 256 + 0.5f);
+        for (size_t i = 3; i < (size_t)W * H * 4; i += 4) px[i] = (uint8_t)((px[i] * k) >> 8);
+    }
 }
 static void *worker(void *arg) {
     (void)arg;
@@ -562,9 +708,10 @@ static void *worker(void *arg) {
         uint8_t bg[4];
         memcpy(bg, g_job_bg, 4);
         bool full = g_job_full;
+        float op = g_job_op;
         g_job_pending = false;
         pthread_mutex_unlock(&g_img);
-        raster_to(&q, bg, g_back);
+        raster_to(&q, bg, g_back, op);
         pthread_mutex_lock(&g_img);
         uint8_t *t = g_front;
         g_front = g_back, g_back = t;
@@ -579,9 +726,7 @@ extern uint64_t renderer_present_count(void);
 
 bool game_overlay_captured(void) { return F.captured; }
 // the run side may start a course: the card is up, or none of the full screens is
-bool hundred_flow_ready_to_start(void) {
-    return !F.full || F.card_up;
-}
+bool hundred_flow_ready_to_start(void) { return F.may_start; }
 uint64_t game_input_mask(void) { return ~0ull; }  // (in a course every button is the game's: SMM2's own skip)
 extern uint64_t input_player_buttons(void);  // runtime/hle/input.c: keyboard and controllers only
 
@@ -628,19 +773,24 @@ const uint8_t *game_overlay_image(int *w, int *h, int *full, uint64_t *seq) {
         F.test[0] = 0;
         flow_test_open(spec);
     }
-    if (F.state == S_CLOSED && !g_nq) {
-        g_has_front = false;
-        F.full = F.captured = false;
-        return NULL;
-    }
+    // (the buttons and the touch are followed while the flow is closed too: a button or a touch held when it opens,
+    // e.g. the ZL / ZR or the tap that switched to it, is no press of its own)
     unsigned b = (unsigned)input_player_buttons() | test_input(renderer_present_count());
     {  // taps (the select's mode header): a touch that lifts, at its last place
         extern bool touch_first(int32_t *x, int32_t *y);  // runtime/hle/touch.c
         int32_t x = F.tap_x, y = F.tap_y;
         bool down = touch_first(&x, &y);
-        F.tap = !down && F.touching;
+        F.tap = !down && F.touching && !F.touch_stale;
+        if (!down) F.touch_stale = false;
         F.touching = down;
         if (down) F.tap_x = x, F.tap_y = y;
+    }
+    if (F.state == S_CLOSED && !g_nq && !fading()) {
+        F.prev = b;
+        g_has_front = false;
+        F.full = F.captured = false;
+        F.may_start = true;
+        return NULL;
     }
     tick(b);
     LQuads *q = &g_last;
@@ -657,7 +807,8 @@ const uint8_t *game_overlay_image(int *w, int *h, int *full, uint64_t *seq) {
         memcpy(g_job.q, q->q, sizeof(LQuad) * (size_t)q->n);
         g_job.n = q->n;
         memcpy(g_job_bg, bg, 4);
-        g_job_full = F.full;
+        g_job_full = F.full && X.op >= 1;  // (fading: SMM2's screen shows through)
+        g_job_op = X.op;
         g_job_pending = true;
         pthread_cond_signal(&g_cv);
     } else
@@ -703,7 +854,7 @@ int flow_test_main(int argc, char **argv) {
             if (bg[3] == 0) bg[0] = 60, bg[1] = 90, bg[2] = 60, bg[3] = 255;
             struct timespec t0, t1;
             clock_gettime(CLOCK_MONOTONIC, &t0);
-            raster_to(&q, bg, px);
+            raster_to(&q, bg, px, X.op);
             clock_gettime(CLOCK_MONOTONIC, &t1);
             double ms = (t1.tv_sec - t0.tv_sec) * 1e3 + (t1.tv_nsec - t0.tv_nsec) / 1e6;
             char path[512];
