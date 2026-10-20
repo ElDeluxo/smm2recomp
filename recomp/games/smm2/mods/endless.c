@@ -91,16 +91,25 @@ static void add_credit(uint32_t d, uint64_t id) {  // (state_lock held)
 
 static char own_maker_id[16];
 static uint64_t pid_of_maker_id(const char *maker_id);
+static volatile uint64_t backend_pid;  // hybrid: the player id in the backend's own record of the player (secret)
+
+void mod_set_backend_pid(uint64_t pid) {
+    // Hybrid (online.c GetUsers (own)): the game's NEX client is logged in, and its own record of the player carries
+    // the backend's player id. Course World compares it with the owners of courses ("my course") and the rows of
+    // lists ("me"), so the player's own maker on our server gets that id too (pid_of_maker_id). Never logged.
+    if (mod_hybrid() && pid) backend_pid = pid;
+}
 
 uint64_t mod_player_pid(void) {
     // The signed-in account's player id: the same hash of its maker ID as every maker's (Course World compares
-    // course owners with it: own courses). Asked from the server once.
+    // course owners with it: own courses). Asked from the server once. Hybrid: the backend's id, once known.
     static volatile int known;
     if (!known) {
         Json *me = srv_call("GET", "/api/me", NULL, NULL);
         const char *id = json_str(json_get(me, "maker_id"), NULL);
         if (id) snprintf(own_maker_id, sizeof own_maker_id, "%s", id), known = 1;
         json_free(me);
+        if (!known && backend_pid) return backend_pid;
         if (!known) {  // (no server answer: a stable id from the token, for this session)
             uint64_t h = 1469598103934665603ull;
             for (const char *p = g_mod.token; *p; p++) h = (h ^ (uint8_t)*p) * 1099511628211ull;
@@ -118,6 +127,7 @@ static struct { uint64_t pid; char name[48]; char maker_id[16]; } makers[NMAKERS
 static int nmakers;
 
 static uint64_t pid_of_maker_id(const char *maker_id) {
+    if (backend_pid && own_maker_id[0] && maker_id && !strcmp(maker_id, own_maker_id)) return backend_pid;  // (hybrid)
     uint64_t h = 1469598103934665603ull;
     for (const char *p = maker_id ? maker_id : ""; *p; p++) h = (h ^ (uint8_t)*p) * 1099511628211ull;
     return 0x5000000000000000ull | (h & 0x0000ffffffffffffull) | 1;

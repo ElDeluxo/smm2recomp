@@ -6,6 +6,11 @@
 // The session (Nintendo's "enl" layer over NEX) is a state machine: cConnectNetwork -> cLogInReady (starts the NEX
 // login) -> cLogIn, which is also the logged-in resting state (it waits there for the next command in +0xe4). With
 // the mod, cLogInReady goes straight to cLogIn and cLogIn handles the commands without a NEX connection.
+//
+// Hybrid (hybrid.h: backend nextendo, or local-nex with course_world=mod): the game's own enl / NEX login runs and
+// the login sequence's requests go to the backend (mod_answers_login() is false); Course World's other requests stay
+// the mod's (mod_hundred()). Two answers are merged: the application config (the backend's, with the Endless
+// Challenge switched on) and the player's own record (the backend's, with our Endless bests and unlocks).
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -26,7 +31,7 @@ static void change_state(Cpu *c, uint64_t sm, uint32_t st) {
 }
 
 static void enl_login_ready(Cpu *c) {
-    if (!mod_hundred()) { guest_call_orig(c, ENL_LOGIN_READY); return; }
+    if (!mod_answers_login()) { guest_call_orig(c, ENL_LOGIN_READY); return; }
     uint64_t self = c->x[0];
     MLOG("enl session %llx: logged in (no NEX connection)\n", (unsigned long long)self);
     if (g_mod.log) {
@@ -41,7 +46,7 @@ static void enl_login_ready(Cpu *c) {
 // cLogIn, the logged-in state: +0xe4 is the command the game posted (1 log in: done; 0 log out; 0xf: log out and
 // stop). Matchmaking commands (3..7, online multiplayer) are not available: they are dropped.
 static void enl_login(Cpu *c) {
-    if (!mod_hundred()) { guest_call_orig(c, ENL_LOGIN); return; }
+    if (!mod_answers_login()) { guest_call_orig(c, ENL_LOGIN); return; }
     uint64_t self = c->x[0];
     int32_t cmd = (int32_t)g32(self + 0xe4);
     s8(self + 0x19, 1);
@@ -69,7 +74,7 @@ static void answered(Cpu *c, const char *what) {
 
 #define LOCAL_WRAPPER(name, off, body)                                                           \
     static void name(Cpu *c) {                                                                   \
-        if (!mod_hundred()) { guest_call_orig(c, MAIN_ADDR(off)); return; }                      \
+        if (!mod_answers_login()) { guest_call_orig(c, MAIN_ADDR(off)); return; }                \
         uint64_t no = c->x[0];                                                                   \
         (void)no;                                                                                \
         netobj_lock(c);                                                                          \
@@ -80,8 +85,31 @@ static void answered(Cpu *c, const char *what) {
 
 // The server's application config: 38 u32 values at +0x737b0 (copied to the UI cache at +0x28). Values 0-3 switch the
 // Endless Challenge on per difficulty (> 0; with 0 the game says "This service is not active right now"); the rest
-// stay 0 (features the mod doesn't serve).
-LOCAL_WRAPPER(get_application_config, 0x14ce2f0, { for (int d = 0; d < 4; d++) s32(no + 0x737b0 + 4 * d, 1); })
+// stay 0 (features the mod doesn't serve). Hybrid: the backend's config (Utility.GetIntegerSettings(0): its keys
+// 0..37 into the array, Network Play's switches among them) with the Endless Challenge's four switched on, since
+// the mod serves it.
+#define APP_CONFIG 0x737b0
+
+static void get_application_config(Cpu *c) {
+    uint64_t no = c->x[0];
+    if (mod_hybrid()) {
+        guest_call_orig(c, MAIN_ADDR(0x14ce2f0));
+        if (g32(no + 0x60) == 0 && (uint8_t)c->x[0] == wrapper_ok()) {  // (the game's own request succeeded)
+            uint64_t ret = c->x[0];
+            netobj_lock(c);
+            for (int d = 0; d < 4; d++) s32(no + APP_CONFIG + 4 * d, 1);
+            netobj_unlock(c);
+            c->x[0] = ret;
+            LOG("[mod] GetApplicationConfig: the backend's, Endless on\n");
+        }
+        return;
+    }
+    if (!mod_answers_login()) { guest_call_orig(c, MAIN_ADDR(0x14ce2f0)); return; }
+    netobj_lock(c);
+    for (int d = 0; d < 4; d++) s32(no + APP_CONFIG + 4 * d, 1);
+    netobj_unlock(c);
+    answered(c, "get_application_config");
+}
 LOCAL_WRAPPER(get_user_name_ng_type, 0x14f2cc0, s32(no + 0x141608, 0))  // the name is fine
 LOCAL_WRAPPER(sync_user_profile, 0x14cef40, {})
 LOCAL_WRAPPER(get_mii_clothes, 0x14d8360, s32(no + 0x73a58, 0))      // no costume rewards (ring count)
@@ -133,14 +161,41 @@ void user_entry_reset(uint64_t e) {
 }
 
 uint64_t mod_player_pid(void);  // endless.c: the fake player id the overrides use for the signed-in account
+extern void mod_account_info(char *name, size_t cap, uint32_t best[4]);
+
+// Hybrid: the backend's record of the player (its name, Mii, maker code, registration and player id) stays as the
+// game's own request wrote it; our server's Endless bests go into it (mod_account_info also sets the 100 Mario
+// unlocks), and its player id becomes the player's own id in the mod's answers (mod_set_backend_pid). Neither our
+// server's account name nor a Maker avatar name is written: the name is the backend's (SyncUserProfile, the next
+// request of the login, sends it the player's own avatar name from the save).
+static void get_my_user_hybrid(Cpu *c) {
+    uint64_t no = c->x[0];
+    guest_call_orig(c, MAIN_ADDR(0x14d5cd0));
+    uint64_t ret = c->x[0];
+    // (the game's own request succeeded and wrote at least one entry: the first is the player's, the ring's head is 0)
+    if (g32(no + 0x60) != 0 || (uint8_t)ret != wrapper_ok() || (int32_t)g32(no + USER_RING + 0x10) < 1) return;
+    char name[64] = "";
+    uint32_t best[4] = {0};
+    mod_account_info(name, sizeof name, best);  // (our server; before the lock: it may take a while)
+    netobj_lock(c);
+    uint64_t e = g64(no + USER_RING);
+    if (e) {
+        for (int d = 0; d < 4; d++) s32(e + 0x114 + 4 * d, best[d]);
+        mod_set_backend_pid(g64(e + 0x58));
+    }
+    netobj_unlock(c);
+    c->x[0] = ret;
+    LOG("[mod] GetUsers (own): the backend's record, our Endless bests %u/%u/%u/%u\n", best[0], best[1], best[2],
+        best[3]);
+}
 
 static void get_my_user(Cpu *c) {
-    if (!mod_hundred()) { guest_call_orig(c, MAIN_ADDR(0x14d5cd0)); return; }
+    if (mod_hybrid()) { get_my_user_hybrid(c); return; }
+    if (!mod_answers_login()) { guest_call_orig(c, MAIN_ADDR(0x14d5cd0)); return; }
     uint64_t no = c->x[0];
     char name[64];
     snprintf(name, sizeof name, "%s", getenv("RECOMP_USER_NAME") ? getenv("RECOMP_USER_NAME") : "Player");
     uint32_t best[4] = {0};
-    extern void mod_account_info(char *name, size_t cap, uint32_t best[4]);
     mod_account_info(name, sizeof name, best);
     netobj_lock(c);
     s64(no + USER_RING + 0xc, 0);  // head 0, count 0

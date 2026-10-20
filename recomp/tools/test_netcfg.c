@@ -121,8 +121,9 @@ static void nextendo_routes(void) {
     const NetBackendOption *o;
     int n = net_backend_options(&o);
     CHECK(n == 3 && o[2].id == NET_BACKEND_NEXTENDO && o[2].available, "nextendo not available when signed in");
-    CHECK(!strcmp(o[2].desc, "Course World and online play on the community servers. Needs a Nextendo account (sign in "
-                             "below)."), "desc %s", o[2].desc);
+    CHECK(!strcmp(o[2].desc, "Network Play (online co-op and versus) on Nextendo's community servers. Course World, "
+                             "the Endless Challenge and 100 Mario stay on your course source (TGRCode or your server). "
+                             "Needs a Nextendo account (sign in below)."), "desc %s", o[2].desc);
 }
 
 static void nextendo_hosts_local_only(void) {  // net_hosts= stays local-only; it comes first

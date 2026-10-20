@@ -29,7 +29,8 @@ Environment variables, or `smm2mods.ini` (`key=value` lines) in the data folder 
 | `RECOMP_MOD_SERVER=<url>` | `server=` | the course server, plain `http://` (default `http://127.0.0.1:8080`) |
 | `RECOMP_MOD_TOKEN=<token>` | `token=` | your account's token on that server (see below); keep it private |
 | `RECOMP_MOD_RULESET=hundred\|smm2` | `ruleset=` | `hundred` (default): 100 Mario is offered: Course World's Endless Challenge button opens SMM1's 100 Mario Challenge, and B on its difficulty select leads on to SMM2's own Endless Challenge (both in one build; SMM2's rules there until the player leaves that menu); `smm2`: the button opens SMM2's own Endless Challenge only |
-| `RECOMP_MOD_COURSES=server\|tgrcode` | `courses=` | `server` (default): the server above; `tgrcode` (iOS default, with the mod on): a course server built into the app on a loopback port, with a local account, fed from TGRCode's archive of SMM2 courses (needs the course key table: the mod writes it once from your game into `mods-generated/course_table.bin`, private); falls back to `server=` when the build has no built-in server. Also in the Mods tab ("Courses: TGRCode"), from the next start |
+| `RECOMP_MOD_COURSES=server\|tgrcode` | `courses=` | `server` (default): the server above; `tgrcode` (iOS default, with the mod on; hybrid's default, below): a course server built into the app on a loopback port, with a local account, fed from TGRCode's archive of SMM2 courses (needs the course key table: the mod writes it once from your game into `mods-generated/course_table.bin`, private); falls back to `server=` when the build has no built-in server. Also in the Mods tab ("Courses: TGRCode"), from the next start |
+| `RECOMP_MOD_COURSE_WORLD=mod\|backend` | `course_world=` | only with another online backend than `ours` (below): `mod` (nextendo's default): **hybrid**, the mod answers Course World, the Endless Challenge and 100 Mario while the game's own NEX client logs in to the backend; `backend`: all of Course World from the backend, the mod's online overrides off. With `local-nex` only `mod` turns hybrid on |
 | `RECOMP_MOD_TIMEOUT_MS=<n>` | `timeout_ms=` | per request (default 8000) |
 | `RECOMP_MOD_LOG=1` | `log=1` | log every request and answer |
 
@@ -59,7 +60,7 @@ leaderboards) and SMM2-rule high scores.
 |---|---|---|
 | HTTP client | `runtime/net/http.c` | blocking HTTP/1.1, timeouts, sockets (Winsock on Windows); one connection per request |
 | JSON | `runtime/net/json.c` | a small reader for the server's answers |
-| Pretend online | `runtime/net/online.h`, `services/nifm.c`, `acc.c`, `mii.c` | with the mod on: nifm reports a connection, acc a network service account (a local placeholder token), mii a default Mii; nothing talks to Nintendo |
+| Pretend online | `runtime/net/online.h`, `services/nifm.c`, `acc.c`, `mii.c` | with the mod on (backend `ours`; hybrid has a real connection): nifm reports a connection, acc a network service account (a local placeholder token), mii a default Mii; nothing talks to Nintendo |
 | Login | `games/smm2/mods/online.c` | the game's network session ("enl") logs in without NEX; Course World's login sequence gets neutral answers and the player's record (name from the server, a default Mii, registered) |
 | Endless | `games/smm2/mods/endless.c` | the Endless Challenge's request functions answered from the server (below) |
 | Bridge | `games/smm2/mods/bridge.c`, `hundred.h` | 100 Mario: SMM1's screens on top, SMM2's play underneath |
@@ -432,18 +433,45 @@ Nintendo's servers: only the redirect table's names resolve, every other name is
 | `backend=` (smm2mods.ini) / `RECOMP_NET_BACKEND` | What runs |
 |---|---|
 | `ours` (default) | the mod path above; the game's sockets stay off (only the virtual LAN), every name lookup fails |
-| `local-nex` | the mod's online overrides switch **off** (`mod_hundred()` is false), so the game's own enl / NEX code runs on real host sockets against a local NEX test server |
-| `nextendo` | with a signed-in Nextendo account (`runtime/net/nextendo.h`): the mod's online overrides switch off and the game's own NEX client logs in to Nextendo's SMM2 server (below). Not signed in: logged ("not signed in; using our server") and the backend is `ours` |
+| `local-nex` | the mod's online overrides switch **off** (`mod_hundred()` is false), so the game's own enl / NEX code runs on real host sockets against a local NEX test server; with `course_world=mod`: hybrid (below), the offline test of the nextendo setup |
+| `nextendo` | with a signed-in Nextendo account (`runtime/net/nextendo.h`): **hybrid** (below): the game's own NEX client logs in to Nextendo's SMM2 server, Network Play is theirs, and the mod keeps answering Course World, the Endless Challenge and 100 Mario (courses from TGRCode unless `courses=` says otherwise; `hundred=` doesn't matter). `course_world=backend`: all of Course World from Nextendo, the mod's online overrides off. Not signed in: logged ("not signed in; using our server") and the backend is `ours` |
 
 In the Mods tab's Online section: the "Online backend" choice (the next start) and the Nextendo account (Sign in / Sign out). For the app-level settings page,
 `net_backend_options()` / `net_backend_select()` (`runtime/net/netcfg.h`) list the three; Nextendo can be chosen
 while an account is signed in.
+
+### Hybrid: Network Play from the backend, Course World from the mod (`games/smm2/mods/hybrid.h`)
+
+The owner's choice for Nextendo (DECISIONS.md 2026-10-20 "Nextendo for multiplayer only"). With `backend=nextendo`
+(or `local-nex` with `course_world=mod`, for offline tests) the mod answers Course World but not the login:
+
+| What | Answered by |
+|---|---|
+| nifm / acc / mii, the enl session's login, Course World's login sequence (GetUserNameNgType, SyncUserProfile, GetMiiClothes, LoginCheck, UpdateLastLoginInfo, PostActivityQuest, GetNewNotification, GetEventCourseStatus) | the game's own NEX client, against the backend (`mod_answers_login()` is false) |
+| GetApplicationConfig | the backend's (Utility.GetIntegerSettings(0): Network Play's switches), then the mod switches the Endless Challenge's four keys (+0x737b0, 0..3) on: `GetApplicationConfig: the backend's, Endless on` |
+| GetUsers (own) | the backend's record of the player (name, Mii, maker code, registration, player id), then the mod writes our server's Endless bests into it (entry +0x114) and sets the 100 Mario unlocks; its player id (entry +0x58) becomes the player's own id in the mod's answers (`mod_set_backend_pid`: "my course", "me", the player's courses on our server; never logged). No Maker avatar name is written: `GetUsers (own): the backend's record, our Endless bests` |
+| Course World's lists, makers, downloads, uploads, comments, likes; the Endless Challenge; 100 Mario | the mod (`mod_hundred()` is true whatever `hundred=` says): TGRCode by default (`courses=` unset: `hybrid: courses from TGRCode (courses= not set)`; the built-in server's local account is named after the Nextendo user), or `courses=server` |
+| Network Play (matchmaking, rooms, PIA) | the game's own NEX client (Task 7 of the Nextendo plan routes its course search and download) |
+
+[obs, 2026-10-20] Offline (`local-nex`, `course_world=mod`, the test server's Endless keys 0..3 off): the login
+(ValidateAndRequestTicketWithParam), GetIntegerSettings, GetUsers, GetUsernameNgType, SyncUserProfile, GetMiiClothes,
+GetNewNotification, GetEventCourseStatus and, on opening Challenge Modes, UpdateLastLoginTime (59) reach the test
+server; no other DataStore request does. With RECOMP_MOD_TRACE=1 no wrapper outside the mod's answers ran ("not
+answered by the mod": none, as with backend `ours`), so no other Course World request is answered by the backend.
+New Game, course start and a clear came from our server; Network Play's Co-op reached
+MatchmakeExtension.AutoMatchmakeWithParam_Postpone with no `enl command` line. Live on Nextendo: the NEX login,
+TGRCode's Popular list and a course played, 100 Mario (New Game, a course with 100 lives); the game's TCP went only
+to 51.178.29.194. Not working yet: the Co-op search screen stops presenting frames about 5 s in (offline too, and
+with the mod off, so not hybrid's), the NAT check's names come to sfdnsres as `nncs1-%` / `nncs2-%` and so resolve
+to the game server instead of the NAT check (the `nncs2-lp1` redirect doesn't match), and the player's name on the
+own profile is the backend's record's, empty for a save without a Maker avatar (SyncUserProfile sends the save's).
 
 ### Settings (all in smm2mods.ini, or the environment)
 
 | ini key | Variable | Meaning |
 |---|---|---|
 | `backend=` | `RECOMP_NET_BACKEND` | above |
+| `course_world=` | `RECOMP_MOD_COURSE_WORLD` | `mod` / `backend`: who answers Course World with these backends (hybrid, above) |
 | `nex_test_server=` | `RECOMP_NET_TEST_SERVER` | `ip[:port]` of the test server (default `127.0.0.1:44300`); local addresses only (loopback, private, link-local, 100.64/10). The game's TCP connections to it on 443 go to that port |
 | `net_hosts=` | `RECOMP_NET_HOSTS` | extra redirect entries, `name=ip;*.domain=ip` (local addresses only) |
 | `tls_trust=` | `RECOMP_NET_TLS_TRUST` | local-nex: `local-ca` (default): the server must present a certificate from the local test CA (`net/test-ca.pem`); `any`: any certificate, only towards local addresses. (nextendo: always the pin) |

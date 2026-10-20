@@ -197,7 +197,9 @@ int net_backend_options(const NetBackendOption **out) {
       "The game's own online code talks to a NEX test server on this computer or your local network "                \
       "(tools/nex_test_server). For development; Course World needs our server.", true},                             \
      {NET_BACKEND_NEXTENDO, "nextendo", "Nextendo Network",                                                           \
-      "Course World and online play on the community servers. Needs a Nextendo account (sign in below).",           \
+      "Network Play (online co-op and versus) on Nextendo's community servers. Course World, the Endless "          \
+      "Challenge and 100 Mario stay on your course source (TGRCode or your server). Needs a Nextendo account "       \
+      "(sign in below).",                                                                                             \
       nextendo_available}}
     static const NetBackendOption signed_out[] = OPTS(false), signed_in[] = OPTS(true);
 #undef OPTS

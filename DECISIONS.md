@@ -1699,3 +1699,26 @@ of Nextendo's PolyForm-Shield or citron's GPL code), written from public protoco
 behaviour. The same pieces are the "local NEX server" route.
 **Would change:** the owner's go-ahead with Nextendo's permission and registration (public redirect targets and a
 pinned CA behind an explicit setting); a game server that needs TLS 1.3.
+
+## 2026-10-20 — Nextendo for multiplayer only
+
+**Owner** (after the first live login, which reached Course World's top screen on Nextendo with the mod off):
+**Nextendo for multiplayer only.** Network Play (online co-op and versus: matchmaking, rooms, PIA) goes through
+Nextendo Network; Course World (browsing, downloads, uploads), the Endless Challenge and 100 Mario stay answered by
+the mod from TGRCode or our own server, and 100 Mario stays on.
+**Decision** (the "hybrid" backend, `games/smm2/mods/hybrid.h`):
+- `backend=nextendo` means hybrid: the game's own NEX client logs in to Nextendo (the enl session and Course
+  World's login sequence are the game's own, against their server), while the mod's Course World, Endless and
+  100 Mario overrides keep answering, whatever `hundred=` says. With `courses=` unset the courses come from TGRCode
+  (the built-in server, its local account named after the Nextendo user), so no account on a server of ours is
+  needed. `course_world=backend` leaves all of Course World to Nextendo (the earlier behaviour).
+- Two answers are merged: GetApplicationConfig is Nextendo's config (Network Play's switches) with the Endless
+  Challenge's four keys switched on; GetUsers (own) is Nextendo's record of the player (name, Mii, maker code,
+  player id) with our Endless bests and the 100 Mario unlocks. The backend's player id becomes the player's own id
+  in the mod's answers, so "my course" and "me" agree with what the game's NEX session knows.
+- `backend=ours` is unchanged; `backend=local-nex` stays all-NEX unless `course_world=mod` (the offline test of
+  hybrid against `tools/nex_test_server`).
+**Why:** the owner's choice: Nextendo's SMM2 catalogue is not where the player's courses are, while Network Play
+can only work through a real NEX server.
+**Would change:** the owner wanting Nextendo's Course World too (`course_world=backend` already gives it), or
+Nextendo refusing logins whose Course World traffic doesn't reach them.

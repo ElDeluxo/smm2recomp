@@ -8,7 +8,12 @@
 //   RECOMP_MOD_TIMEOUT_MS=<n>    timeout_ms=<n>     per request (default 8000)
 //   RECOMP_MOD_LOG=1             log=1              log requests and overrides
 //   RECOMP_MOD_COURSES=<src>     courses=<src>      server (the server above) or tgrcode (a server built into the
-//                                                   game, fed from TGRCode's archive of SMM2 courses; iOS default)
+//                                                   game, fed from TGRCode's archive of SMM2 courses; iOS default;
+//                                                   hybrid's default)
+//   RECOMP_MOD_COURSE_WORLD=<w>  course_world=<w>   with another backend than ours: mod (the mod answers Course
+//                                                   World, the Endless Challenge and 100 Mario while the game's NEX
+//                                                   client logs in to the backend: hybrid; nextendo's default) or
+//                                                   backend (all of Course World from the backend; hybrid.h)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,7 +24,9 @@
 #endif
 
 #include "mod.h"
+#include "hybrid.h"
 #include "../../../runtime/net/netcfg.h"
+#include "../../../runtime/net/nextendo.h"
 #include "../../../runtime/net/online.h"
 
 ModSettings g_mod;
@@ -27,7 +34,9 @@ static volatile bool smm2_session;  // Challenge Modes is on SMM2's Endless Chal
 
 static void set(const char *key, const char *val) {
     if (!strcmp(key, "hundred")) g_mod.hundred = atoi(val) != 0;
-    else if (!strcmp(key, "courses")) snprintf(g_mod.courses, sizeof g_mod.courses, "%s", val);
+    else if (!strcmp(key, "courses"))
+        snprintf(g_mod.courses, sizeof g_mod.courses, "%s", val), g_mod.courses_set = true;
+    else if (!strcmp(key, "course_world")) snprintf(g_mod.course_world, sizeof g_mod.course_world, "%s", val);
     else if (!strcmp(key, "server")) snprintf(g_mod.server, sizeof g_mod.server, "%s", val);
     else if (!strcmp(key, "token")) snprintf(g_mod.token, sizeof g_mod.token, "%s", val);
     else if (!strcmp(key, "ruleset")) snprintf(g_mod.ruleset, sizeof g_mod.ruleset, "%s", val);
@@ -63,7 +72,7 @@ void mod_settings_load(void) {
     static const struct { const char *env, *key; } envs[] = {
         {"RECOMP_MOD_100MARIO", "hundred"}, {"RECOMP_MOD_SERVER", "server"}, {"RECOMP_MOD_TOKEN", "token"},
         {"RECOMP_MOD_RULESET", "ruleset"},  {"RECOMP_MOD_TIMEOUT_MS", "timeout_ms"}, {"RECOMP_MOD_LOG", "log"},
-        {"RECOMP_MOD_COURSES", "courses"},
+        {"RECOMP_MOD_COURSES", "courses"},  {"RECOMP_MOD_COURSE_WORLD", "course_world"},
     };
     for (size_t i = 0; i < sizeof envs / sizeof *envs; i++)
         if (getenv(envs[i].env)) set(envs[i].key, getenv(envs[i].env));
@@ -73,9 +82,17 @@ void mod_settings_load(void) {
     if (g_mod.timeout_ms <= 0) g_mod.timeout_ms = 8000;
     if (strcmp(g_mod.courses, "tgrcode")) snprintf(g_mod.courses, sizeof g_mod.courses, "server");
     smm2_session = g_mod.mode_endless;  // (the mode used last: its rules from the first menu request on)
-    if (g_mod.hundred && !strcmp(g_mod.courses, "tgrcode"))
+    HyMode m = hy_mode(net_backend(), g_mod.hundred, g_mod.course_world);
+    if (m.hybrid && !g_mod.courses_set) {  // (hybrid: no account on a server of ours needed)
+        snprintf(g_mod.courses, sizeof g_mod.courses, "tgrcode");
+        LOG("[mod] hybrid: courses from TGRCode (courses= not set)\n");
+    }
+    if (m.hybrid)
+        LOG("[mod] hybrid: the game logs in to the %s backend (Network Play); Course World, the Endless Challenge and "
+            "100 Mario from the mod\n", net_backend_key(net_backend()));
+    if (m.world && !strcmp(g_mod.courses, "tgrcode"))
         LOG("[mod] 100 Mario Challenge on: courses from TGRCode (built-in server), ruleset %s\n", g_mod.ruleset);
-    else if (g_mod.hundred)
+    else if (m.world)
         LOG("[mod] 100 Mario Challenge on: server %s, ruleset %s, %s\n", g_mod.server, g_mod.ruleset,
             g_mod.token[0] ? "signed in" : "NO TOKEN (set RECOMP_MOD_TOKEN)");
 }
@@ -88,8 +105,12 @@ void mod_settings_load(void) {
 #include "../../../runtime/net/embed_server.h"
 
 static void start_builtin_server(void) {
-    char url[256], token[160];
+    char url[256], token[160], nx_name[64];
     const char *name = getenv("RECOMP_USER_NAME") ? getenv("RECOMP_USER_NAME") : "Player";
+    // (nextendo: the local account is named after the Nextendo account, the name Course World shows for the player)
+    if (!getenv("RECOMP_USER_NAME") && net_backend() == NET_BACKEND_NEXTENDO &&
+        nextendo_username(nx_name, sizeof nx_name) && nx_name[0])
+        name = nx_name;
     if (embed_server_start("server", "tgrcode", name, url, sizeof url, token, sizeof token)) {
         snprintf(g_mod.server, sizeof g_mod.server, "%s", url);
         snprintf(g_mod.token, sizeof g_mod.token, "%s", token);
@@ -105,8 +126,13 @@ void mod_server_ready(void) {
     if (!strcmp(g_mod.courses, "tgrcode")) pthread_once(&once, start_builtin_server);
 }
 
-// (another online backend than our server, backend.c: the game's own NEX client runs, the mod's overrides are off)
-bool mod_hundred(void) { mod_settings_load(); return g_mod.hundred && net_backend() == NET_BACKEND_OURS; }
+// Who answers what, per online backend (hybrid.h, backend.c): with ours the mod answers everything (hundred=1) or
+// nothing; with nextendo the game's own NEX client logs in and the mod answers Course World (hybrid) unless
+// course_world=backend; with local-nex only course_world=mod makes it hybrid.
+static HyMode mode(void) { mod_settings_load(); return hy_mode(net_backend(), g_mod.hundred, g_mod.course_world); }
+bool mod_hundred(void) { return mode().world; }
+bool mod_hybrid(void) { return mode().hybrid; }
+bool mod_answers_login(void) { return mode().login; }
 // Challenge Modes: with 100 Mario offered (ruleset=hundred) Course World's Endless Challenge button (relabelled,
 // relabel.c) opens the mode used last: SMM1's 100 Mario Challenge or SMM2's own Endless Challenge; ZL / ZR switch
 // (bridge.c). SMM1's rules apply only in the 100 Mario part; the session flag says the player is in SMM2's.
@@ -121,8 +147,9 @@ void mod_set_smm2_session(bool on) {
     LOG("[mod] %s\n", on ? "SMM2's own Endless Challenge (SMM2's rules)" : "back to the 100 Mario Challenge");
 }
 
-// The system services report a connection while a mod answers the online calls (runtime/net/online.h).
-bool net_pretend_online(void) { return mod_hundred() || (getenv("RECOMP_PRETEND_ONLINE") && atoi(getenv("RECOMP_PRETEND_ONLINE"))); }
+// The system services report a connection while a mod answers the login (runtime/net/online.h; in hybrid the
+// backend's real connection does).
+bool net_pretend_online(void) { return mod_answers_login() || (getenv("RECOMP_PRETEND_ONLINE") && atoi(getenv("RECOMP_PRETEND_ONLINE"))); }
 
 // ---- the overlay menu's Mods tab (runtime/ui/menu.mm): one switch per SMM1 feature, kept in smm2mods.ini. Only
 // "100 Mario Challenge (SMM1)" so far (on: Course World's Endless Challenge button opens SMM1's 100 Mario Challenge;
