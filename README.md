@@ -64,7 +64,7 @@ itself. Android and iOS / iPadOS have no download: they're built yourself from s
 
 | Ending | Credits |
 |---|---|
-| ![Peach thanks Mario](docs/screenshots/100mario-ending.jpg) | ![Credits: each cleared course as an SMM2 course card with its maker](docs/screenshots/100mario-credits.jpg) |
+| ![Peach thanks Mario](docs/screenshots/100mario-ending.jpg) | ![Credits: each cleared course as an SMM2 course card with its course ID and maker](docs/screenshots/100mario-credits.jpg) |
 
 ## Status
 

@@ -219,7 +219,9 @@ const uint8_t *smw_goal_image(int *w, int *h, int *full, uint64_t *seq) {
 // Fade runs: a scene change asked for keeps the screen black until the new scene is up; otherwise the panel is opening
 // and the black fades away once the panel's own wipe (a staircase, then COURSE CLEAR!) covers the course. Addresses
 // v3.0.3; the research is in research/specs/smw-goal-wipe.md (private).
-#define MARIOW_FADE_EXEC 0x12d28a0     // MariowGoal demo: Fade execute (x0: the demo controller; +0x64 the wait counter)
+#define MARIOW_FADE_ENTER 0x12d2890    // MariowGoal demo: Fade enter (its vtable +0x108)
+#define MARIOW_FADE_EXEC 0x12d28a0     // MariowGoal demo: Fade execute (+0x110; x0: the demo controller, +0x64 its wait
+                                       //    counter)
 #define FADES MAIN_ADDR(0x2c16348)     // *: +0x2C0 > 0 / +0x240 != 0: a fade under way (the Fade waits)
 #define PLAY_INFO MAIN_ADDR(0x2c57d58) // *(*+0x30): +0x10 mode (2: play), +0x14 sub-mode, +0x1C course style (2: SMW)
 #define CAMERAS MAIN_ADDR(0x2c55080)   // *: +0x7D split screen, +0x88 the view (single screen)
@@ -259,16 +261,22 @@ static void mario_on_screen(uint64_t ctl, float *sx, float *sy) {
     *sx = px, *sy = py;
 }
 
+// the Fade state entered: once per goal (the execute below then runs every frame until the scene changes, also after
+// the wipe; and the controller sits at the same address course after course)
+static _Atomic bool g_armed;
+static void mariow_fade_enter(Cpu *c) {
+    g_armed = true;
+    guest_call_orig(c, MAIN_ADDR(MARIOW_FADE_ENTER));
+}
+
 static void mariow_fade_exec(Cpu *c) {
-    static uint64_t done;  // the controller whose wipe has run (the Fade goes on running until the scene changes)
-    static int after;      // frames the Fade has run since the circle shut
+    static int after;  // frames the Fade has run since the circle shut
     uint64_t ctl = c->x[0], s = g64(SCENE_MGR);
-    if (on_heap(ctl) && g32(ctl + 0x64)) done = 0;  // (a goal's fanfare still on: this goal's wipe is to come)
-    if (done != ctl && g_phase == W_IDLE && wipe_on() && fade_goes_on(ctl) && eligible()) {
+    if (g_armed && g_phase == W_IDLE && wipe_on() && fade_goes_on(ctl) && eligible()) {
         float x, y;
         mario_on_screen(ctl, &x, &y);
         wipe_start(x, y);
-        done = ctl, after = 0, g_changing = false;
+        g_armed = false, after = 0, g_changing = false;
     }
     if (wipe_holding()) return;  // (the Fade waits with the circle)
     uint8_t wanted = s ? g8(s + 0x344) : 1;
@@ -284,5 +292,6 @@ static void mariow_fade_exec(Cpu *c) {
 }
 
 __attribute__((constructor)) static void smw_goal_register(void) {
+    hle_override(MAIN_ADDR(MARIOW_FADE_ENTER), mariow_fade_enter, "SMW goal wipe: goal tape fade starts");
     hle_override(MAIN_ADDR(MARIOW_FADE_EXEC), mariow_fade_exec, "SMW goal wipe: goal tape fade");
 }

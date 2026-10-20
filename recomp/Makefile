@@ -279,8 +279,10 @@ $(B)/rt/services/ssl.o: RTFLAGS += $(MBEDTLS_FLAGS)
 $(B)/rt/services/ssl.o: runtime/net/mbedtls_user_config.h
 $(B)/rt/net/token.o: RTFLAGS += $(MBEDTLS_FLAGS)
 
-# a game's own glue (games/<game>/*.c), compiled like the runtime
-$(B)/rt/games/%.o: games/%.c $(RT_HDRS)
+# a game's own glue (games/<game>/*.c), compiled like the runtime; its own headers too (a struct that grows in one
+# must rebuild every file that includes it)
+GAME_HDRS := $(shell find $(GAMEDIR) -name '*.h' -not -path '*/generated/*' 2>/dev/null)
+$(B)/rt/games/%.o: games/%.c $(RT_HDRS) $(GAME_HDRS)
 	@mkdir -p $(dir $@)
 	$(CC) $(RTFLAGS) -c $< -o $@
 

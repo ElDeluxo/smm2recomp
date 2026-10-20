@@ -1480,20 +1480,100 @@ fn start(
     addr: &str,
     opts: ServeOptions,
 ) -> Result<(u16, Vec<std::thread::JoinHandle<()>>), String> {
-    let server = std::sync::Arc::new(tiny_http::Server::http(addr).map_err(|e| e.to_string())?);
-    let port = server.server_addr().to_ip().map_or(0, |a| a.port());
-    let gate = std::sync::Arc::new(limits::Gate::new(opts.limits));
-    let workers = (0..opts.threads.max(1))
+    let server = tiny_http::Server::http(addr).map_err(|e| e.to_string())?;
+    let gate = limits::Gate::new(opts.limits);
+    Ok(listen(server, opts.threads, move |req| {
+        respond(&store, &gate, opts.trust_proxy, req)
+    }))
+}
+
+/// Run `server` on `threads` worker threads that hand each request to `handle`; returns the
+/// bound port and the workers (which run as long as the process does).
+fn listen(
+    server: tiny_http::Server,
+    threads: usize,
+    handle: impl Fn(tiny_http::Request) + Send + Sync + 'static,
+) -> (u16, Vec<std::thread::JoinHandle<()>>) {
+    let threads = threads.max(1);
+    let addr = server.server_addr().to_ip();
+    let listener = std::sync::Arc::new(Listener {
+        addr,
+        threads,
+        current: std::sync::Mutex::new(std::sync::Arc::new(server)),
+    });
+    let handle = std::sync::Arc::new(handle);
+    let workers = (0..threads)
         .map(|_| {
-            let (server, store, gate) = (server.clone(), store.clone(), gate.clone());
+            let (listener, handle) = (listener.clone(), handle.clone());
             std::thread::spawn(move || {
-                while let Ok(req) = server.recv() {
-                    respond(&store, &gate, opts.trust_proxy, req);
+                while let Some(req) = listener.recv() {
+                    handle(req);
                 }
             })
         })
         .collect();
-    Ok((port, workers))
+    (addr.map_or(0, |a| a.port()), workers)
+}
+
+/// The server the workers take requests from. tiny_http stops accepting for good after one
+/// failed accept (iOS reclaims a suspended app's sockets: after hours in the background the
+/// app's own course server answered nothing until a restart), so the first worker to see the
+/// failure listens on the same address again and moves the others onto the new server.
+struct Listener {
+    addr: Option<std::net::SocketAddr>,
+    threads: usize,
+    current: std::sync::Mutex<std::sync::Arc<tiny_http::Server>>,
+}
+
+impl Listener {
+    /// The next request; `None` when the server can't listen again.
+    fn recv(&self) -> Option<tiny_http::Request> {
+        loop {
+            let server = self.current.lock().unwrap().clone();
+            match server.recv() {
+                Ok(req) => return Some(req),
+                Err(e) => {
+                    if !self.relisten(&server, e) {
+                        return None;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Replace `failed` with a new server on its address (unless another worker has); false when
+    /// there is no address to listen on.
+    fn relisten(&self, failed: &std::sync::Arc<tiny_http::Server>, e: std::io::Error) -> bool {
+        let mut current = self.current.lock().unwrap();
+        if !std::sync::Arc::ptr_eq(&current, failed) {
+            return true;
+        }
+        let Some(addr) = self.addr else {
+            eprintln!("[server] accept: {e}; not a TCP address, stopping");
+            return false;
+        };
+        eprintln!("[server] accept on {addr}: {e}; listening again");
+        let mut wait = std::time::Duration::from_millis(100);
+        let server = loop {
+            match tiny_http::Server::http(addr) {
+                Ok(s) => break s,
+                Err(e) => {
+                    eprintln!(
+                        "[server] listen on {addr}: {e}; again in {} ms",
+                        wait.as_millis()
+                    );
+                    std::thread::sleep(wait);
+                    wait = (wait * 2).min(std::time::Duration::from_secs(5));
+                }
+            }
+        };
+        *current = std::sync::Arc::new(server);
+        // the other workers wait in the failed server's queue: one unblock wakes one
+        for _ in 1..self.threads {
+            failed.unblock();
+        }
+        true
+    }
 }
 
 fn respond(store: &Store, gate: &limits::Gate, trust_proxy: bool, mut req: tiny_http::Request) {
@@ -1562,6 +1642,46 @@ mod tests {
         ));
         let _ = fs::remove_dir_all(&d);
         d
+    }
+
+    /// A failed accept (iOS reclaiming a suspended app's listening socket) doesn't stop the
+    /// server: it listens on the same port again.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn listens_again_after_a_failed_accept() {
+        use std::io::{Read, Write};
+        use std::os::fd::AsRawFd;
+        let tcp = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let fd = tcp.as_raw_fd();
+        let server = tiny_http::Server::from_listener(tcp, None).unwrap();
+        let (port, _) = listen(server, 3, |req| {
+            let _ = req.respond(tiny_http::Response::from_string("ok"));
+        });
+        let get = || -> Option<String> {
+            let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).ok()?;
+            s.set_read_timeout(Some(std::time::Duration::from_secs(2)))
+                .ok()?;
+            s.write_all(b"GET / HTTP/1.0\r\n\r\n").ok()?;
+            let mut out = String::new();
+            s.read_to_string(&mut out).ok()?;
+            Some(out)
+        };
+        assert!(get().unwrap().ends_with("ok"));
+        // fail the waiting accept (Linux wakes it for a shut-down listener; on macOS only closing
+        // the fd under it does, and the listener's own close then aborts a debug build)
+        unsafe extern "C" {
+            fn shutdown(fd: i32, how: i32) -> i32;
+        }
+        assert_eq!(unsafe { shutdown(fd, 0) }, 0); // SHUT_RD
+        let t0 = std::time::Instant::now();
+        let mut answered = 0;
+        while answered < 5 && t0.elapsed() < std::time::Duration::from_secs(5) {
+            match get() {
+                Some(r) if r.ends_with("ok") => answered += 1,
+                _ => std::thread::sleep(std::time::Duration::from_millis(20)),
+            }
+        }
+        assert_eq!(answered, 5, "the server listens again on port {port}");
     }
 
     #[test]

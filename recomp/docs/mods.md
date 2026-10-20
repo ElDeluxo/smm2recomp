@@ -461,17 +461,45 @@ The castle's axe, online versus and the Course Maker's test play are left as the
   of its own to show, and calls `smw_goal_poll` every frame. The centre is the body of the player who broke the tape
   (actor x / y at +0x230 / +0x234, mapped through the camera's view rect); the screen centre when that can't be read.
   The circle takes the sound's 0.8 s, then 0.25 s of black.
-- **The timing** comes from one override, MariowGoal's own Fade-state execute thunk (main+0x12d28a0: every goal type
-  has its own, so the axe never comes here). SMM2's Fade waits while a fade is under way or while the demo's counter
-  (fanfare, then 35 frames) runs; then it opens the clear panel, or asks for the scene change. The override starts the
-  circle on the first frame the Fade would go on and skips the Fade until the circle is shut (a skipped frame changes
-  nothing: the Fade only waits). Then the Fade runs: a scene change asked for (the scene manager's byte at +0x344)
+- **The timing** comes from MariowGoal's own Fade-state thunks (enter main+0x12d2890, execute main+0x12d28a0: every
+  goal type has its own, so the axe never comes here). The enter override arms the wipe once per goal (the demo
+  controller sits at the same address course after course, and the Fade can start after the fanfare's counter has run
+  out: the Fade comes on a 480-frame timer, the fanfare plays in real time, so slow frames leave no counter to see).
+  SMM2's Fade waits while a fade is under way or while the demo's counter (fanfare, then 35 frames) runs; then it
+  opens the clear panel, or asks for the scene change. The execute override starts the armed circle on the first
+  frame the Fade would go on and skips the Fade until the circle is shut (a skipped frame changes nothing: the Fade
+  only waits). Then the Fade runs: a scene change asked for (the scene manager's byte at +0x344)
   keeps the black until the new scene exists; otherwise the black fades 54 frames later, when the panel's staircase
   wipe covers the course.
 - Research (private): `research/specs/smw-goal-wipe.md`.
 - Test: `RECOMP_SMW_GOAL_SHOTS=<every>` saves a window shot every `<every>` frames for 4 s from the wipe's start
   (`build/smwgoal_<frame>.png`). The 100 Mario test recipe above with a server holding only `MW_*` test courses
   clears SMW courses unattended.
+
+## Muncher hit box (SMM1) (`games/smm2/mods/muncher_hitbox.c`)
+
+Munchers hurt the player the way SMM1's did. In SMM2 a one-tile gap between two Muncher columns can only be fallen or
+jumped through dead centre; with the mod Mario has SMM1's room of about 2 px either side. Off by default: the Mods
+tab's "Muncher hit box (SMM1)" switch, `muncher_smm1_hitbox=0/1` in `smm2mods.ini`, or `RECOMP_MUNCHER_SMM1_HITBOX=0/1`
+(wins over the ini). It applies from the next frame.
+
+- **SMM2** gives a Muncher one body, a 16 x 16 box that is also a spike: any side the player touches hurts. The
+  player's wall sensors reach 7.9 px either side of him, so in a 16 px gap more than 0.1 px off centre is a touch
+  [obs: in a test course Mario 2.2 px off centre is pushed to x = gap centre - 0.1 and dies].
+- **SMM1** (Block.rpx v208) builds the Muncher from two bodies: the same 16 x 16 box, harmless, for everything else,
+  and a spike box 2 px smaller on every side (12 x 12) for the player. Enemies' sensors skip the spike box. The player
+  meets the spike 2 px later from any side, so for him the gap is 20 px wide and he can be 2.1 px off centre.
+- **The mod** gives the player SMM1's box. While a player's per-frame update runs (main+0x158a590, called through the
+  player's vtable), every live Muncher's body is shrunk to the inner box: its edges and its world bounds (the player's
+  queries go by both) are scaled by 12/16 about the box's centre, so a Big Muncher's loses 4 px a side. They are put
+  back byte for byte when the update returns. Enemies, items and everything else still meet the 16 x 16 box. Munchers
+  are found when they are built (main+0x107d340, the build function both Muncher profiles point at) and dropped when
+  they are destroyed (main+0x107ed30 / 0x107ed80).
+- **Tested** on macOS with a title-screen test course (two Muncher columns, a one-tile gap, small Mario riding donut
+  blocks straight down at offsets -2.2, -0.7, +0.8, +2.3, +3.8 px from the gap's centre): off, he dies at every offset;
+  on, he reaches the floor at -0.7 and +0.8 and dies at the others, pushed out 2 px later than without the mod. Big
+  Munchers and enemies on Munchers weren't run.
+- Research (private): `research/specs/objects/57-muncher.md` (section "Hit box").
 
 ## The game's own network stack (backend local-nex): groundwork for Nextendo and a local NEX server
 
