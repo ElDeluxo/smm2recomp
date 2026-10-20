@@ -11,7 +11,7 @@
 //   nextendo   Nextendo Network (runtime/net/nextendo.h): the game's own NEX client against Nextendo's SMM2 server.
 //              Needs a signed-in Nextendo account; without one it is logged and the backend is "ours". The game's
 //              hosts resolve to Nextendo's game server (nncs2-lp1.n.n.srv.nintendo.net: their NAT check), TCP
-//              reaches those two only, UDP any address (PIA's peers), and the game server's TLS certificate is
+//              reaches those two only (not net_hosts= targets), UDP any address (PIA's peers), and the game server's TLS certificate is
 //              pinned (its public key's SHA-256). The account's PID, user name and an ID token carrying the
 //              account's game token come from acc (services/acc.c, runtime/net/token.c)
 //
@@ -60,8 +60,9 @@ bool net_backend_select(NetBackend b);  // false: not available
 bool net_resolve(const char *name, uint32_t *ip);
 // The last name resolved to ip (TLS: the game connects by address and names the address as the host); false = none
 bool net_name_for_ip(uint32_t ip, char *out, size_t cap);
-// May a game socket connect / send to ip (host order)? TCP (and anything not UDP): the redirect table's targets
-// (local-nex: and loopback). UDP: the same with local-nex; any address with nextendo (PIA's peers).
+// May a game socket connect / send to ip (host order)? TCP (and anything not UDP): local-nex: loopback and the
+// redirect table's targets; nextendo: Nextendo's game server and NAT check only. UDP: the same with local-nex; any
+// address with nextendo (PIA's peers).
 bool net_dest_allowed(uint32_t ip);
 bool net_dest_allowed_udp(uint32_t ip);
 bool net_ip_is_local(uint32_t ip);     // loopback, private, link-local, CGNAT

@@ -197,8 +197,8 @@ int net_backend_options(const NetBackendOption **out) {
       "The game's own online code talks to a NEX test server on this computer or your local network "                \
       "(tools/nex_test_server). For development; Course World needs our server.", true},                             \
      {NET_BACKEND_NEXTENDO, "nextendo", "Nextendo Network",                                                           \
-      "Nextendo Network: Course World and online play on the community servers. Needs a Nextendo account (sign in "  \
-      "below).", nextendo_available}}
+      "Course World and online play on the community servers. Needs a Nextendo account (sign in below).",           \
+      nextendo_available}}
     static const NetBackendOption signed_out[] = OPTS(false), signed_in[] = OPTS(true);
 #undef OPTS
     *out = nextendo_signed_in() ? signed_in : signed_out;
@@ -259,10 +259,11 @@ bool net_name_for_ip(uint32_t ip, char *out, size_t cap) {
     return found;
 }
 
-// (nextendo: the table's targets are Nextendo's game server, their NAT check and any local net_hosts= entries)
+// (nextendo: TCP to Nextendo's game server and their NAT check only, not to net_hosts= targets)
 bool net_dest_allowed(uint32_t ip) {
     init();
     if (backend_eff == NET_BACKEND_OURS) return false;
+    if (backend_eff == NET_BACKEND_NEXTENDO) return ip == nx_server || ip == nx_nat;
     if (backend_eff == NET_BACKEND_LOCAL_NEX && (ip >> 24) == 127) return true;
     for (int i = 0; i < nrules; i++)
         if (rules[i].ip == ip) return true;

@@ -459,7 +459,7 @@ while an account is signed in.
 
 | Piece | Where | What |
 |---|---|---|
-| Configuration | `runtime/net/netcfg.c` | backend, **deny-by-default redirect table** (`net_hosts=` first; with `local-nex`: `*.nintendo.net`, `*.nintendo.com`, `*.nintendowifi.net`, `*.nintendo.co.jp`, `*.nintendoswitch.cn` → the test server; with `nextendo`: `nncs2-lp1.n.n.srv.nintendo.net` → their NAT check, the same five domains → their game server; every other name: no such name), destination policy (local-nex: loopback and the table's targets; nextendo: TCP to the table's targets, UDP anywhere for PIA's peers), TLS trust |
+| Configuration | `runtime/net/netcfg.c` | backend, **deny-by-default redirect table** (`net_hosts=` first; with `local-nex`: `*.nintendo.net`, `*.nintendo.com`, `*.nintendowifi.net`, `*.nintendo.co.jp`, `*.nintendoswitch.cn` → the test server; with `nextendo`: `nncs2-lp1.n.n.srv.nintendo.net` → their NAT check, the same five domains → their game server; every other name: no such name), destination policy (local-nex: loopback and the table's targets; nextendo: TCP to their game server and NAT check only, UDP anywhere for PIA's peers), TLS trust |
 | Sockets | `runtime/services/bsd_host.c` (bsd.c dispatches) | `bsd:u` / `bsd:s` on host sockets (POSIX and Winsock, `runtime/net/hostsock.h`): TCP and UDP, non-blocking I/O, poll / select, socket options, accept / listen, FreeBSD errno numbers. Blocking calls wait in 50 ms slices with the guest thread's core released (`kernel_host_wait_begin`). A UDP port the game binds that is taken on the host gets another host port, and the game keeps seeing its own, the same pair again on a rebind (two instances on one machine). A UDP socket the game bound and closes is **parked** for 10 s and handed back when the game binds that port again (PIA closes and rebinds after its NAT check; the NAT mapping must survive). Connects / sends elsewhere: `ENETUNREACH`, logged (UDP: `net_dest_allowed_udp`). With nextendo a bind to INADDR_ANY stays INADDR_ANY. The virtual LAN keeps its own path |
 | Names | `runtime/services/names.c` | `nsd:u` / `nsd:a` (`%` → `lp1`: the game asks for `g22306d00-%.s.n.srv.nintendo.net`) and `sfdnsres` (GetAddrInfo(WithOptions), GetHostByName(WithOptions)) from the redirect table only; the host's DNS is never asked |
 | TLS | `runtime/services/ssl.c` + `third_party/mbedtls` (3.6.7 LTS, Apache-2.0) | `ssl`: contexts, connections over the game's socket, handshake (TLS 1.2), read / write / peek / pending / poll, ALPN (http/1.1 only), server certificate out. The **runtime's** trust policy decides (the game's own CAs and client certificates are ignored); when the game names an address as the host, the name last resolved to it is used for SNI and the check ("rebuilt"). With nextendo the chain is not checked (their certificate is self-signed) but the certificate's public key must match the pin (`ssl_pin_check`), else the connection is refused before the game sends anything |
@@ -515,7 +515,7 @@ then takes effect at the next start.
 - **Names and addresses** (`netcfg.c`): `nncs2-lp1.n.n.srv.nintendo.net` → their NAT check `164.132.111.120`; every
   other name under the five Nintendo domains → their game server `51.178.29.194` (the game's NEX host is
   `g22306d00-lp1.s.n.srv.nintendo.net`). Only these built-in targets (and `nextendo_server=` / `nextendo_nat=`) may be
-  public; `net_hosts=` stays local-only. TCP reaches those two addresses only; UDP any address (PIA peer to peer).
+  public; `net_hosts=` stays local-only. TCP reaches those two addresses only (not `net_hosts=` targets); UDP any address (PIA peer to peer).
 - **TLS** (`ssl.c`): their game server's certificate is self-signed (`CN=nintendo-private-server`), so it is pinned:
   after the handshake the SHA-256 of its SubjectPublicKeyInfo must be
   `d2e7388e48ee30cfbecfbeb522874f2cc6b85f7aa1105c57669f3c2aa85fb30e` (`nextendo_tls_pin=` replaces it). A mismatch
@@ -523,7 +523,8 @@ then takes effect at the next start.
   refused" and fails the handshake; there is no fallback to "any".
 - **Account** (`acc.c`): `GetAccountId` is the Nextendo PID (the game logs in with it as its NEX user name), the
   profile's nickname is the Nextendo user name (cut to 32 bytes on a character boundary). `LoadIdTokenCache` first
-  makes sure a game token is ready (`nextendo_prepare_game_login`, at most 10 s; cached for 24 h).
+  makes sure a game token is ready (`nextendo_prepare_game_login`, at most 10 s with the guest core free; cached
+  for 24 h); without one the game gets no ID token (size 0) and shows its own login error.
 - **ID token** (`token.c`): an RS256 JWT shaped like a network service account's (`kid` `nextendo-baas-key-1`, the
   BaaS issuer and audience, `sub` = the PID, a kept device id in `di` / `bs:did`, `tv` = the game version) whose
   `nnex` claim carries the game token; that is what their server checks. The RSA-2048 key is made once and kept in

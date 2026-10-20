@@ -121,8 +121,8 @@ static void nextendo_routes(void) {
     const NetBackendOption *o;
     int n = net_backend_options(&o);
     CHECK(n == 3 && o[2].id == NET_BACKEND_NEXTENDO && o[2].available, "nextendo not available when signed in");
-    CHECK(!strcmp(o[2].desc, "Nextendo Network: Course World and online play on the community servers. Needs a Nextendo "
-                             "account (sign in below)."), "desc %s", o[2].desc);
+    CHECK(!strcmp(o[2].desc, "Course World and online play on the community servers. Needs a Nextendo account (sign in "
+                             "below)."), "desc %s", o[2].desc);
 }
 
 static void nextendo_hosts_local_only(void) {  // net_hosts= stays local-only; it comes first
@@ -133,6 +133,8 @@ static void nextendo_hosts_local_only(void) {  // net_hosts= stays local-only; i
     CHECK(resolves("dev.test", 0xc0a80105), "dev.test");
     CHECK(resolves("g22306d00-lp1.s.n.srv.nintendo.net", 0x0a000007), "net_hosts is not first");
     CHECK(resolves("nncs1-lp1.n.n.srv.nintendo.net", SERVER), "the built-in targets after it");
+    CHECK(!net_dest_allowed(0xc0a80105) && !net_dest_allowed(0x0a000007), "TCP to a net_hosts target allowed");
+    CHECK(net_dest_allowed(SERVER) && net_dest_allowed(NAT), "TCP to Nextendo refused");
 }
 
 static void nextendo_dest(void) {

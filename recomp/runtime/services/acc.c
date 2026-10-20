@@ -19,6 +19,14 @@ static void write_uid_list(IpcReq *req) {
     if (c->size >= 16) memcpy((void *)(uintptr_t)c->addr, g_user_id, 16);
 }
 
+// the game token over the network (at most 10 s): the calling thread's core is free meanwhile
+static bool prepare_nextendo(void) {
+    kernel_host_wait_begin();
+    bool ok = nextendo_prepare_game_login(10000);
+    kernel_host_wait_end();
+    return ok;
+}
+
 // the nickname field holds 32 bytes of UTF-8 and a NUL: cut before a character that does not fit whole
 static void put_nickname(char *dst, const char *name) {
     size_t n = strlen(name);
@@ -55,7 +63,9 @@ static void profile(Service *s, IpcReq *req, IpcResp *resp) {
 // game's own network stack on (backend local-nex) the account ID and the token are the local account's
 // (runtime/net/token.h): a JWT the local NEX test server can check. With backend nextendo they are the Nextendo
 // account's PID and an ID token carrying its game token; loading the token first makes sure the game token is fresh
-// (nextendo_prepare_game_login: the network, at most 10 s; the game asks once per login).
+// (nextendo_prepare_game_login: the network, at most 10 s, with the core free; the game asks once per login). With
+// nextendo and no ID token (offline, the sign-in has ended) the game gets none (size 0) and shows its own login
+// error.
 static void async_context(Service *s, IpcReq *req, IpcResp *resp) {
     (void)s;
     switch (req->cmd) {
@@ -82,10 +92,10 @@ static bool online_manager(IpcReq *req, IpcResp *resp) {
         static char jwt[2048];
         const char *t = token;
         uint32_t n = sizeof token - 1;
-        if (net_backend() == NET_BACKEND_NEXTENDO && !nextendo_prepare_game_login(10000))
-            LOG("[acc] Nextendo: no game token (offline, or the sign-in has ended)\n");
+        bool nx = net_backend() == NET_BACKEND_NEXTENDO;
+        if (nx && !prepare_nextendo()) LOG("[acc] Nextendo: no game token (offline, or the sign-in has ended)\n");
         if (net_real_sockets() && (n = (uint32_t)net_id_token(jwt, sizeof jwt))) t = jwt;
-        else n = sizeof token - 1;
+        else n = nx ? 0 : sizeof token - 1;  // (nextendo: no placeholder; the game reports its login error)
         if (b && b->size) {
             if (n > b->size) LOG("[acc] the ID token (%u bytes) does not fit the game's buffer (%llu)\n", n, (unsigned long long)b->size), n = (uint32_t)b->size;
             memset((void *)(uintptr_t)b->addr, 0, b->size);
@@ -119,7 +129,7 @@ static void manager(Service *s, IpcReq *req, IpcResp *resp) {
         uint64_t id = 0x1234567890abcdefull;
         if (net_backend() == NET_BACKEND_NEXTENDO) {
             static bool asked;  // (asked before the ID token: one fetch, not one per call when offline)
-            if (!(id = nextendo_pid()) && !asked) asked = true, nextendo_prepare_game_login(10000), id = nextendo_pid();
+            if (!(id = nextendo_pid()) && !asked) asked = true, prepare_nextendo(), id = nextendo_pid();
         } else if (net_real_sockets()) {
             id = net_nsa_id();
         }
