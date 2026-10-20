@@ -511,3 +511,50 @@ Findings from reading the code (the planning pass):
   ID was listed earlier.
 - **Unanswered wrappers reach Nextendo with mixed IDs** (Ninji, Super Worlds, follows, notifications).
 - **Split identity.** Name, Mii and PID are Nextendo's, while uploads and likes go to our server's account.
+
+### Task 6b: Kernel: a timed-out condition-variable wait returns without the mutex (Horizon semantics)
+
+Root cause of the Co-op search freeze. The full report is in the SDD workspace (`coop-freeze-report.md`); the
+summary follows.
+- `svc_wait_process_wide_key` (`recomp/runtime/kernel.c:454-461`) takes the mutex back after a timeout.
+- Horizon returns 0xEA01 **without** the mutex, and the game's SDK (`f_700432f240`) then locks it itself.
+- With our kernel the thread already owns it, so `svc_arbitrate_lock` (`kernel.c:421`) waits on itself forever.
+- Matchmaking's workers poll with 5 ms timed waits, so they deadlock on the first timeout, and the main thread
+  freezes behind them during the error teardown.
+- A latent race in `block_current` (`kernel.c:411-415`): a wake that lands as the deadline passes is overwritten
+  with `R_TIMEOUT`.
+
+**Files:**
+- Modify: `recomp/runtime/kernel.c`
+- Create: `recomp/tools/test_kernel_condvar.c`, `recomp/tools/test_kernel_condvar.sh` (only if `kernel.c` can be
+  linked into a small harness without the whole runtime. If not, say why in the report and rely on Step 4.)
+- Modify: `recomp/docs/mods.md` (the Network Play notes: the freeze and its fix)
+
+**Interfaces:** none new.
+
+- **`svc_wait_process_wide_key`:** only `R_OK` returns holding the mutex. On a timeout or cancel it returns the
+  error without reacquiring. Delete the reacquire block and fix the comment above it.
+- **`block_current`:** after `kwait`, `if (t->wait_kind == WAIT_NONE) break;` comes before the timeout check, so the
+  waker's result (R_OK, perhaps with the mutex) wins.
+- **`svc_arbitrate_lock`:** if `owner == t_cur->handle`, log once per address
+  `"[kernel] guest locks a mutex it already owns (addr %llx lr %llx)"`. Logging only; behaviour is unchanged.
+
+- [ ] **Step 1: a failing harness**, if it's feasible. One thread locks the mutex, then waits on the condition
+  variable with a 1 ms timeout. It expects 0xEA01 and a mutex word ≠ its own handle, then locks again without
+  blocking (a 1 s watchdog fails the test).
+- [ ] **Step 2: implement.**
+- [ ] **Step 3: run the harness** (if one exists), then `scripts/check.sh` and `make GAME=smm2 -j10 all`.
+- [ ] **Step 4: offline Co-op.** Use the freeze report's offline command (local-nex, Course World overrides off,
+  muted and hidden). Pass:
+  - `[metal] t=` lines keep coming after `enl cSilentError`;
+  - the game returns to the Network Play menu (shot);
+  - the test server keeps getting PINGs;
+  - no `already owns` log line.
+- [ ] **Step 5: regressions.**
+  - Input replays still in sync: `tools/replay_sync.py` as PROGRESS.md / recomp docs describe (the 31-session
+    suite, or as many sessions as run in under an hour), with all updates identical.
+  - One normal `ours` boot to Course World, with one course played.
+  - The mods.md 100 Mario "Test recipe" with at least one clear.
+- [ ] **Step 6: live, once** (only when no other `smm2recomp` is running with `RECOMP_NET_BACKEND=nextendo`). Co-op
+  gets past the NAT check stage without the window freezing. Record what the game shows next.
+- [ ] **Step 7: commit** `recomp kernel: a timed-out condition-variable wait returns without the mutex (Horizon); fixes the Co-op search freeze`.
