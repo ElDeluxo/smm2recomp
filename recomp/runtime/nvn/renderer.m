@@ -56,7 +56,7 @@ typedef struct {
 
 typedef struct { uint64_t addr, size; } Range;
 
-static struct {
+typedef struct {
     RtState rt;
     bool rt_dirty;
     NvnProgram *program;
@@ -81,7 +81,8 @@ static struct {
     bool render_off;  // SetRenderEnable(false) / a failed SetRenderEnableConditional: draws and clears are skipped
     uint32_t restart_index;
     uint64_t copy_row_stride, copy_image_stride;
-} st;
+} ExecState;
+static ExecState st;
 
 extern uint32_t g_window_origin_lower_left_hack;
 uint32_t nvn_window_origin(void);
@@ -406,23 +407,29 @@ static id<MTLTexture> view_cached(id<MTLTexture> base, uint64_t params, id<MTLTe
     return v;
 }
 
+// A view's pixel format over a texture of format base (view_texture's rule; pass_layout predicts with it).
+static MTLPixelFormat view_pixel_format(MTLPixelFormat base, const NvnTextureView *v, bool log) {
+    MTLPixelFormat pf = (v->setmask & 4) ? renderer_pixel_format(v->format) : base;
+    // Metal can't view a block-compressed texture as an uncompressed format or the other way round (it asserts):
+    // such a view keeps the texture's own format. (Seen: the Course World top screen's Maker panel, an RGBA8 sRGB
+    // texture viewed as ASTC 4x4.)
+    bool pf_bc = pf >= MTLPixelFormatBC1_RGBA && pf <= 235, base_bc = base >= MTLPixelFormatBC1_RGBA && base <= 235;
+    // (between two compressed formats only an sRGB / linear twin works: BC n and n_sRGB, ASTC LDR and sRGB of one size)
+    #define BLOCK_FAMILY(f) ((f) >= 204 && (f) <= 217 ? 1000 + (int)(f) - 204 : (f) >= 186 && (f) <= 199 ? 1000 + (int)(f) - 186 \
+                             : (f) >= 130 && (f) <= 143 ? 2000 + ((int)(f) - 130) / 2 : (int)(f))
+    if (pf_bc != base_bc || (pf_bc && pf != base && BLOCK_FAMILY(pf) != BLOCK_FAMILY(base))) {
+        static int nmix;
+        if (log && nmix++ < 5) LOG("[view] compressed / uncompressed view %lu -> %lu kept as %lu\n", (unsigned long)base, (unsigned long)pf, (unsigned long)base);
+        pf = base;
+    }
+    return pf;
+}
+
 static id<MTLTexture> view_texture(NvnTexture *t, const NvnTextureView *v, bool has_view, bool render,
                                    id<MTLBlitCommandEncoder> blit) {
     id<MTLTexture> base = renderer_texture(t, blit, render);
     if (!has_view || !v->setmask) return base;
-    MTLPixelFormat pf = (v->setmask & 4) ? renderer_pixel_format(v->format) : base.pixelFormat;
-    // Metal can't view a block-compressed texture as an uncompressed format or the other way round (it asserts):
-    // such a view keeps the texture's own format. (Seen: the Course World top screen's Maker panel, an RGBA8 sRGB
-    // texture viewed as ASTC 4x4.)
-    bool pf_bc = pf >= MTLPixelFormatBC1_RGBA && pf <= 235, base_bc = base.pixelFormat >= MTLPixelFormatBC1_RGBA && base.pixelFormat <= 235;
-    // (between two compressed formats only an sRGB / linear twin works: BC n and n_sRGB, ASTC LDR and sRGB of one size)
-    #define BLOCK_FAMILY(f) ((f) >= 204 && (f) <= 217 ? 1000 + (int)(f) - 204 : (f) >= 186 && (f) <= 199 ? 1000 + (int)(f) - 186 \
-                             : (f) >= 130 && (f) <= 143 ? 2000 + ((int)(f) - 130) / 2 : (int)(f))
-    if (pf_bc != base_bc || (pf_bc && pf != base.pixelFormat && BLOCK_FAMILY(pf) != BLOCK_FAMILY(base.pixelFormat))) {
-        static int nmix;
-        if (nmix++ < 5) LOG("[view] compressed / uncompressed view %lu -> %lu kept as %lu\n", (unsigned long)base.pixelFormat, (unsigned long)pf, (unsigned long)base.pixelFormat);
-        pf = base.pixelFormat;
-    }
+    MTLPixelFormat pf = view_pixel_format(base.pixelFormat, v, true);
     NSUInteger lv0 = (v->setmask & 1) ? v->base_level : 0;
     NSUInteger nlv = (v->setmask & 1) && v->num_levels ? v->num_levels : base.mipmapLevelCount - lv0;
     NSUInteger ly0 = (v->setmask & 2) ? v->min_layer : 0;
@@ -459,12 +466,12 @@ static __unsafe_unretained id last_bias_enc;  // encoder the depth bias was last
 
 // The iOS Simulator's Metal allows 32 bytes of colour targets per sample (devices: 64): there, targets past that
 // budget are left out of the pass and the pipelines (their writes are lost: the Simulator shows a little less).
-static bool rt_dropped(int index) {
+static bool rt_dropped_in(const ExecState *s, int index) {
 #if TARGET_OS_SIMULATOR
     uint32_t bytes = 0;
-    for (int i = 0; i <= index && i < st.rt.ncolor; i++) {
-        if (!st.rt.color[i]) continue;
-        MTLPixelFormat pf = renderer_pixel_format(st.rt.color[i]->format);
+    for (int i = 0; i <= index && i < s->rt.ncolor; i++) {
+        if (!s->rt.color[i]) continue;
+        MTLPixelFormat pf = renderer_pixel_format(s->rt.color[i]->format);
         uint32_t b = pf == MTLPixelFormatRGBA32Float || pf == MTLPixelFormatRGBA32Uint || pf == MTLPixelFormatRGBA32Sint ? 16
                    : pf == MTLPixelFormatRGBA16Float || pf == MTLPixelFormatRG32Float || pf == MTLPixelFormatRGBA16Unorm ||
                      pf == MTLPixelFormatRGBA16Uint || pf == MTLPixelFormatRGBA16Sint || pf == MTLPixelFormatRG32Uint ||
@@ -479,10 +486,11 @@ static bool rt_dropped(int index) {
         return true;
     }
 #else
-    (void)index;
+    (void)s, (void)index;
 #endif
     return false;
 }
+static bool rt_dropped(int index) { return rt_dropped_in(&st, index); }
 
 static void begin_pass(void) {
     if (enc && !st.rt_dirty) return;
@@ -608,16 +616,52 @@ static id<MTLLibrary> clear_lib(int index) {
     return libs[index];
 }
 
-static void attachment_formats(MTLRenderPipelineDescriptor *pd) {
-    for (int i = 0; i < st.rt.ncolor; i++)
-        if (st.rt.color[i] && !rt_dropped(i)) pd.colorAttachments[i].pixelFormat = view_texture(st.rt.color[i], &st.rt.cview[i], st.rt.has_cview[i], true, nil).pixelFormat;
-    if (st.rt.depth) {
-        MTLPixelFormat pf = renderer_pixel_format(st.rt.depth->format);
-        if (renderer_format_is_depth(st.rt.depth->format) && st.rt.depth->format != 0x31) pd.depthAttachmentPixelFormat = pf;
-        if (renderer_format_has_stencil(st.rt.depth->format)) pd.stencilAttachmentPixelFormat = pf;
+// The attachments' formats a pipeline is built for (a dropped target: Invalid).
+typedef struct { MTLPixelFormat color[8], depth, stencil; uint8_t dropped; NSUInteger samples; } PassLayout;
+
+static void layout_depth_samples(const ExecState *s, PassLayout *out) {
+    if (s->rt.depth) {
+        MTLPixelFormat pf = renderer_pixel_format(s->rt.depth->format);
+        if (renderer_format_is_depth(s->rt.depth->format) && s->rt.depth->format != 0x31) out->depth = pf;
+        if (renderer_format_has_stencil(s->rt.depth->format)) out->stencil = pf;
     }
-    for (int i = 0; i < st.rt.ncolor; i++)
-        if (st.rt.color[i] && st.rt.color[i]->samples > 1) pd.rasterSampleCount = st.rt.color[i]->samples;
+    out->samples = 1;
+    for (int i = 0; i < s->rt.ncolor && i < 8; i++)
+        if (s->rt.color[i] && s->rt.color[i]->samples > 1) out->samples = s->rt.color[i]->samples;
+}
+// The current state's, from its targets' textures (made if need be: as begin_pass does)
+static void pass_layout_actual(PassLayout *out) {
+    memset(out, 0, sizeof *out);
+    for (int i = 0; i < st.rt.ncolor && i < 8; i++) {
+        if (!st.rt.color[i]) continue;
+        if (rt_dropped(i)) { out->dropped |= 1u << i; continue; }
+        out->color[i] = view_texture(st.rt.color[i], &st.rt.cview[i], st.rt.has_cview[i], true, nil).pixelFormat;
+    }
+    layout_depth_samples(&st, out);
+}
+// The same, predicted for any state: no texture made, no pass begun (the prefetch scan's; a texture not made yet is
+// predicted from its NVN format)
+static void pass_layout(const ExecState *s, PassLayout *out) {
+    memset(out, 0, sizeof *out);
+    for (int i = 0; i < s->rt.ncolor && i < 8; i++) {
+        NvnTexture *t = s->rt.color[i];
+        if (!t) continue;
+        if (rt_dropped_in(s, i)) { out->dropped |= 1u << i; continue; }
+        MTLPixelFormat base = renderer_texture_pixel_format(t);
+        out->color[i] = s->rt.has_cview[i] && s->rt.cview[i].setmask ? view_pixel_format(base, &s->rt.cview[i], false) : base;
+    }
+    layout_depth_samples(s, out);
+}
+static void layout_apply(MTLRenderPipelineDescriptor *pd, const PassLayout *pl) {
+    for (int i = 0; i < 8; i++) if (pl->color[i]) pd.colorAttachments[i].pixelFormat = pl->color[i];
+    if (pl->depth) pd.depthAttachmentPixelFormat = pl->depth;
+    if (pl->stencil) pd.stencilAttachmentPixelFormat = pl->stencil;
+    if (pl->samples > 1) pd.rasterSampleCount = pl->samples;
+}
+static void attachment_formats(MTLRenderPipelineDescriptor *pd) {
+    PassLayout pl;
+    pass_layout_actual(&pl);
+    layout_apply(pd, &pl);
 }
 
 static void clear(int index, int kind, const void *color, uint32_t mask, bool depth, float dval, bool stencil,
@@ -2148,26 +2192,112 @@ static uint64_t hmix(uint64_t h, const void *p, size_t n) {
 #define PIPE_TAB 8192
 static struct { uint64_t key; void *pipe; } pipe_tab[PIPE_TAB];
 
-static uint64_t pipeline_state_hash(Prog *pr) {
+static uint64_t pipeline_state_hash(const ExecState *s, Prog *pr) {
     uint64_t h = 0xcbf29ce484222325ull;
     h = hmix(h, &pr, sizeof pr);
-    h = hmix(h, &st.rt.ncolor, sizeof st.rt.ncolor);
-    for (int i = 0; i < st.rt.ncolor && i < 8; i++) {
-        NvnTexture *t = st.rt.color[i];
-        uint32_t v[4] = {t ? t->format : 0, t ? t->samples : 0, st.rt.has_cview[i], st.rt.has_cview[i] ? st.rt.cview[i].format | (st.rt.cview[i].setmask << 16) : 0};
+    h = hmix(h, &s->rt.ncolor, sizeof s->rt.ncolor);
+    for (int i = 0; i < s->rt.ncolor && i < 8; i++) {
+        NvnTexture *t = s->rt.color[i];
+        uint32_t v[4] = {t ? t->format : 0, t ? t->samples : 0, s->rt.has_cview[i], s->rt.has_cview[i] ? s->rt.cview[i].format | (s->rt.cview[i].setmask << 16) : 0};
         h = hmix(h, v, sizeof v);
-        h = hmix(h, st.blend[i], 8);
+        h = hmix(h, s->blend[i], 8);
     }
-    uint32_t dfmt = st.rt.depth ? st.rt.depth->format : 0;
+    uint32_t dfmt = s->rt.depth ? s->rt.depth->format : 0;
     h = hmix(h, &dfmt, 4);
-    h = hmix(h, &st.nattrib, sizeof st.nattrib);
-    h = hmix(h, st.attrib, sizeof st.attrib[0] * (size_t)(st.nattrib < 32 ? st.nattrib : 32));
-    h = hmix(h, &st.nstream, sizeof st.nstream);
-    h = hmix(h, st.stream, sizeof st.stream[0] * (size_t)(st.nstream < 16 ? st.nstream : 16));
-    h = hmix(h, &st.channel_mask, sizeof st.channel_mask);
-    h = hmix(h, &st.color_state[0], sizeof st.color_state[0]);
-    h = hmix(h, &st.ms[0xC], 1);
+    h = hmix(h, &s->nattrib, sizeof s->nattrib);
+    h = hmix(h, s->attrib, sizeof s->attrib[0] * (size_t)(s->nattrib < 32 ? s->nattrib : 32));
+    h = hmix(h, &s->nstream, sizeof s->nstream);
+    h = hmix(h, s->stream, sizeof s->stream[0] * (size_t)(s->nstream < 16 ? s->nstream : 16));
+    h = hmix(h, &s->channel_mask, sizeof s->channel_mask);
+    h = hmix(h, &s->color_state[0], sizeof s->color_state[0]);
+    h = hmix(h, &s->ms[0xC], 1);
     return h ? h : 1;
+}
+
+// The program keys a draw in state s compiles its shaders with (the mirror flip is the draw's own)
+static void program_keys(const ExecState *s, ShaderKey *vkey, ShaderKey *fkey) {
+    memset(vkey, 0, sizeof *vkey);
+    memset(fkey, 0, sizeof *fkey);
+    vkey->flip_y = fkey->flip_y = nvn_window_origin() == 0;
+    vkey->depth_minus_one = nvn_depth_mode() == 0;
+    for (int i = 0; i < s->nattrib; i++) vkey->attr_kind[i] = (uint8_t)attr_kind(s->attrib[i] & 0xFF);
+    for (int i = 0; i < s->rt.ncolor; i++) if (s->rt.color[i]) fkey->rt_kind[i] = (uint8_t)rt_kind(s->rt.color[i]->format);
+}
+
+// A draw's pipeline in state s with pass layout pl: everything but the shader functions (set from pr by the caller),
+// and its key in the pipeline cache (*key).
+static MTLRenderPipelineDescriptor *render_pipe_desc(const ExecState *s, const PassLayout *pl, Prog *pr, NSString **key) {
+    MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
+    layout_apply(pd, pl);
+    uint32_t used_streams = 0;
+    MTLVertexDescriptor *vd = [MTLVertexDescriptor vertexDescriptor];
+    for (int i = 0; i < 32; i++) {
+        if (!(pr->vi->attr_mask & (1u << i))) continue;
+        uint32_t a = i < s->nattrib ? s->attrib[i] : 0x2E;
+        uint32_t fmt = a & 0xFF, stream = (a >> 8) & 0x1F, off = a >> 13;
+        if (i >= s->nattrib || fmt == 0) {
+            // unbound attribute: read zeros from a constant stream
+            vd.attributes[i].format = MTLVertexFormatFloat4;
+            vd.attributes[i].offset = 0;
+            vd.attributes[i].bufferIndex = 30;
+            vd.layouts[30].stepFunction = MTLVertexStepFunctionConstant;
+            vd.layouts[30].stepRate = 0;
+            vd.layouts[30].stride = 16;
+            used_streams |= 1u << 31;
+            continue;
+        }
+        vd.attributes[i].format = vertex_format(fmt);
+        vd.attributes[i].offset = off;
+        vd.attributes[i].bufferIndex = 18 + stream;
+        used_streams |= 1u << stream;
+        (void)is_int_format;
+    }
+    for (int k = 0; k < 12; k++) {
+        if (!(used_streams & (1u << k))) continue;
+        uint32_t stride = k < s->nstream ? s->stream[k][0] : 0, div = k < s->nstream ? s->stream[k][1] : 0;
+        if (stride == 0) { vd.layouts[18 + k].stepFunction = MTLVertexStepFunctionConstant; vd.layouts[18 + k].stepRate = 0; vd.layouts[18 + k].stride = 16; }
+        else {
+            vd.layouts[18 + k].stride = (stride + 3) & ~3u;
+            if (div || pr->gi) { vd.layouts[18 + k].stepFunction = MTLVertexStepFunctionPerInstance; vd.layouts[18 + k].stepRate = div ? div : 1; }
+        }
+    }
+    pd.vertexDescriptor = vd;
+    for (int i = 0; i < s->rt.ncolor && i < 8; i++) {
+        if (!s->rt.color[i] || (pl->dropped >> i & 1)) continue;
+        MTLRenderPipelineColorAttachmentDescriptor *ca = pd.colorAttachments[i];
+        uint32_t m = (s->channel_mask >> (i * 4)) & 0xF;
+        ca.writeMask = (m & 1 ? MTLColorWriteMaskRed : 0) | (m & 2 ? MTLColorWriteMaskGreen : 0) |
+                       (m & 4 ? MTLColorWriteMaskBlue : 0) | (m & 8 ? MTLColorWriteMaskAlpha : 0);
+        bool blend_on = (s->color_state[0] >> i) & 1;
+        if (blend_on && !rt_kind(s->rt.color[i]->format)) {
+            const uint8_t *b = s->blend[i];
+            ca.blendingEnabled = YES;
+            ca.sourceRGBBlendFactor = blend_factor(b[1]);
+            ca.destinationRGBBlendFactor = blend_factor(b[2]);
+            ca.sourceAlphaBlendFactor = blend_factor(b[3]);
+            ca.destinationAlphaBlendFactor = blend_factor(b[4]);
+            ca.rgbBlendOperation = blend_op(b[5]);
+            ca.alphaBlendOperation = blend_op(b[6]);
+        }
+    }
+    pd.alphaToCoverageEnabled = s->ms[0xC] != 0;
+    NSMutableString *pk = [NSMutableString stringWithFormat:@"%u %p %lu %lu", g_boot_gen, (__bridge void *)pr,
+                           (unsigned long)pd.depthAttachmentPixelFormat, (unsigned long)pd.stencilAttachmentPixelFormat];
+    for (int i = 0; i < 8; i++) {
+        MTLRenderPipelineColorAttachmentDescriptor *ca = pd.colorAttachments[i];
+        [pk appendFormat:@" %lu/%lu/%d/%lu/%lu/%lu/%lu/%lu/%lu", (unsigned long)ca.pixelFormat, (unsigned long)ca.writeMask,
+                         ca.blendingEnabled, (unsigned long)ca.sourceRGBBlendFactor, (unsigned long)ca.destinationRGBBlendFactor,
+                         (unsigned long)ca.sourceAlphaBlendFactor, (unsigned long)ca.destinationAlphaBlendFactor,
+                         (unsigned long)ca.rgbBlendOperation, (unsigned long)ca.alphaBlendOperation];
+    }
+    for (int i = 0; i < 32; i++)
+        if (pr->vi->attr_mask & (1u << i))
+            [pk appendFormat:@" a%d:%lu/%lu/%lu", i, (unsigned long)vd.attributes[i].format, (unsigned long)vd.attributes[i].offset, (unsigned long)vd.attributes[i].bufferIndex];
+    for (int k = 18; k < 31; k++)
+        [pk appendFormat:@" l%lu/%lu/%lu", (unsigned long)vd.layouts[k].stride, (unsigned long)vd.layouts[k].stepFunction, (unsigned long)vd.layouts[k].stepRate];
+    [pk appendFormat:@" s%lu a%d", (unsigned long)pd.rasterSampleCount, pd.alphaToCoverageEnabled];
+    *key = pk;
+    return pd;
 }
 
 static void draw(CmdRec *r, bool indexed) {
@@ -2179,11 +2309,8 @@ static void draw(CmdRec *r, bool indexed) {
         if (cb) cbuf_base = atoi(cb);
         if (tb) tex_base = atoi(tb);
     }
-    ShaderKey vkey = {0}, fkey = {0};
-    vkey.flip_y = fkey.flip_y = nvn_window_origin() == 0;
-    vkey.depth_minus_one = nvn_depth_mode() == 0;
-    for (int i = 0; i < st.nattrib; i++) vkey.attr_kind[i] = (uint8_t)attr_kind(st.attrib[i] & 0xFF);
-    for (int i = 0; i < st.rt.ncolor; i++) if (st.rt.color[i]) fkey.rt_kind[i] = (uint8_t)rt_kind(st.rt.color[i]->format);
+    ShaderKey vkey, fkey;
+    program_keys(&st, &vkey, &fkey);
     // Culling both faces (NVN Face FRONT_AND_BACK, polygon state 3) draws no polygons; Metal has no such mode. SMM2's
     // 3D World background keeps a clear pipe's yellow stand-in mesh switched off this way.
     if (st.poly[0] == 3 && (uint32_t)r->x[0] >= 4) { stat_skipped++; return; }
@@ -2277,81 +2404,28 @@ static void draw(CmdRec *r, bool indexed) {
         else used_streams |= 1u << ((a >> 8) & 0x1F);
     }
     // pipeline
-    uint64_t phash = pipeline_state_hash(pr);
+    uint64_t phash = pipeline_state_hash(&st, pr);
     uint32_t pslot = (uint32_t)(phash ^ (phash >> 29)) & (PIPE_TAB - 1);
     while (pipe_tab[pslot].key && pipe_tab[pslot].key != phash) pslot = (pslot + 1) & (PIPE_TAB - 1);
     id<MTLRenderPipelineState> pipe = pipe_tab[pslot].key ? (__bridge id<MTLRenderPipelineState>)pipe_tab[pslot].pipe : nil;
     if (!pipe) {
-    MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
+    PassLayout pl;
+    pass_layout_actual(&pl);
+    {   // (the prefetch scan's prediction of it: a miss shows here once per pair of formats)
+        PassLayout pp;
+        pass_layout(&st, &pp);
+        if (memcmp(&pl, &pp, sizeof pl)) {
+            static int nlog;
+            if (nlog++ < 10)
+                LOG("[shader] pass_layout predicted %lu/%lu/%lu, the pass has %lu/%lu/%lu (colour 0, depth, samples)\n",
+                    (unsigned long)pp.color[0], (unsigned long)pp.depth, (unsigned long)pp.samples, (unsigned long)pl.color[0],
+                    (unsigned long)pl.depth, (unsigned long)pl.samples);
+        }
+    }
+    NSString *pk;
+    MTLRenderPipelineDescriptor *pd = render_pipe_desc(&st, &pl, pr, &pk);
     pd.vertexFunction = pr->vs;
     pd.fragmentFunction = pr->fs;
-    attachment_formats(pd);
-    MTLVertexDescriptor *vd = [MTLVertexDescriptor vertexDescriptor];
-    for (int i = 0; i < 32; i++) {
-        if (!(pr->vi->attr_mask & (1u << i))) continue;
-        uint32_t a = i < st.nattrib ? st.attrib[i] : 0x2E;
-        uint32_t fmt = a & 0xFF, stream = (a >> 8) & 0x1F, off = a >> 13;
-        if (i >= st.nattrib || fmt == 0) {
-            // unbound attribute: read zeros from a constant stream
-            vd.attributes[i].format = MTLVertexFormatFloat4;
-            vd.attributes[i].offset = 0;
-            vd.attributes[i].bufferIndex = 30;
-            vd.layouts[30].stepFunction = MTLVertexStepFunctionConstant;
-            vd.layouts[30].stepRate = 0;
-            vd.layouts[30].stride = 16;
-            used_streams |= 1u << 31;
-            continue;
-        }
-        vd.attributes[i].format = vertex_format(fmt);
-        vd.attributes[i].offset = off;
-        vd.attributes[i].bufferIndex = 18 + stream;
-        used_streams |= 1u << stream;
-        (void)is_int_format;
-    }
-    for (int s = 0; s < 12; s++) {
-        if (!(used_streams & (1u << s))) continue;
-        uint32_t stride = s < st.nstream ? st.stream[s][0] : 0, div = s < st.nstream ? st.stream[s][1] : 0;
-        if (stride == 0) { vd.layouts[18 + s].stepFunction = MTLVertexStepFunctionConstant; vd.layouts[18 + s].stepRate = 0; vd.layouts[18 + s].stride = 16; }
-        else {
-            vd.layouts[18 + s].stride = (stride + 3) & ~3u;
-            if (div || pr->gi) { vd.layouts[18 + s].stepFunction = MTLVertexStepFunctionPerInstance; vd.layouts[18 + s].stepRate = div ? div : 1; }
-        }
-    }
-    pd.vertexDescriptor = vd;
-    for (int i = 0; i < st.rt.ncolor && i < 8; i++) {
-        if (!st.rt.color[i] || rt_dropped(i)) continue;
-        MTLRenderPipelineColorAttachmentDescriptor *ca = pd.colorAttachments[i];
-        uint32_t m = (st.channel_mask >> (i * 4)) & 0xF;
-        ca.writeMask = (m & 1 ? MTLColorWriteMaskRed : 0) | (m & 2 ? MTLColorWriteMaskGreen : 0) |
-                       (m & 4 ? MTLColorWriteMaskBlue : 0) | (m & 8 ? MTLColorWriteMaskAlpha : 0);
-        bool blend_on = (st.color_state[0] >> i) & 1;
-        if (blend_on && !rt_kind(st.rt.color[i]->format)) {
-            uint8_t *b = st.blend[i];
-            ca.blendingEnabled = YES;
-            ca.sourceRGBBlendFactor = blend_factor(b[1]);
-            ca.destinationRGBBlendFactor = blend_factor(b[2]);
-            ca.sourceAlphaBlendFactor = blend_factor(b[3]);
-            ca.destinationAlphaBlendFactor = blend_factor(b[4]);
-            ca.rgbBlendOperation = blend_op(b[5]);
-            ca.alphaBlendOperation = blend_op(b[6]);
-        }
-    }
-    pd.alphaToCoverageEnabled = st.ms[0xC] != 0;
-    NSMutableString *pk = [NSMutableString stringWithFormat:@"%u %p %p %lu %lu", g_boot_gen, pr->vs, pr->fs,
-                           (unsigned long)pd.depthAttachmentPixelFormat, (unsigned long)pd.stencilAttachmentPixelFormat];
-    for (int i = 0; i < 8; i++) {
-        MTLRenderPipelineColorAttachmentDescriptor *ca = pd.colorAttachments[i];
-        [pk appendFormat:@" %lu/%lu/%d/%lu/%lu/%lu/%lu/%lu/%lu", (unsigned long)ca.pixelFormat, (unsigned long)ca.writeMask,
-                         ca.blendingEnabled, (unsigned long)ca.sourceRGBBlendFactor, (unsigned long)ca.destinationRGBBlendFactor,
-                         (unsigned long)ca.sourceAlphaBlendFactor, (unsigned long)ca.destinationAlphaBlendFactor,
-                         (unsigned long)ca.rgbBlendOperation, (unsigned long)ca.alphaBlendOperation];
-    }
-    for (int i = 0; i < 32; i++)
-        if (pr->vi->attr_mask & (1u << i))
-            [pk appendFormat:@" a%d:%lu/%lu/%lu", i, (unsigned long)vd.attributes[i].format, (unsigned long)vd.attributes[i].offset, (unsigned long)vd.attributes[i].bufferIndex];
-    for (int s = 18; s < 31; s++)
-        [pk appendFormat:@" l%lu/%lu/%lu", (unsigned long)vd.layouts[s].stride, (unsigned long)vd.layouts[s].stepFunction, (unsigned long)vd.layouts[s].stepRate];
-    [pk appendFormat:@" s%lu a%d", (unsigned long)pd.rasterSampleCount, pd.alphaToCoverageEnabled];
     id pobj = cache[pk];
     NSMutableDictionary *ready_pipes = g_ready_pipes;  // async pipeline builds finished on Metal's threads
     static id pending;
@@ -3085,6 +3159,100 @@ static void copy_texture(const TexRefRec *src, const TexRefRec *dst, uint64_t fl
 }
 
 // ------------------------------------------------------------------ executor
+// Binding-state commands: s updated, nothing else touched (the executor and the prefetch scan share it). false:
+// not one of them.
+static bool apply_state(ExecState *s, const CmdRec *r) {
+    void *x = (void *)r->extra;
+    switch (r->op) {
+        case CMD_BIND_PROGRAM: s->program = (NvnProgram *)(uintptr_t)r->x[0]; return true;
+        case CMD_BIND_BLEND: { uint8_t *b = x; memcpy(s->blend[b[0] & 7], b, 8); return true; }
+        case CMD_BIND_CHANNEL_MASK: memcpy(&s->channel_mask, x, 4); return true;
+        case CMD_BIND_COLOR: memcpy(s->color_state, x, 4); return true;
+        case CMD_BIND_DEPTH_STENCIL: memcpy(s->ds, x, 8); return true;
+        case CMD_BIND_MULTISAMPLE: memcpy(s->ms, x, 0x18); return true;
+        case CMD_BIND_POLYGON: memcpy(s->poly, x, 4); return true;
+        case CMD_BIND_VERTEX_ATTRIB:
+            s->nattrib = (int)r->x[0] > 16 ? 16 : (int)r->x[0];
+            memcpy(s->attrib, x, s->nattrib * 4);
+            return true;
+        case CMD_BIND_VERTEX_STREAM:
+            s->nstream = (int)r->x[0] > 16 ? 16 : (int)r->x[0];
+            memcpy(s->stream, x, s->nstream * 8);
+            return true;
+        case CMD_BIND_VERTEX_BUFFERS:
+            for (uint64_t i = 0; i < r->x[1] && r->x[0] + i < 16; i++) memcpy(&s->vbuf[r->x[0] + i], (uint8_t *)x + i * 16, 16);
+            return true;
+        case CMD_BIND_UNIFORM_BUFFERS:
+            for (uint64_t i = 0; i < r->x[2] && r->x[1] + i < 18 && r->x[0] < 6; i++)
+                memcpy(&s->ubuf[r->x[0]][r->x[1] + i], (uint8_t *)x + i * 16, 16);
+            return true;
+        case CMD_BIND_STORAGE_BUFFERS:
+            for (uint64_t i = 0; i < r->x[2] && r->x[1] + i < 16 && r->x[0] < 6; i++)
+                memcpy(&s->sbuf[r->x[0]][r->x[1] + i], (uint8_t *)x + i * 16, 16);
+            return true;
+        case CMD_BIND_TEXTURES:
+            for (uint64_t i = 0; i < r->x[2] && r->x[1] + i < 32 && r->x[0] < 6; i++)
+                memcpy(&s->tex[r->x[0]][r->x[1] + i], (uint8_t *)x + i * 8, 8);
+            return true;
+        case CMD_BIND_IMAGES:
+            for (uint64_t i = 0; i < r->x[2] && r->x[1] + i < 8 && r->x[0] < 6; i++)
+                memcpy(&s->img[r->x[0]][r->x[1] + i], (uint8_t *)x + i * 8, 8);
+            return true;
+        case CMD_SET_TEXTURE_POOL: s->tpool = (NvnDescPool *)(uintptr_t)r->x[0]; return true;
+        case CMD_SET_SAMPLER_POOL: s->spool = (NvnDescPool *)(uintptr_t)r->x[0]; return true;
+        case CMD_SET_RENDER_TARGETS: {
+            const struct { uint64_t tex[8]; NvnTextureView views[8]; uint8_t has_view[8]; uint64_t depth;
+                           NvnTextureView dview; uint8_t has_dview; } *rt = x;
+            memset(&s->rt, 0, sizeof s->rt);
+            s->rt.ncolor = (int)r->x[0];
+            for (int i = 0; i < s->rt.ncolor; i++) {
+                s->rt.color[i] = (NvnTexture *)(uintptr_t)rt->tex[i];
+                s->rt.cview[i] = rt->views[i];
+                s->rt.has_cview[i] = rt->has_view[i];
+            }
+            s->rt.depth = (NvnTexture *)(uintptr_t)rt->depth;
+            s->rt.dview = rt->dview;
+            s->rt.has_dview = rt->has_dview;
+            s->rt_dirty = true;
+            return true;
+        }
+        case CMD_SET_VIEWPORTS:
+            for (uint64_t i = 0; i < r->x[1] && r->x[0] + i < 16; i++) memcpy(s->viewport[r->x[0] + i], (uint8_t *)x + i * 16, 16);
+            return true;
+        case CMD_SET_SCISSORS:
+            for (uint64_t i = 0; i < r->x[1] && r->x[0] + i < 16; i++) memcpy(s->scissor[r->x[0] + i], (uint8_t *)x + i * 16, 16);
+            return true;
+        case CMD_SET_DEPTH_RANGES:
+            for (uint64_t i = 0; i < r->x[1] && r->x[0] + i < 16; i++) memcpy(s->depth_range[r->x[0] + i], (uint8_t *)x + i * 8, 8);
+            return true;
+        case CMD_SET_BLEND_COLOR: memcpy(s->blend_color, x, 16); return true;
+        case CMD_SET_STENCIL: {
+            int face = (int)r->x[0];
+            for (int f = 0; f < 2; f++) {
+                if (!(face & (1 << f))) continue;
+                if (r->x[6] == 0) s->stencil_ref[f] = (uint32_t)r->x[1];
+                else if (r->x[6] == 1) s->stencil_mask[f] = (uint32_t)r->x[1];
+                else s->stencil_vmask[f] = (uint32_t)r->x[1];
+            }
+            return true;
+        }
+        case CMD_SET_POLYGON_OFFSET: memcpy(s->poly_offset, r->f, sizeof s->poly_offset); return true;
+        case CMD_SET_DEPTH_CLAMP: s->depth_clamp = (r->x[0] & 1) != 0; return true;
+        case CMD_SET_PRIMITIVE_RESTART: s->prim_restart = r->x[0] != 0; s->restart_index = (uint32_t)r->x[1]; return true;
+        case CMD_SET_COPY_STRIDES: s->copy_row_stride = r->x[0]; s->copy_image_stride = r->x[1]; return true;
+        case CMD_SET_RENDER_ENABLE:
+            if (r->x[2]) {  // conditional: the counters at x1 and x1 + 16 (mode 0: render if equal, 1: if different)
+                const uint64_t *q = (const uint64_t *)(uintptr_t)r->x[1];
+                bool eq = q ? q[0] == q[2] : true;
+                s->render_off = r->x[0] == 0 ? !eq : eq;
+            } else {
+                s->render_off = !r->x[0];
+            }
+            return true;
+    default: return false;
+    }
+}
+
 static void exec_list(uint64_t handle, int depth) {
     uint64_t p = handle, prev = 0;
     for (int guard = 0; guard < 10000000; guard++) {
@@ -3111,42 +3279,6 @@ static void exec_list(uint64_t handle, int depth) {
             }
             break;
         }
-        case CMD_BIND_PROGRAM: st.program = (NvnProgram *)(uintptr_t)r->x[0]; break;
-        case CMD_BIND_BLEND: { uint8_t *b = x; memcpy(st.blend[b[0] & 7], b, 8); break; }
-        case CMD_BIND_CHANNEL_MASK: memcpy(&st.channel_mask, x, 4); break;
-        case CMD_BIND_COLOR: memcpy(st.color_state, x, 4); break;
-        case CMD_BIND_DEPTH_STENCIL: memcpy(st.ds, x, 8); break;
-        case CMD_BIND_MULTISAMPLE: memcpy(st.ms, x, 0x18); break;
-        case CMD_BIND_POLYGON: memcpy(st.poly, x, 4); break;
-        case CMD_BIND_VERTEX_ATTRIB:
-            st.nattrib = (int)r->x[0] > 16 ? 16 : (int)r->x[0];
-            memcpy(st.attrib, x, st.nattrib * 4);
-            break;
-        case CMD_BIND_VERTEX_STREAM:
-            st.nstream = (int)r->x[0] > 16 ? 16 : (int)r->x[0];
-            memcpy(st.stream, x, st.nstream * 8);
-            break;
-        case CMD_BIND_VERTEX_BUFFERS:
-            for (uint64_t i = 0; i < r->x[1] && r->x[0] + i < 16; i++) memcpy(&st.vbuf[r->x[0] + i], (uint8_t *)x + i * 16, 16);
-            break;
-        case CMD_BIND_UNIFORM_BUFFERS:
-            for (uint64_t i = 0; i < r->x[2] && r->x[1] + i < 18 && r->x[0] < 6; i++)
-                memcpy(&st.ubuf[r->x[0]][r->x[1] + i], (uint8_t *)x + i * 16, 16);
-            break;
-        case CMD_BIND_STORAGE_BUFFERS:
-            for (uint64_t i = 0; i < r->x[2] && r->x[1] + i < 16 && r->x[0] < 6; i++)
-                memcpy(&st.sbuf[r->x[0]][r->x[1] + i], (uint8_t *)x + i * 16, 16);
-            break;
-        case CMD_BIND_TEXTURES:
-            for (uint64_t i = 0; i < r->x[2] && r->x[1] + i < 32 && r->x[0] < 6; i++)
-                memcpy(&st.tex[r->x[0]][r->x[1] + i], (uint8_t *)x + i * 8, 8);
-            break;
-        case CMD_BIND_IMAGES:
-            for (uint64_t i = 0; i < r->x[2] && r->x[1] + i < 8 && r->x[0] < 6; i++)
-                memcpy(&st.img[r->x[0]][r->x[1] + i], (uint8_t *)x + i * 8, 8);
-            break;
-        case CMD_SET_TEXTURE_POOL: st.tpool = (NvnDescPool *)(uintptr_t)r->x[0]; break;
-        case CMD_SET_SAMPLER_POOL: st.spool = (NvnDescPool *)(uintptr_t)r->x[0]; break;
         case CMD_SET_RENDER_TARGETS: {
             {
                 const uint64_t *tx = x;
@@ -3156,19 +3288,7 @@ static void exec_list(uint64_t handle, int depth) {
                     if (t && (t->flags & 2) && nlog++ < 5) LOG("[metal] video texture %p used as render target\n", t);
                 }
             }
-            const struct { uint64_t tex[8]; NvnTextureView views[8]; uint8_t has_view[8]; uint64_t depth;
-                           NvnTextureView dview; uint8_t has_dview; } *rt = x;
-            memset(&st.rt, 0, sizeof st.rt);
-            st.rt.ncolor = (int)r->x[0];
-            for (int i = 0; i < st.rt.ncolor; i++) {
-                st.rt.color[i] = (NvnTexture *)(uintptr_t)rt->tex[i];
-                st.rt.cview[i] = rt->views[i];
-                st.rt.has_cview[i] = rt->has_view[i];
-            }
-            st.rt.depth = (NvnTexture *)(uintptr_t)rt->depth;
-            st.rt.dview = rt->dview;
-            st.rt.has_dview = rt->has_dview;
-            st.rt_dirty = true;
+            apply_state(&st, r);
             if (ENV("LARECOMP_DEBUG_3D") && st.rt.ncolor && st.rt.color[0] && st.rt.color[0]->target == 2) {
                 static int once;  // (debug) the first frame that renders into a 3D texture becomes the debug frame
                 if (!once++) { g_debug_frame = true; LOG("===== debug frame (3D target) =====\n"); }
@@ -3200,39 +3320,6 @@ static void exec_list(uint64_t handle, int depth) {
             }
             break;
         }
-        case CMD_SET_VIEWPORTS:
-            for (uint64_t i = 0; i < r->x[1] && r->x[0] + i < 16; i++) memcpy(st.viewport[r->x[0] + i], (uint8_t *)x + i * 16, 16);
-            break;
-        case CMD_SET_SCISSORS:
-            for (uint64_t i = 0; i < r->x[1] && r->x[0] + i < 16; i++) memcpy(st.scissor[r->x[0] + i], (uint8_t *)x + i * 16, 16);
-            break;
-        case CMD_SET_DEPTH_RANGES:
-            for (uint64_t i = 0; i < r->x[1] && r->x[0] + i < 16; i++) memcpy(st.depth_range[r->x[0] + i], (uint8_t *)x + i * 8, 8);
-            break;
-        case CMD_SET_BLEND_COLOR: memcpy(st.blend_color, x, 16); break;
-        case CMD_SET_STENCIL: {
-            int face = (int)r->x[0];
-            for (int f = 0; f < 2; f++) {
-                if (!(face & (1 << f))) continue;
-                if (r->x[6] == 0) st.stencil_ref[f] = (uint32_t)r->x[1];
-                else if (r->x[6] == 1) st.stencil_mask[f] = (uint32_t)r->x[1];
-                else st.stencil_vmask[f] = (uint32_t)r->x[1];
-            }
-            break;
-        }
-        case CMD_SET_POLYGON_OFFSET: memcpy(st.poly_offset, r->f, sizeof st.poly_offset); break;
-        case CMD_SET_DEPTH_CLAMP: st.depth_clamp = (r->x[0] & 1) != 0; break;
-        case CMD_SET_PRIMITIVE_RESTART: st.prim_restart = r->x[0] != 0; st.restart_index = (uint32_t)r->x[1]; break;
-        case CMD_SET_COPY_STRIDES: st.copy_row_stride = r->x[0]; st.copy_image_stride = r->x[1]; break;
-        case CMD_SET_RENDER_ENABLE:
-            if (r->x[2]) {  // conditional: the counters at x1 and x1 + 16 (mode 0: render if equal, 1: if different)
-                const uint64_t *q = (const uint64_t *)(uintptr_t)r->x[1];
-                bool eq = q ? q[0] == q[2] : true;
-                st.render_off = r->x[0] == 0 ? !eq : eq;
-            } else {
-                st.render_off = !r->x[0];
-            }
-            break;
         case CMD_REPORT_VALUE: {
             uint64_t *out = (uint64_t *)(uintptr_t)r->x[1];
             if (out) { out[0] = (uint32_t)r->x[0]; out[1] = (uint64_t)((unsigned __int128)plat_now_ns() * 384 / 625); }
@@ -3382,6 +3469,7 @@ static void exec_list(uint64_t handle, int depth) {
             break;
         case CMD_BARRIER: case CMD_SET_LINE_WIDTH: case CMD_SET_POINT_SIZE: case CMD_SET_DEPTH_BOUNDS: break;
         default:
+            if (apply_state(&st, r)) break;
             if (g_debug_frame) LOG("[cmd] unhandled op %d x0 %llx x1 %llx\n", (int)r->op, (unsigned long long)r->x[0], (unsigned long long)r->x[1]);
             break;
         }

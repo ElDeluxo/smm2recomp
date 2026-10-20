@@ -627,6 +627,11 @@ static void first_render_use(NvnTexture *t, TexBackend *b, id<MTLBlitCommandEnco
     if (data) upload_texture(t, b, blit);
 }
 
+MTLPixelFormat renderer_texture_pixel_format(NvnTexture *t) {
+    const TexBackend *b = (const TexBackend *)t->backend;
+    return b && b->tex ? b->tex.pixelFormat : mtl_format(t->format).pf;
+}
+
 id<MTLTexture> renderer_texture(NvnTexture *t, id<MTLBlitCommandEncoder> blit, bool for_render) {
     TexBackend *b = tex_backend(t);
     if (for_render) { first_render_use(t, b, blit); b->gpu_owned = true; }
