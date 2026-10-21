@@ -427,6 +427,11 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     Homebrew's openjdk@21). Not in v0.4.0.
   - Owner, 2026-10-22: the 100 Mario ending shows all the players in the rescue scene if that's reasonable, else
     whoever cleared the last course; the lives card shows each player ("give that a shot").
+- ⬜ **User report (2026-10-22, platform not stated, maybe Windows): Course World says "make an ID" and goes back;
+  only Story mode is unlocked.** The owner doesn't see it on the iPad. Likely a fresh-save / first-run case rather
+  than an OS one: a new player meets SMM2's first-time setup (maker profile / Mii / user creation, Course World's
+  ID step), and the am / mii / acc answers may end it at once. Check by reproducing with an empty save / data folder
+  first; also check what a new save unlocks. Not started (paused; the owner sets the order).
 - ⬜ **OpenCourse World as a course source** (owner, 2026-10-22): https://opencourse.world/ selectable as one of the
   course server options (next to our own server and TGRCode, in the Mods tab's course source setting). Looked at
   2026-10-22: OCW is a replacement online service for SMM2 3.0.2 / 3.0.3 on Switch (Atmosphere) and Ryujinx. The
