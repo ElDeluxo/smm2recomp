@@ -120,6 +120,22 @@ class PackageCheckTests(unittest.TestCase):
         self.assertIn('extra/server.der', out)
 
 
+class WindowsExportsTests(unittest.TestCase):
+    def test_patch_hooks_are_exported(self):
+        # the game code DLL calls the hooks the patch files name; on Windows only what the exe exports links
+        # (v0.3.0: smm1_extras_after was missing, so the first-launch build failed to link)
+        import re
+        src = ''.join(p.read_text() for p in [ROOT / 'recomp/games/smm2/patches.py',
+                                              *sorted((ROOT / 'recomp/games/smm2/mods').glob('*.py'))])
+        hooks = set(re.findall(r'extern\s+\w+\s+(\w+)\s*\(\s*Cpu', src))
+        exports = set((ROOT / 'recomp/runtime/platform/windows_exports.def').read_text().split())
+        drectve = (ROOT / 'recomp/runtime/platform/windows_exports.c').read_text()
+        self.assertTrue(hooks)
+        for h in sorted(hooks):
+            self.assertIn(h, exports, f'{h} missing from windows_exports.def')
+            self.assertIn(f'-export:{h}', drectve, f'{h} missing from windows_exports.c')
+
+
 class SetupTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
