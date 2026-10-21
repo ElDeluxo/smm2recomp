@@ -145,8 +145,17 @@ SERVICE("acc:u0", acc_u0) {
     (void)s;
     switch (req->cmd) {
     case 0: OUT(int32_t, 0) = 1; resp_size(resp, 4); break;  // GetUserCount
-    case 1: OUT(uint8_t, 0) = !memcmp(req->data, g_user_id, 16); resp_size(resp, 1); break;
+    case 1:  // GetUserExistence
+        OUT(uint8_t, 0) = !memcmp(req->data, g_user_id, 16);
+        if (!OUT(uint8_t, 0)) LOG("[acc] GetUserExistence: %016llx%016llx is not the user\n",
+                                  (unsigned long long)((uint64_t *)req->data)[1], (unsigned long long)((uint64_t *)req->data)[0]);
+        resp_size(resp, 1);
+        break;
     case 2: case 3: case 141: write_uid_list(req); break;  // ListAllUsers / ListOpenUsers / ListQualifiedUsers
+    case 130:  // LoadOpenContext(uid): the user the application had open before (ours), as an IManagerForApplication
+        ipc_return_object(resp, service_new("IManagerForApplication", manager, NULL));
+        break;
+    case 131: write_uid_list(req); break;  // ListOpenContextStoredUsers
     case 4: case 51: memcpy(resp->data, g_user_id, 16); resp_size(resp, 16); break;  // GetLastOpenedUser
     case 5: ipc_return_object(resp, service_new("IProfile", profile, NULL)); break;
     case 50: OUT(uint8_t, 0) = 0; resp_size(resp, 1); break;
