@@ -185,30 +185,92 @@ typedef struct {
     float gain, fade;  // fade: gain change per output sample (< 0 fading out)
     bool loop, on;
     int ch0;  // the first channel played (a multi-track stream's track: channels 2t, 2t + 1)
+    float vol;  // the sound's own volume (its .bameta; a stream's also its track's) times SMM1_MIX
 } Voice;
+
+// SMM1's sounds against SMM2's mix: SMM1 played them through its own engine at its own output level, which SMM2's
+// mix doesn't share. The .bameta volumes keep SMM1's balance between its sounds; this sets their level next to
+// SMM2's (LARECOMP_SMM1_GAIN overrides it, for measuring).
+#define SMM1_MIX 1.0f
+static float smm1_mix(void) {
+    static float g = -1;
+    if (g < 0) {
+        const char *e = getenv("LARECOMP_SMM1_GAIN");
+        g = e && *e ? (float)atof(e) : SMM1_MIX;
+        if (g < 0) g = 0;
+    }
+    return g;
+}
+
+// A .bameta (AMTA, big-endian): +0xC its DATA section's offset. DATA (after its 8-byte header): +0xC the volume
+// (f32), +0xA the track count, +0x20 a table of 8 tracks (u32 channel count, f32 volume). out: the sound's volume and
+// each track's (1 where there is none).
+static bool amta_volumes(const uint8_t *d, size_t n, float *vol, float track[8]) {
+    for (int i = 0; i < 8; i++) track[i] = 1;
+    *vol = 1;
+    if (n < 0x18 || memcmp(d, "AMTA", 4)) return false;
+    size_t data = be32(d, n, 0xC);
+    if (data + 8 + 0x60 > n || memcmp(d + data, "DATA", 4)) return false;
+    const uint8_t *p = d + data + 8;
+    uint32_t v = be32(p, 0x60, 0xC);
+    memcpy(vol, &v, 4);
+    if (!(*vol > 0 && *vol <= 4)) *vol = 1;
+    int tracks = p[0xA] > 8 ? 8 : p[0xA];
+    for (int i = 0; i < tracks; i++) {
+        uint32_t t = be32(p, 0x60, 0x20 + (size_t)i * 8 + 4);
+        memcpy(&track[i], &t, 4);
+        if (!(track[i] > 0 && track[i] <= 4)) track[i] = 1;
+    }
+    return true;
+}
 static pthread_mutex_t g_mx = PTHREAD_MUTEX_INITIALIZER;
 static Voice g_bgm, g_se[8];
 static char g_bgm_name[64];
 static float g_game_gain = 1, g_game_target = 1;
 
-static struct { char name[64]; SPcm *p; } g_pcm[48];
+static struct { char name[64]; SPcm *p; float vol, track[8]; } g_pcm[48];
 static int g_npcm;
-static SPcm *get_stream(const char *name) {
+// a stream's .bameta is in its scene's sound archive (cached as sound/<scene>.bars)
+static void stream_volumes(const char *name, float *vol, float track[8]) {
+    static const char *scenes[] = {"NetWorldMapScene", "NetworkMainScene2", "NetEndingScene", "NetEndingDemoScene",
+                                   "CourseListScene", "GameOverScene", NULL};
+    char meta[96];
+    snprintf(meta, sizeof meta, "%s.bameta", name);
+    for (int i = 0; scenes[i]; i++) {
+        size_t n, mn;
+        uint8_t *d = smm1_sound_file(scenes[i], &n);
+        LSarc s;
+        if (!d || !lyt_sarc_open(&s, d, n)) { free(d); continue; }
+        const uint8_t *m = lyt_sarc_get(&s, meta, &mn);
+        bool ok = m && amta_volumes(m, mn, vol, track);
+        lyt_sarc_close(&s);
+        free(d);
+        if (ok) return;
+    }
+    amta_volumes(NULL, 0, vol, track);
+}
+static int get_stream(const char *name) {  // its g_pcm index, -1: none
     for (int i = 0; i < g_npcm; i++)
-        if (!strcmp(g_pcm[i].name, name)) return g_pcm[i].p;
+        if (!strcmp(g_pcm[i].name, name)) return g_pcm[i].p ? i : -1;
     size_t n;
     uint8_t *d = smm1_sound_file(name, &n);
     SPcm *p = d ? smm1_bfstm_decode(d, n) : NULL;
     free(d);
     if (!p) fprintf(stderr, "[smm1ui] sound %s: missing\n", name);
-    if (g_npcm < 48) snprintf(g_pcm[g_npcm].name, sizeof g_pcm[0].name, "%s", name), g_pcm[g_npcm++].p = p;
-    return p;
+    if (g_npcm >= 48) return -1;
+    int i = g_npcm++;
+    snprintf(g_pcm[i].name, sizeof g_pcm[0].name, "%s", name), g_pcm[i].p = p;
+    if (p) stream_volumes(name, &g_pcm[i].vol, g_pcm[i].track);
+    return p ? i : -1;
 }
+static int g_bgm_pcm = -1;  // g_bgm's g_pcm index
 
 void smm1_bgm(const char *name, bool loop) {
-    SPcm *p = name ? get_stream(name) : NULL;
+    int k = name ? get_stream(name) : -1;
+    SPcm *p = k >= 0 ? g_pcm[k].p : NULL;
     pthread_mutex_lock(&g_mx);
-    g_bgm = (Voice){p, 0, 1, 0, loop && p && p->loop, p != NULL, 0};
+    g_bgm_pcm = k;
+    g_bgm = (Voice){p, 0, 1, 0, loop && p && p->loop, p != NULL, 0, k >= 0 ? g_pcm[k].vol * g_pcm[k].track[0] * smm1_mix() : 1};
     if (p && loop && !p->loop) g_bgm.loop = true, p->loop_start = 0;
     snprintf(g_bgm_name, sizeof g_bgm_name, "%s", name ? name : "");
     pthread_mutex_unlock(&g_mx);
@@ -218,6 +280,10 @@ void smm1_bgm_track(int track) {
     if (g_bgm.p) {
         int c = 2 * track;
         g_bgm.ch0 = c + 1 < g_bgm.p->channels ? c : 0;
+        if (g_bgm_pcm >= 0) {
+            int t = g_bgm.ch0 / 2 < 8 ? g_bgm.ch0 / 2 : 0;
+            g_bgm.vol = g_pcm[g_bgm_pcm].vol * g_pcm[g_bgm_pcm].track[t] * smm1_mix();
+        }
     }
     pthread_mutex_unlock(&g_mx);
 }
@@ -237,7 +303,7 @@ void smm1_game_sound(bool on) { g_game_target = on ? 1 : 0; }
 
 // the sound effects: the screens' sound banks (Pack/Sound.pack -> Sound/Resource/<bank>.bars: a SARC of
 // <name>.bfwav + <name>.bameta), loaded on first use (smm1_se_bank)
-static struct { char name[80]; SPcm *p; } g_sfx[512];
+static struct { char name[80]; SPcm *p; float vol; } g_sfx[512];
 static int g_nsfx;
 static char g_banks[32][64];
 static int g_nbanks;
@@ -254,6 +320,13 @@ void smm1_se_bank(const char *bank) {
         if (!dot) continue;
         SPcm *p = smm1_bfwav_decode(s.data + s.e[i].start, s.e[i].end - s.e[i].start);
         if (!p) continue;
+        char meta[96];
+        size_t mn;
+        float track[8];
+        snprintf(meta, sizeof meta, "%.*s.bameta", (int)(dot - nm), nm);
+        const uint8_t *m = lyt_sarc_get(&s, meta, &mn);
+        g_sfx[g_nsfx].vol = 1;
+        if (m) amta_volumes(m, mn, &g_sfx[g_nsfx].vol, track);
         // (a costume's bank: its waves are named "<bank>/<wave>", every costume has a "jump", a "goal"...)
         if (!strncmp(bank, "CharaMario_", 11)) snprintf(g_sfx[g_nsfx].name, sizeof g_sfx[0].name, "%s/%.*s", bank, (int)(dot - nm), nm);
         else snprintf(g_sfx[g_nsfx].name, sizeof g_sfx[0].name, "%.*s", (int)(dot - nm), nm);
@@ -267,7 +340,7 @@ bool smm1_se(const char *name) {
         if (!strcmp(g_sfx[i].name, name)) {
             pthread_mutex_lock(&g_mx);
             for (int k = 0; k < 8; k++)
-                if (!g_se[k].on) { g_se[k] = (Voice){g_sfx[i].p, 0, 1, 0, false, true, 0}; break; }
+                if (!g_se[k].on) { g_se[k] = (Voice){g_sfx[i].p, 0, 1, 0, false, true, 0, g_sfx[i].vol * smm1_mix()}; break; }
             pthread_mutex_unlock(&g_mx);
             return true;
         }
@@ -277,7 +350,7 @@ void smm1_play(SPcm *p) {
     if (!p) return;
     pthread_mutex_lock(&g_mx);
     for (int k = 0; k < 8; k++)
-        if (!g_se[k].on) { g_se[k] = (Voice){p, 0, 1, 0, false, true, 0}; break; }
+        if (!g_se[k].on) { g_se[k] = (Voice){p, 0, 1, 0, false, true, 0, 1}; break; }
     pthread_mutex_unlock(&g_mx);
 }
 
@@ -291,7 +364,7 @@ static void mix_voice(Voice *v, float *out, int n, int rate) {
             if (v->loop && p->loop_start < p->frames - 1) v->pos = p->loop_start + (v->pos - k), k = (int)v->pos;
             else { v->on = false; return; }
         }
-        float f = (float)(v->pos - k), g = v->gain * (1.0f / 32768);
+        float f = (float)(v->pos - k), g = v->gain * v->vol * (1.0f / 32768);
         const int16_t *a = p->pcm + (size_t)k * (size_t)p->channels + v->ch0, *b = a + p->channels;
         float l = (a[0] + (b[0] - a[0]) * f) * g;
         float r = p->channels > 1 + v->ch0 ? (a[1] + (b[1] - a[1]) * f) * g : l;

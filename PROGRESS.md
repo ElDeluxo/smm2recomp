@@ -285,9 +285,12 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
   slightly off (timing). Probably tied to the SLink sound trigger table not being decoded (sounds are
   placed by name, not frame-exact). Not started.
 - ⬜ **100 Mario polish (owner's test, 2026-10-20: "overall it's not bad"):**
-  - ⬜ The SMM1 screens (select, map, card) are louder than SMM2's. They should sound the same. SMM1's voices
-    are mixed into the output at full gain (`mods/smm1/smm1_audio.c`), not through SMM2's own volume levels.
-    Match them to SMM2's level (and to the Audio tab's volume).
+  - 🔄 The SMM1 screens (select, map, card) are louder than SMM2's. They should sound the same. SMM1's voices
+    were mixed in at full gain (`mods/smm1/smm1_audio.c`). Done (2026-10-21): each sound now plays at its own
+    SMM1 volume from its `.bameta` (AMTA). Every 100 Mario sound has 0.787. The select music's tracks are
+    0.55-0.91 on top of that. Measured from the owner's SMM1 files. The Audio tab's volume already applies after
+    the mix. Left: measure SMM1's screens against SMM2's menus in game (`LARECOMP_SMM1_GAIN=<x>` to try levels),
+    then set `SMM1_MIX`.
   - ⬜ Leaving Challenge Modes still flashes the other mode's screen for a moment. For example, closing it from
     100 Mario shows Endless for about a second. The ZL / ZR switch itself is much better now.
   - ⬜ The transition from 100 Mario's map / card into the course isn't exact yet, and lags slightly. Needs
