@@ -327,6 +327,10 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
   controls (`recomp/runtime/ui/touchpad.mm`) don't keep clear of the safe area, so the L / ZL buttons are partly
   under the notch in landscape. Inset them by the window's safe area. The phone reached the title screen and ran
   well, then was killed for memory (jetsam `vm-pageshortage` at ~1.85 GB); owner isn't chasing that for now.
+- ⬜ **"Lanky Mario" as an SMM1 mod** (owner, 2026-10-21): SMM1's tall, stretched, glitchy-looking Mario. This is
+  most likely the Weird Mushroom ("Weird Mario"), SMB1 style only. Confirm from the SMM1 files what it is: its
+  model and animations, whether it changes the jump or physics, and how it turns up in courses. Then add it behind
+  its own switch, next to the Mystery Mushroom costumes (`mods/costume.c`). Not started.
 - ⬜ **Rename the app** (owner, 2026-10-20): desktop (macOS app / menu bar, Windows, Linux, release packages)
   maybe "Super Mario Maker 2", mobile (iOS / Android home screen, which cuts names past ~12 characters) something
   shorter such as "SMMaker 2", instead of "SMM2 Recomp" everywhere. Not final: the full name is Nintendo's
