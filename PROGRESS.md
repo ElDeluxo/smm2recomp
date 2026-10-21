@@ -432,6 +432,11 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
   than an OS one: a new player meets SMM2's first-time setup (maker profile / Mii / user creation, Course World's
   ID step), and the am / mii / acc answers may end it at once. Check by reproducing with an empty save / data folder
   first; also check what a new save unlocks. Not started (paused; the owner sets the order).
+  A second report, likely the same bug (Windows or Mac): "click Course World, it goes in and immediately back to the
+  main screen". When reproducing with an empty save, also check: which version they're on (v0.3.0 had no built-in
+  server, though that showed "communication error"); the `courses=` / server settings a fresh data folder gets; and
+  whether Course World's sign-in (our offline answer) fails without a saved account. If it isn't fixed by v0.4.0,
+  the release notes should ask for the version and `smm2recomp.log`.
 - ⬜ **OpenCourse World as a course source** (owner, 2026-10-22): https://opencourse.world/ selectable as one of the
   course server options (next to our own server and TGRCode, in the Mods tab's course source setting). Looked at
   2026-10-22: OCW is a replacement online service for SMM2 3.0.2 / 3.0.3 on Switch (Atmosphere) and Ryujinx. The
