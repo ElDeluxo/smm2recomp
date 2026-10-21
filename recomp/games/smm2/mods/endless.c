@@ -371,6 +371,33 @@ void endless_prefetch(int d) {
 
 // A run the flow starts (hundred_run_start): a new one has the start lives at once (the status the start card reads
 // before the game's New Game request is answered); a continued one has the server's.
+// A continued run's credits: the courses cleared before (the server's history of the run, with names and makers) in
+// place of what this session saw, so the ending lists the whole run after a Save & Quit or a restart.
+static void *credits_thread(void *arg) {
+    int d = (int)(intptr_t)arg;
+    char path[96];
+    snprintf(path, sizeof path, "/api/endless/%s/history?ruleset=%s", DIFF[d], RULESET());
+    int st;
+    Json *j = srv_call("GET", path, NULL, &st);
+    Json *list = json_get(j, "history");
+    if (list) {
+        pthread_mutex_lock(&state_lock);
+        runs[d].ncredits = 0;
+        for (size_t i = 0; i < json_len(list) && runs[d].ncredits < 32; i++) {
+            Json *e = json_at(list, i);
+            if (strcmp(json_str(json_get(e, "result"), ""), "clear")) continue;
+            struct hundred_credit *c = &runs[d].credits[runs[d].ncredits++];
+            snprintf(c->name, sizeof c->name, "%s", json_str(json_get(e, "name"), "?"));
+            snprintf(c->maker, sizeof c->maker, "%s", json_str(json_get(e, "maker"), ""));
+            snprintf(c->code, sizeof c->code, "%s", json_str(json_get(e, "code"), ""));
+        }
+        MLOG("credits of the continued run (%s): %d courses\n", DIFF[d], runs[d].ncredits);
+        pthread_mutex_unlock(&state_lock);
+    }
+    json_free(j);
+    return NULL;
+}
+
 void endless_prepare_run(int d, bool resume) {
     if (d < 0 || d > 3) return;
     static const uint32_t totals[4] = {8, 16, 16, 6};
@@ -381,7 +408,11 @@ void endless_prepare_run(int d, bool resume) {
     }
     runs[d].current = 0;
     pthread_mutex_unlock(&state_lock);
-    if (resume) endless_prefetch(d);
+    if (resume) {
+        endless_prefetch(d);
+        pthread_t th;
+        if (pthread_create(&th, NULL, credits_thread, (void *)(intptr_t)d) == 0) pthread_detach(th);
+    }
 }
 
 // ---- InitEndlessMode: New Game

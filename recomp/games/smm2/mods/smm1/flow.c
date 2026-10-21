@@ -851,6 +851,8 @@ const uint8_t *game_overlay_image(int *w, int *h, int *full, uint64_t *seq) {
     const uint8_t *img = any && g_has_front ? g_front : NULL;
     *w = W, *h = H, *full = g_front_full, *seq = g_front_seq;
     pthread_mutex_unlock(&g_img);
+    if (!img) return smw_goal_image(w, h, full, seq);  // (nothing of the flow's on screen, e.g. a run's course: the
+                                                       // SMW goal wipe's circle there too, or none)
     return img;
 }
 #endif
