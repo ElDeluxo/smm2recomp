@@ -297,8 +297,15 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     over Course World. Checked in game 2026-10-21 (macOS, frames every 6 around B): the select stays 45 frames
     while the menu leaves, then cross-fades into Course World; the Endless menu is never seen. Left: leaving from
     SMM2's Endless side (owner to say if that one flashes too).
-  - ⬜ The transition from 100 Mario's map / card into the course isn't exact yet, and lags slightly. Needs
-    more testing and tuning against SMM1 and SMM2.
+  - 🔄 The transition from 100 Mario's map / card into the course isn't exact yet, and lags slightly. Measured
+    2026-10-21 (macOS, two New Game runs): the lag is shaders compiling the first time a course of a new style /
+    theme is seen. As the card gives way to the course, 36-49 programs compile (one took 426 ms, 49 together
+    9.3 s of compiler time). The first course frame waits up to 0.4-0.7 s, then one 1.6 s gap with a black
+    frame. Once seen, a shader is in Metal's cache and the precompiled set, so it happens once per machine per
+    style / theme. A smaller 0.57 s stall falls on the black between the iris and the card (the scene switch),
+    where it isn't seen. Possible fix (not started): compile the game's shaders ahead, at setup or in the
+    background at the title, so no course meets a cold shader. The rest of the animation still needs the
+    owner's eye against SMM1 / SMM2.
 - 🔄 **Mac app won't start the game; release zip lacks `smm1_extras.py` (owner, 2026-10-20 / 21):** one cause.
   Every v0.2.0 package left out `gamelib-src/mods/smm1_extras.py` (`tools/package_lib.sh` copied only
   `mods/patches.py`), so the first-launch recompile stopped at once. The owner's Mac app log shows it: steps 1-2
@@ -319,6 +326,11 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
   - ⬜ Mario's model has a grainy, speckled look across his face and overalls, like noise or broken dithering.
     It's not how he looks on the console. Compare the same frame with Ryujinx; suspects are his shading or AO
     pass and texture or sampler state on the iPad's GPU. The Vulkan NaN blur at his eyes (line 98) may be related.
+    Checked 2026-10-21: on the Mac, Mario on the 3D World title is smooth at render scale 1.0 and at 1.43 (the
+    iPad's). The iPad uses the GPU's own BC textures (no software decode in its log). MetalFX ran there only on
+    frame 0 (1920x1080 -> 2752x1548), before the 1.43 render scale applied. So the grain is not those, and it is
+    something about the iPad. Next: the same frame on the iPad (`recomp-test.env` in the app's Documents now sets
+    test variables there: `SMM2_SEED=4`, `LARECOMP_HOST_INPUT=2386:shot:...`), diffed against the Mac's.
   - ⬜ The water in the background looks a bit too shiny. The 3D World liquid surfaces already differ most from
     Ryujinx (castle lava 2.28 % px > 24), so check specular and reflection on liquids.
 
