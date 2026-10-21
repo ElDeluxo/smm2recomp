@@ -300,6 +300,14 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
   (`recomp/games/smm2/mods/smm1_extras.py`), so the first-launch recompile or the SMM1 extras can't use it. Check
   what the packaging scripts copy (`package.sh`, `package_lib.sh`, `bundle_macos.sh`) against what the recompile
   imports, add it, and make `scripts/check_package.py` fail when a needed tool file is missing.
+- ⬜ **Windows setup: reading the NSP fails with "no output" (owner, 2026-10-21, v0.2.0):** step 1 stops at
+  "Reading Super Mario Maker 2 [01009B90006DC000][v0].nsp failed: no output", with the generic advice about
+  `prod.keys`. The file is in `D:\Recomp\SuperMarioMaker2\SMM2Recomp-windows-x86_64\`. "No output" means the
+  bundled hactool printed nothing: it may not have started (DLLs, path with spaces / brackets, the D: drive),
+  the keys path may not have been passed, or it crashed. Get `logs\setup.log` from the owner. Check how the
+  launcher calls hactool on Windows (quoting, working directory, exit code), show hactool's exit code and stderr
+  in the error, and only blame the keys when hactool actually says so. This is the first run of the
+  NSP-extraction path through the screen (it was never tested end to end).
 - ⬜ **3D World rendering on the iPad (owner's screenshot, 2026-10-20; 3D World ground course, Metal):**
   - ⬜ Mario's model has a grainy, speckled look across his face and overalls, like noise or broken dithering.
     It's not how he looks on the console. Compare the same frame with Ryujinx; suspects are his shading or AO
