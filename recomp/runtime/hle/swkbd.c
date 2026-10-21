@@ -7,6 +7,9 @@
 
 #include "../hle.h"
 
+// name entries so far (a mod tells a Course Maker Save As, which asks for a name, from a Load, which doesn't)
+unsigned g_swkbd_entries;
+
 int menu_keyboard_run(const char *initial, int max_len, char *out, int cap);  // runtime/ui/menu.mm
 
 // nn::swkbd::ShowKeyboard(nn::swkbd::String *out, const nn::swkbd::ShowKeyboardArg &arg) -> nn::Result
@@ -43,6 +46,7 @@ HLE_FUNC("_ZN2nn5swkbd12ShowKeyboardEPNS0_6StringERKNS0_15ShowKeyboardArgE", swk
     int ok = menu_keyboard_run(initial, max_len, text, sizeof text);
     if (!ok) snprintf(text, sizeof text, "%s", initial);  // cancelled: keep what was there
     LOG("[swkbd] name entry (max %d, initial \"%s\"): %s \"%s\"\n", max_len, initial, ok ? "entered" : "cancelled", text);
+    __atomic_fetch_add(&g_swkbd_entries, 1, __ATOMIC_RELAXED);
     if (ptr && size >= 2) {  // UTF-8 -> UTF-16 LE, NUL-terminated
         memset((void *)(uintptr_t)ptr, 0, size);
         uint16_t *o = (uint16_t *)(uintptr_t)ptr;

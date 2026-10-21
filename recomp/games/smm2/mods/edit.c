@@ -187,21 +187,36 @@ static void make_own(uint64_t file, uint32_t creation) {
 // id once the Course Maker was up]. Its Save / Load menu and Save As read that buffer's header [obs: with it reset,
 // the menu offers Save As and Load only, as for a new course]. So for a while after the request, this resets that
 // header whenever the original's comes back.
-static struct { uint32_t orig_creation, creation; uint64_t orig_upload; } g_reset;
+//
+// Save As gives the course a new creation id [obs e099c3d7 -> cf2b3d34], and the origin record is keyed by it. Save
+// As asks for a name first; Load doesn't. So while the copy is in the Course Maker, a new creation id in that buffer
+// after a name entry is the copy saved under a new id, and its record follows; a change without one (another course
+// loaded) ends the watch.
+extern unsigned g_swkbd_entries;  // runtime/hle/swkbd.c
+static struct { uint32_t orig_creation, creation; uint64_t orig_upload; char code[12], maker[48]; } g_reset;
 static void *reset_after_load(void *arg) {
     (void)arg;
     int applied = 0;
-    for (int i = 0; i < 1250; i++) {  // (20 s)
+    uint32_t tracked = g_reset.creation;
+    unsigned names = __atomic_load_n(&g_swkbd_entries, __ATOMIC_RELAXED);
+    for (int i = 0; i < 1250 + 4 * 60 * 120; i++) {  // (20 s at 16 ms, then up to 2 h at 250 ms)
         uint64_t mgr = g64(SAVE_MGR), cur = mgr ? g64(mgr + 0x58) : 0;
         if (cur && g32(cur) == 1 && !memcmp((const void *)(uintptr_t)(cur + 0xc), "SCDL", 4)) {
             uint64_t hdr = cur + 0x10;
-            if (g32(hdr + 0x24) == g_reset.orig_creation && g64(hdr + 0x28) == g_reset.orig_upload) {
+            uint32_t now_id = g32(hdr + 0x24);
+            if (now_id == g_reset.orig_creation && g64(hdr + 0x28) == g_reset.orig_upload) {
                 make_own(cur, g_reset.creation);
                 if (!applied++) LOG("[mod] edit: the Course Maker's course made the player's own (creation id %08x)\n",
                                     g_reset.creation);
+            } else if (applied && now_id != tracked) {
+                unsigned n = __atomic_load_n(&g_swkbd_entries, __ATOMIC_RELAXED);
+                if (n == names || g64(hdr + 0x28)) break;  // (another course: the watch ends)
+                LOG("[mod] edit: the copy saved as %08x (was %08x): its origin goes with it\n", now_id, tracked);
+                if (g_reset.code[0]) remember_origin(now_id, g_reset.code, g_reset.maker);
+                tracked = now_id, names = n;
             }
         }
-        usleep(16000);
+        usleep(i < 1250 ? 16000 : 250000);
     }
     return NULL;
 }
@@ -227,6 +242,7 @@ static void prepare_copy(int32_t slot) {
         code[0] ? code : "?", maker[0] ? maker : "?", g32(hdr + 0x24), creation, (unsigned long long)g64(hdr + 0x28),
         g32(hdr + 0x18));
     g_reset.orig_creation = g32(hdr + 0x24), g_reset.orig_upload = g64(hdr + 0x28), g_reset.creation = creation;
+    snprintf(g_reset.code, sizeof g_reset.code, "%s", code), snprintf(g_reset.maker, sizeof g_reset.maker, "%s", maker);
     make_own(file, creation);
     pthread_t th;
     if (pthread_create(&th, NULL, reset_after_load, NULL) == 0) pthread_detach(th);

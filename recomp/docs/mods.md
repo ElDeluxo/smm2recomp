@@ -197,8 +197,11 @@ SMM2's window of a downloaded course has only Play, Play Together and Delete, so
   after Save As the saved copy's header has flags 0 and upload id 0. The yellow arrow mark on its card stays, so it
   isn't an "uploaded" mark: own, uncleared courses have it too.
 - Found 2026-10-21: Save As gives the copy a new creation id (e.g. e099c3d7 -> cf2b3d34), so `smm2edit.txt`, which is
-  keyed by creation id, doesn't find it at upload: the "Based on" credit is lost. Next: hook Save As (old -> new
-  creation id) and carry the record over.
+  keyed by creation id, doesn't find it at upload. Fixed the same day: Save As asks for a name and Load doesn't, so
+  while the copy is in the Course Maker, a new creation id in its buffer right after a name entry
+  (`g_swkbd_entries`, runtime/hle/swkbd.c) carries the record to the new id. A change without a name entry (another
+  course loaded) ends the watch. Checked in game: `655ff576 -> 7f8d0ecf`, both in `smm2edit.txt`. The upload itself
+  needs a clear check first and hasn't been run in game.
 - Proposed, not built: an Edit on Course World's course card (Download, then straight into the Course Maker when
   the Coursebot has saved it); in Endless / 100 Mario, "save to Coursebot for later" from SMM2's result screen
   (SMM1 offers no edit there).
