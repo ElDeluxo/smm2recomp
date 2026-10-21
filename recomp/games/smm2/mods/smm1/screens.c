@@ -362,12 +362,11 @@ static void phase(Intro *s, int p) {
         break;
     case P_GO: {  // Mario's Go (128, at least 60), then the scene changes
         mario_play(m, "Go", t, false);
-        smm1_se("M3_Wipe");
         int g = (int)lay_length(l, MARIO_PART "/Go");
         s->end = t + (g > 60 ? g : 60);
         break;
     }
-    case P_FADE: s->end = t + FADE; break;
+    case P_FADE: s->end = t + FADE, smm1_se("M3_Wipe"); break;  // (the wipe's sound with the wipe, not with the Go)
     case P_CARD_IN: card_in(s); break;
     case P_CARD_HOLD: s->end = -1; break;
     case P_CARD_OUT:  // the card leaves (Out, 150) over the starting course

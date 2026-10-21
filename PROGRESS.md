@@ -291,8 +291,9 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
   Mario card has no frame triggers. Its walk / jump sounds are keys its code calls, and the walk key picks
   SE_walk80 / 60 / 40 / 20 / 10 / 0, apparently by how many Marios walk. The mod plays one footstep sound for all.
   Left: the value table (each key's Delay / Duration), the selection rule, and the card code's call times.
-  Owner: say whether the off timing is on SMM1's card or on SMM2's own course start; with SMM2's card, SMM2 holds
-  the course's first frame until the flow is ready, which could also shift SMM2's sounds.
+  Owner (2026-10-21): it's the SMM1 map. Selecting a level makes the sound, then the animation happens. Found: the
+  wipe's sound (M3_Wipe) played at the start of Mario's Go pose, about two seconds before the iris wipe it belongs
+  to. Moved to the wipe's start (`mods/smm1/screens.c` P_FADE). Not yet heard in game.
 - ⬜ **100 Mario polish (owner's test, 2026-10-20: "overall it's not bad"):**
   - ✅ The SMM1 screens (select, map, card) were louder than SMM2's (owner, 2026-10-20). Fixed 2026-10-21. Each
     SMM1 sound plays at its own `.bameta` volume (0.787; the select's tracks 0.55-0.91 on top). The level is set
