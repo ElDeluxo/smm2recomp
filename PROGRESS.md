@@ -66,6 +66,9 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
 - ✅ R1 (macOS): boots to the title screen and renders it (2026-10-19). What it took: `recomp/docs/smm2-bringup.md`
   (per-core scheduling, nifm/friend/mii/fonts/system data, NVN conditional rendering, 3D render targets, blocking
   first-use compiles, narrow vertex strides, in-order uniform updates, translator TLD4/TMML/LDC.64 fix)
+- ✅ Shader prefetch (2026-10-20, Metal + Vulkan): a submission's first-use builds start side by side, draws wait for
+  theirs and are never skipped; cold worst frame 19.6 -> 2.8 s (Mac), 6.9 -> 2.6 s (iPad), warm unchanged
+  (`recomp/docs/smm2-bringup.md`)
 - 🔄 Title screen frames vs Ryujinx, five courses in four styles (3D World, SMB1 x2, SMB3, NSMBU), same course
   and nearest frame, both windows grabbed through the window server: 2.50-4.80 % of pixels differ by more than 24,
   0.66-2.98 % by more than 48, 0.13-1.15 % by more than 96 (table in `recomp/docs/smm2-bringup.md`). Fixed in
@@ -95,6 +98,19 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
   `recomp/private/smm2/evidence/linux/` (private). Mario's model on the 3D World title (2026-10-19): his composite drew nothing (vertex data 2.6 GB into the heap, past lavapipe's 2 GB allocation limit: now copied there) and his depth mask was not written on lavapipe (a lavapipe-only workaround splits such draws into submissions); he is in the scene now, but a few NaN texels at his eyes bloom into a white blur in the final frame (open). Shadow samplers on a colour texture now go through a depth copy (validation clean apart from the 3.2 GB global-memory binding, see `recomp/docs/smm2-bringup.md`). Left: that NaN; Windows and x64 untested
 - 🔄 iOS / iPadOS (2026-10-19): `make -C recomp TARGET=ios-arm64 | iossim-arm64 GAME=smm2 app` (AOT: the game code is compiled on the Mac and linked into the app; no JIT, no game code library); Documents holds the game files and the log; touches are the console touch screen (macOS: the left mouse button), controllers through SDL; BC textures decoded on the CPU where the GPU lacks them. Evidence: the Simulator boots to the title; an iPad Pro 13 M5 (iOS 27.0, installed over Tailscale, App ID with extended virtual addressing + increased memory limit: `recomp/tools/ios_profile.sh`) boots through the intro to the title screen and its menu at a steady 60 fps (MetalFX to 2752x2064, the 3.25 GB heap buffer taken whole), no faults (`recomp/private/smm2/evidence/ios/`, private: screenshots, boot log, the address-space log below). The guest window stays at 0x7000000000 on iOS: with the entitlement iOS 27 gives an app up to 0x8000000000 and keeps 0x2ee000000-0x7000000000 itself (measured; `GUEST_ORIGIN` moves it where that differs). On-screen controller for touch-only devices (stick, ABXY, L/R/ZL/ZR, +/-, menu, hide), other touches stay the touch screen. Left: play a course on the device; the on-screen controller is drawn but not yet tried by hand
 - 🔄 Android (2026-10-19, emulator only: the owner has no Android device): `make -C recomp TARGET=android-arm64 GAME=smm2 apk install push-data` (AOT as on iOS: the game code is compiled on the Mac and shipped in the APK as `libsmm2game.so`; SDL's Java activity, no Gradle; deps from source: `tools/android_deps.sh`); game files in the app's external files folder (adb), log there and in logcat, `recomp.env` for environment variables; Vulkan backend with an RGBA swapchain fallback, compositor rotation, surface recreation after the home screen, CPU BC decoding; on-screen controller and touch screen, Back = overlay menu. Guest window at 0x800000000 (DECISIONS.md "Android"): [obs] the emulator's kernel has a 39-bit address space, and on one of its boots 742 mappings (6.4 GB) sat in the desktop window 0x7000000000-0x7320000000. Fixed on the way for every Vulkan target: the translator's GLSL `fmin` / `fmax` helpers (renamed: they broke MoltenVK's SPIR-V -> MSL), a settings-load crash on a saved `smm2.ini`. Evidence (`recomp/private/smm2/evidence/android/`, private: screenshots `emulator_title_3.png`, `emulator_stick_walk.png`, `emulator_a_jump.png`, `emulator_course_walk2.png`, `emulator_back_menu.png`, `emulator_resumed.png`, boot logs): intro, full title screen, the title course played by touch. Left: a physical device (install path untested); a course from the menus; fps on real hardware
+- 🔄 Frame generation, 120 fps output (owner request 2026-10-20; DECISIONS.md 2026-10-20): Video tab "Frame
+  generation: Off / 120 fps" adds one motion-estimated in-between frame per real one on displays of 100 Hz and more;
+  the game itself stays at 60 (scripted-run player traces identical off and on). Spec and plan:
+  `docs/superpowers/specs/2026-10-20-frame-generation-design.md`, `docs/superpowers/plans/2026-10-20-frame-generation.md`.
+  - ✅ The passes: one source for Metal and Vulkan (`runtime/nvn/framegen_src.c`); `make -C recomp test-framegen`
+    (scroll lands halfway, still image and HUD exact, a cut shows the previous frame, a sprite moves halfway).
+  - ✅ macOS (Metal), with the 120 Hz path forced (`LARECOMP_FORCE_DISPLAY_HZ`: the Mac's displays are 60 Hz): the game
+    holds 60 with an in-between frame for about every real one, Mario halfway in the generated frame, the menu sharp;
+    on a 60 Hz display nothing is generated
+  - ✅ Vulkan (Linux arm64 on Mesa lavapipe in a container): generated frames, a window resize, the validation layer
+    clean apart from its two earlier messages; Windows and Android build
+  - ⏳ iPad: the app is built and signed; checking real 120 Hz on the M5 waits for the iPad to be online
+  - ⬜ A real 120 Hz display on macOS, Windows, Linux and Android (none here)
 - ✅ R2 (macOS): plays courses by input injection, and input replays stay in sync with Ryujinx frame for frame
   (2026-10-19). The game now gets input (`nn::hid::GetNpadStates` answered by the runtime; before, it saw none,
   keyboard included); `RECOMP_PAD_SCRIPT` plays the Ryujinx trace tooling's scripts on the game's own clock (one frame
@@ -202,8 +218,11 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
   - 🔄 **Edit any course** (`games/smm2/mods/edit.c`, `recomp/docs/mods.md` "Edit any course"; WIP, paused):
     ✅ Course World's Download into the Coursebot against our server (stand-in thumbnail); ✅ SMM2's Make in the
     Coursebot window of a downloaded course (SMM1's Edit placement), the Course Maker opens with the course, an edit
-    saved to My Courses and played (screens private); ⬜ d-pad cursor onto Make (touch works), ⬜ the copy's
-    "uploaded" mark cleared (fix not yet checked), ⬜ upload credit in game (server `based_on` done and tested),
+    saved to My Courses and played (screens private); ✅ typed names intact on Save As (re-tested 2026-10-21);
+    ⬜ d-pad cursor onto Make (touch works; the cursor's target list isn't the enable call's, see mods.md),
+    ✅ the copy is the player's own (2026-10-21: reset after the Course Maker's reload; saved copy has upload id 0;
+    the yellow arrow on cards isn't an upload mark), ✅ the "Based on" record follows Save As (new creation id; checked
+    in game 2026-10-21), ⬜ upload credit in game (server `based_on` done and tested),
     ⬜ Edit on the course card / Endless (proposed)
   - 🔄 **Our open-source server everywhere the game would reach Nintendo** (`recomp/docs/mods.md`,
     `games/smm2/mods/world.c`): ✅ Course World's course lists (Hot, Popular, New, detailed search, a
@@ -267,7 +286,119 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
 
 - ⬜ **Bug (owner, 2026-10-19):** sound effects when opening a course and during course loading are
   slightly off (timing). Probably tied to the SLink sound trigger table not being decoded (sounds are
-  placed by name, not frame-exact). Not started.
+  placed by name, not frame-exact). 🔄 2026-10-21: SMM1's SLink2DB (XLNK v0x15) partly decoded: users, keys,
+  actions, frame triggers and the parameter names (notes in `research/specs/smm1-slink2db.md`, private). The 100
+  Mario card has no frame triggers. Its walk / jump sounds are keys its code calls, and the walk key picks
+  SE_walk80 / 60 / 40 / 20 / 10 / 0, apparently by how many Marios walk. The mod plays one footstep sound for all.
+  Left: the value table (each key's Delay / Duration), the selection rule, and the card code's call times.
+  Owner (2026-10-21): it's the SMM1 map. Selecting a level makes the sound, then the animation happens. Found: the
+  wipe's sound (M3_Wipe) played at the start of Mario's Go pose, about two seconds before the iris wipe it belongs
+  to. Moved to the wipe's start (`mods/smm1/screens.c` P_FADE). Not yet heard in game.
+- ⬜ **100 Mario polish (owner's test, 2026-10-20: "overall it's not bad"):**
+  - ✅ The SMM1 screens (select, map, card) were louder than SMM2's (owner, 2026-10-20). Fixed 2026-10-21. Each
+    SMM1 sound plays at its own `.bameta` volume (0.787; the select's tracks 0.55-0.91 on top). The level is set
+    against SMM2's mix: `SMM1_MIX` 0.3 in `mods/smm1/smm1_audio.c`. Measured with `LARECOMP_AUDIO_WAV` on macOS:
+    the select's music went from -27 dB RMS to -37.7 dB, against -38.0 dB for SMM2's Endless menu and Course World.
+  - ✅ Leaving Challenge Modes still flashes the other mode's screen for a moment. For example, closing it from
+    100 Mario shows Endless for about a second. The ZL / ZR switch itself is much better now. Cause: on B the
+    select faded out in 32 frames, but the B press on SMM2's Endless menu underneath only comes after the
+    player's B is released (`DRV_BACK`), and that menu then slides away. Done (2026-10-21, not yet run): the
+    select stays until the menu's Disappear has run and stopped (`hundred_menu_left`; 4 s at most), then fades
+    over Course World. Checked in game 2026-10-21 (macOS, frames every 6 around B): the select stays 45 frames
+    while the menu leaves, then cross-fades into Course World; the Endless menu is never seen. Left: leaving from
+    SMM2's Endless side (owner to say if that one flashes too).
+  - 🔄 The transition from 100 Mario's map / card into the course isn't exact yet, and lags slightly. Measured
+    2026-10-21 (macOS, two New Game runs): the lag is shaders compiling the first time a course of a new style /
+    theme is seen. As the card gives way to the course, 36-49 programs compile (one took 426 ms, 49 together
+    9.3 s of compiler time). The first course frame waits up to 0.4-0.7 s, then one 1.6 s gap with a black
+    frame. Once seen, a shader is in Metal's cache and the precompiled set, so it happens once per machine per
+    style / theme. A smaller 0.57 s stall falls on the black between the iris and the card (the scene switch),
+    where it isn't seen. Measured how much earlier they could compile (`LARECOMP_PROG_STATS=1`; 35 new
+    programs at one course start): 34 use the default key, so a guess would be right. But the game sets their
+    shaders only shortly before the first draw: 6 under 0.1 s, 27 in 0.1-1 s, 2 over 1 s. Compiling at that
+    point would shorten the hitch by about half, not remove it. Left as is (once per machine per style /
+    theme). A full fix would compile the game's shaders well ahead (at setup or at the title), which is a
+    bigger project. The rest of the animation still needs the
+    owner's eye against SMM1 / SMM2.
+- 🔄 **Mac app won't start the game; release zip lacks `smm1_extras.py` (owner, 2026-10-20 / 21):** one cause.
+  Every v0.2.0 package left out `gamelib-src/mods/smm1_extras.py` (`tools/package_lib.sh` copied only
+  `mods/patches.py`), so the first-launch recompile stopped at once. The owner's Mac app log shows it: steps 1-2
+  passed with their NSPs, keys and firmware, then `generator (main) failed: FileNotFoundError: ...
+  gamelib-src/mods/smm1_extras.py`. Fixed (2026-10-21): the packages copy every `mods/*.py`, and
+  `scripts/check_package.py` now fails a package that lacks a file the recompile reads (it flags the installed
+  v0.2.0 app). Also, that app's data folder is a link to the external SSD, so with the SSD unplugged it can't
+  start: the error now says the link points to a folder that isn't there. ⏳ Needs a new release (v0.2.1) to reach
+  the owner's Mac.
+- 🔄 **Windows setup: reading the NSP fails with "no output" (owner, 2026-10-21, v0.2.0):** step 1 stopped at
+  "Reading Super Mario Maker 2 [01009B90006DC000][v0].nsp failed: no output", and blamed `prod.keys`. The bundled
+  hactool printed nothing and failed. Its exe is normal: standard UCRT DLLs and a 16 MB stack; the largest frame
+  is `main` at 257 KB. So it most likely crashed. The cause is not known yet (no Windows machine here). Done
+  (2026-10-21): a silent hactool failure now says "hactool stopped without a message", with the exit code
+  decoded (access violation, missing DLL and so on), and no longer blames the keys; the exit code goes to the
+  setup log. ⏳ Needs the owner to run hactool once by hand on Windows, or the new message from v0.2.1.
+- ⬜ **3D World rendering on the iPad (owner's screenshot, 2026-10-20; 3D World ground course, Metal):**
+  - ⬜ Mario's model has a grainy, speckled look across his face and overalls, like noise or broken dithering.
+    It's not how he looks on the console. Compare the same frame with Ryujinx; suspects are his shading or AO
+    pass and texture or sampler state on the iPad's GPU. The Vulkan NaN blur at his eyes (line 98) may be related.
+    Checked 2026-10-21: on the Mac, Mario on the 3D World title is smooth at render scale 1.0 and at 1.43 (the
+    iPad's). The iPad uses the GPU's own BC textures (no software decode in its log). MetalFX ran there only on
+    frame 0 (1920x1080 -> 2752x1548), before the 1.43 render scale applied. So the grain is not those, and it is
+    something about the iPad. Reproduced 2026-10-21 on the iPad itself (v0.3.0, `recomp-test.env`: `SMM2_SEED=4`,
+    `LARECOMP_HOST_INPUT=2386:shot:...`; the app's Documents needs a `build/` folder): Mario on the 3D World title
+    is covered in cyan / blue speckle, and the same frame on the Mac is clean. The scenery and the Koopa match. The
+    speckle pattern changes from run to run. Ruled out on the iPad: BC decoding (`RECOMP_BC_SOFT=1`: same
+    speckle) and Maxwell's FMZ multiply (now translated as the hardware does it, 0 x anything = 0; same speckle).
+    Next test, built but not yet run (the iPad dropped the connection): `LARECOMP_ZERO_TEXTURES=1` clears every new
+    colour texture to zero, every mip level and slice. Metal leaves new textures undefined: zeros on the Mac, leftovers
+    on iOS. If the speckle goes, a texture the game expects zeroed (e.g. unrendered probe mips) is the cause.
+  - ⬜ The water in the background looks a bit too shiny. The 3D World liquid surfaces already differ most from
+    Ryujinx (castle lava 2.28 % px > 24), so check specular and reflection on liquids.
+
+- ⬜ **Vulkan fixes found by the SM35 port (2026-10-21, not yet in SMM2):** (1) shader global memory is one storage
+  buffer over the 3.2 GB heap, but a GPU only reaches `maxStorageBufferRange` of it (128 MB on lavapipe and Adreno,
+  1-2 GB on some desktop GPUs; reads past that give 0): SM35 uses bufferDeviceAddress where available
+  (sm35recomp e292dce). (2) without host memory import (Android emulator, many phones) global memory reads give 0:
+  SM35 copies each draw's bound storage buffers into per-draw memory (3fce300). (3) Android 11+ can't read files
+  adb pushed into Android/data/<pkg>: SM35 falls back to the internal folder (a5e5395). Likely behind SMM2's
+  Vulkan-only differences (3D World Mario on lavapipe); port when Windows / Linux / Android get attention.
+
+### Future (owner's backlog, not scheduled)
+- 🔄 **120 fps output by frame generation** (owner, 2026-10-19): built 2026-10-20 (Video tab, `frame_gen`,
+  off by default; our own interpolation for Metal and Vulkan, not MetalFX's; game logic stays 60 Hz). Owner on
+  the iPad: "doesn't look amazing at this stage". Left: picture quality, the iPad's shown-frames count, a real
+  120 Hz display. Spec: `docs/superpowers/specs/2026-10-20-frame-generation-design.md`
+- 🔄 **Local multiplayer input, players 1-4** (owner, 2026-10-20; built 2026-10-21): every further controller is
+  the next player, Npad No. 2..4, through the same bindings (`runtime/hle/input.c`). Player 1 keeps the keyboard,
+  the on-screen controller and the first controller. `GetNpadState(s)` and `GetNpadStyleSet` report players 2-4
+  while their controller is there. The style set update events fire when a controller comes or goes. The controller
+  support applet (Play Together's "how many players") is answered at once with the players there are.
+  `LARECOMP_INPUT2` scripts a player 2 for tests. Checked in game (macOS, scripted player 2): a downloaded course's
+  Play Together shows Mario and Luigi on the card, and in the course Luigi runs on player 2's input while Mario
+  stands. Left: real second / third / fourth controllers (none here), and controllers connected mid-game.
+- ⬜ **Endless / 100 Mario in local co-op** (owner, 2026-10-20; needs the item above): challenge runs played
+  together on one device. SMM2's Endless and SMM1's 100 Mario are single-player, so this is a mod, off by
+  default: start each challenge course the way Play Together does, and decide the rules (shared or separate
+  lives, a clear when any player reaches the goal, whose form the ending shows). `mods/endless.c` keeps one
+  run per difficulty today. Not designed yet.
+- 🔄 **iPhone: on-screen L and ZL sit behind the notch** (owner, 2026-10-20, iPhone 12 mini; built 2026-10-21: the
+  controls are offset by the window's left / right safe-area insets, `SDL_GetWindowSafeArea`, updated on safe-area
+  and resize events and on touches; not yet seen on the iPhone): the touch
+  controls (`recomp/runtime/ui/touchpad.mm`) don't keep clear of the safe area, so the L / ZL buttons are partly
+  under the notch in landscape. Inset them by the window's safe area. The phone reached the title screen and ran
+  well, then was killed for memory (jetsam `vm-pageshortage` at ~1.85 GB); owner isn't chasing that for now.
+- ⬜ **"Lanky Mario" as an SMM1 mod** (owner, 2026-10-21): SMM1's tall, stretched, glitchy-looking Mario. This is
+  most likely the Weird Mushroom ("Weird Mario"), SMB1 style only. Found 2026-10-21: SMM1's name for it is
+  `KinokoFunny` (editor sounds in every style, edit DB entries); there is no separate model, so the stretch and
+  its jump are likely code (Block.rpx). Notes in `research/specs/smm1-extras-recomp-notes.md` (private). Confirm from the SMM1 files what it is: its
+  model and animations, whether it changes the jump or physics, and how it turns up in courses. Then add it behind
+  its own switch, next to the Mystery Mushroom costumes (`mods/costume.c`). Not started.
+- ⬜ **Rename the app** (owner, 2026-10-20): desktop (macOS app / menu bar, Windows, Linux, release packages)
+  maybe "Super Mario Maker 2", mobile (iOS / Android home screen, which cuts names past ~12 characters) something
+  shorter such as "SMMaker 2", instead of "SMM2 Recomp" everywhere. Not final: the full name is Nintendo's
+  trademark and the repo and releases are public. Set in `recomp/games/smm2/game.mk` and the packaging scripts
+  (`recomp/tools/make_ios_app.sh`, `bundle_macos.sh`, `make_android_apk.sh`, `package.sh`, `package_lib.sh`) and
+  `.github/workflows/release.yml`; on iOS the short name is `CFBundleDisplayName`. Decide whether bundle IDs, the
+  data folder and release file names change too (changing the iOS bundle ID loses the installed app's data).
 
 | Platform | Builds | Boots to title | Plays courses | Frames match Ryujinx | Input replays in sync |
 |---|---|---|---|---|---|

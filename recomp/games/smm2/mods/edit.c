@@ -12,6 +12,9 @@
 #include <string.h>
 #include <time.h>
 
+#include <pthread.h>
+#include <unistd.h>
+
 #include "mod.h"
 #include "../../../runtime/net/json.h"
 
@@ -179,6 +182,45 @@ static void make_own(uint64_t file, uint32_t creation) {
     s32(file + 8, crc32_of((const uint8_t *)(uintptr_t)hdr, COURSE_BODY));
 }
 
+// The Course Maker loads the course again during the scene change, into the Coursebot's current-course buffer (save
+// manager +0x58), whatever the reset prepared slot held [obs: both buffers held the download's creation id and upload
+// id once the Course Maker was up]. Its Save / Load menu and Save As read that buffer's header [obs: with it reset,
+// the menu offers Save As and Load only, as for a new course]. So for a while after the request, this resets that
+// header whenever the original's comes back.
+//
+// Save As gives the course a new creation id [obs e099c3d7 -> cf2b3d34], and the origin record is keyed by it. Save
+// As asks for a name first; Load doesn't. So while the copy is in the Course Maker, a new creation id in that buffer
+// after a name entry is the copy saved under a new id, and its record follows; a change without one (another course
+// loaded) ends the watch.
+extern unsigned g_swkbd_entries;  // runtime/hle/swkbd.c
+static struct { uint32_t orig_creation, creation; uint64_t orig_upload; char code[12], maker[48]; } g_reset;
+static void *reset_after_load(void *arg) {
+    (void)arg;
+    int applied = 0;
+    uint32_t tracked = g_reset.creation;
+    unsigned names = __atomic_load_n(&g_swkbd_entries, __ATOMIC_RELAXED);
+    for (int i = 0; i < 1250 + 4 * 60 * 120; i++) {  // (20 s at 16 ms, then up to 2 h at 250 ms)
+        uint64_t mgr = g64(SAVE_MGR), cur = mgr ? g64(mgr + 0x58) : 0;
+        if (cur && g32(cur) == 1 && !memcmp((const void *)(uintptr_t)(cur + 0xc), "SCDL", 4)) {
+            uint64_t hdr = cur + 0x10;
+            uint32_t now_id = g32(hdr + 0x24);
+            if (now_id == g_reset.orig_creation && g64(hdr + 0x28) == g_reset.orig_upload) {
+                make_own(cur, g_reset.creation);
+                if (!applied++) LOG("[mod] edit: the Course Maker's course made the player's own (creation id %08x)\n",
+                                    g_reset.creation);
+            } else if (applied && now_id != tracked) {
+                unsigned n = __atomic_load_n(&g_swkbd_entries, __ATOMIC_RELAXED);
+                if (n == names || g64(hdr + 0x28)) break;  // (another course: the watch ends)
+                LOG("[mod] edit: the copy saved as %08x (was %08x): its origin goes with it\n", now_id, tracked);
+                if (g_reset.code[0]) remember_origin(now_id, g_reset.code, g_reset.maker);
+                tracked = now_id, names = n;
+            }
+        }
+        usleep(i < 1250 ? 16000 : 250000);
+    }
+    return NULL;
+}
+
 static void prepare_copy(int32_t slot) {
     uint64_t save = g64(SAVE_MGR) ? g64(g64(SAVE_MGR) + 0x20) : 0;
     if (!save) return;
@@ -199,14 +241,19 @@ static void prepare_copy(int32_t slot) {
     LOG("[mod] edit: %s by %s (creation id %08x -> %08x, upload id %llu, flags %#x) -> a course of your own\n",
         code[0] ? code : "?", maker[0] ? maker : "?", g32(hdr + 0x24), creation, (unsigned long long)g64(hdr + 0x28),
         g32(hdr + 0x18));
+    g_reset.orig_creation = g32(hdr + 0x24), g_reset.orig_upload = g64(hdr + 0x28), g_reset.creation = creation;
+    snprintf(g_reset.code, sizeof g_reset.code, "%s", code), snprintf(g_reset.maker, sizeof g_reset.maker, "%s", maker);
     make_own(file, creation);
+    pthread_t th;
+    if (pthread_create(&th, NULL, reset_after_load, NULL) == 0) pthread_detach(th);
     // the Coursebot also keeps the selected slot's whole data (course, thumbnail, replay: 0xe0000) at save manager
     // +0x58 for its "current course" (+0x60); the loader takes that copy when the number is the current one
     uint64_t mgr = g64(SAVE_MGR), cur = mgr ? g64(mgr + 0x58) : 0;
     bool current = cur && (int32_t)g32(mgr + 0x60) == slot && g32(cur) == 1 &&
                    !memcmp((const void *)(uintptr_t)(cur + 0xc), "SCDL", 4);
     if (current) make_own(cur, creation);
-    MLOG("edit: current course %d%s\n", mgr ? (int32_t)g32(mgr + 0x60) : -1, current ? " (its copy too)" : "");
+    MLOG("edit: current course %d%s (its buffer %llx, the prepared slot %llx)\n", mgr ? (int32_t)g32(mgr + 0x60) : -1,
+         current ? " (its copy too)" : "", (unsigned long long)cur, (unsigned long long)file);
     if (code[0]) remember_origin(creation, code, maker);
 }
 
@@ -245,18 +292,25 @@ static void dl_info(Cpu *c) {
     guest_call_orig(c, c->pc);
 }
 
-// ---- Course World's Download against our server. It fetches the course and then its thumbnail (a relation object:
-// main+0x14e0e70, GetReqGetInfoHeadersInfo (134) and an HTTP GET per request in the ring at NetObj +0x74bc8, each
-// into the buffer at *(NetObj +0x8e608)[i]; the job's callback main+0x1520800 puts each into the thumbnail cache,
-// which checks it). The download waits for a valid cache entry (cDownload, main+0x17661f0) and stops at "A
-// communication error occurred." without one.
+// ---- Course World's thumbnails: a course's picture (the lists, the course page, a download) and its whole-course
+// map (the course's More info). Both come from our server (GET /api/courses/<code>/thumbnail, /entire_thumbnail:
+// the ones it holds, or TGRCode's for a course from TGRCode's archive).
 //
-// A stand-in thumbnail: SMM2 only keeps a course in the Coursebot with a thumbnail it can check (the thumbnail
-// block: JPEG at +0, its size at +0x1bf9c (1 .. 0x1bf9c), HMAC-SHA256 of the JPEG at +0x1bfa0 under a key made from
-// four seed words at +0x1bfc0; main+0x1698a80 checks it, and a failed check deletes the course: "Corrupt data was
-// found so the course has been deleted."). Our server has no thumbnails, so a download gets a plain one: a
-// 640 x 360 JPEG of one colour, encoded here (baseline, 4:4:4, every block DC only), signed with the game's own
-// functions as its blank thumbnail is (main+0x1766830).
+// The pictures: a relation object request (main+0x14e0e70, GetReqGetInfoHeadersInfo (134) and an HTTP GET per
+// request in the ring at NetObj +0x74bc8, entries 0x1a8 bytes: +0 the course's data id, +0x120 the relation type, 0
+// for the picture), each into the buffer at *(NetObj +0x8e608)[i]; the job's callback main+0x1520800 puts each into
+// the thumbnail cache (main+0x14b55b0: 100 slots, by data id), which checks it. The download of a course waits for a
+// valid cache entry (cDownload, main+0x17661f0) and stops at "A communication error occurred." without one.
+//
+// The map: one request (main+0x14e2cf0) for the relation entry at NetObj +0x8e430 (+0x8e428 its course's data id)
+// into the buffer at NetObj +0x75428 (0x19000 bytes); its callback main+0x1520ac0 copies the buffer with the data id
+// into the map cache (profile +0x5b48e8, slots of 0x191b8 bytes).
+//
+// The thumbnail block (0x1c000 bytes): JPEG at +0, its size at +0x1bf9c (1 .. 0x1bf9c), HMAC-SHA256 of the JPEG at
+// +0x1bfa0 under a key made from four seed words at +0x1bfc0; main+0x1698a80 checks it, and a course saved with a
+// failing one is deleted ("Corrupt data was found so the course has been deleted."). A course the server has no
+// picture for gets a stand-in when it is downloaded: a 640 x 360 JPEG of one colour, encoded here (baseline, 4:4:4,
+// every block DC only), signed with the game's own functions as its blank thumbnail is (main+0x1766830).
 #define RNG_INIT MAIN_ADDR(0x29a050)       // (state)
 #define RNG_SEEDS MAIN_ADDR(0x29a1c0)      // (state, &w0, &w1, &w2, &w3)
 #define THUMB_KEY MAIN_ADDR(0x168c6d0)     // (&table, key out[16], state)
@@ -318,47 +372,144 @@ static size_t solid_jpeg(uint8_t *out, size_t cap, int w, int h, uint8_t r, uint
     return b.n <= cap ? b.n : 0;
 }
 
-// A thumbnail block the game accepts at guest address dst (0x1c000 bytes), signed on this thread's guest stack.
-static bool make_thumbnail(Cpu *c, uint64_t dst) {
-    static uint8_t jpeg[0x4000];
-    static size_t jpeg_len;
-    if (!jpeg_len) jpeg_len = solid_jpeg(jpeg, sizeof jpeg, 640, 360, 0xb4, 0xc8, 0xdc);  // [inf] a grey-blue card
-    if (!jpeg_len) return false;
-    memset((void *)(uintptr_t)dst, 0, 0x1c000);
-    memcpy((void *)(uintptr_t)dst, jpeg, jpeg_len);
-    s32(dst + 0x1bf9c, (uint32_t)jpeg_len);
+#define THUMB_BLOCK 0x1c000
+#define MAP_BLOCK 0x19000
+
+// A block of `size` bytes the game accepts at guest address dst: the JPEG, then (the last 0x64 bytes) its size, its
+// HMAC and the seed words, signed on this thread's guest stack. The picture's block is the thumbnail block above;
+// the map's has the same tail [inf].
+static bool sign_jpeg(Cpu *c, uint64_t dst, uint32_t size, const uint8_t *jpeg, size_t len) {
+    uint64_t tail = dst + size - 0x64;
+    if (!len || len > size - 0x64) return false;
+    memset((void *)(uintptr_t)dst, 0, size);
+    memcpy((void *)(uintptr_t)dst, jpeg, len);
+    s32(tail, (uint32_t)len);
     uint64_t sp = c->sp, lr = c->x[30], save[6];
     for (int i = 0; i < 6; i++) save[i] = c->x[i];
     c->sp -= 0x80;
     uint64_t st = c->sp, key = c->sp + 0x40, table = c->sp + 0x60;
     c->x[0] = st, guest_call(c, RNG_INIT);
-    c->x[0] = st, c->x[1] = dst + 0x1bfc0, c->x[2] = dst + 0x1bfc4, c->x[3] = dst + 0x1bfc8, c->x[4] = dst + 0x1bfcc;
+    c->x[0] = st, c->x[1] = tail + 0x24, c->x[2] = tail + 0x28, c->x[3] = tail + 0x2c, c->x[4] = tail + 0x30;
     guest_call(c, RNG_SEEDS);
     s64(table, THUMB_KEY_TABLE);
     c->x[0] = table, c->x[1] = key, c->x[2] = st, guest_call(c, THUMB_KEY);
-    c->x[0] = dst + 0x1bfa0, c->x[1] = 0x20, c->x[2] = dst, c->x[3] = jpeg_len, c->x[4] = key, c->x[5] = 0x10;
+    c->x[0] = tail + 4, c->x[1] = 0x20, c->x[2] = dst, c->x[3] = len, c->x[4] = key, c->x[5] = 0x10;
     guest_call(c, HMAC_SHA256);
     c->sp = sp, c->x[30] = lr;
     for (int i = 0; i < 6; i++) c->x[i] = save[i];
     return true;
 }
 
+static bool make_thumbnail(Cpu *c, uint64_t dst) {  // the stand-in
+    static uint8_t jpeg[0x4000];
+    static size_t jpeg_len;
+    if (!jpeg_len) jpeg_len = solid_jpeg(jpeg, sizeof jpeg, 640, 360, 0xb4, 0xc8, 0xdc);  // [inf] a grey-blue card
+    return sign_jpeg(c, dst, THUMB_BLOCK, jpeg, jpeg_len);
+}
+
+// The server's picture (or map) of a course into the block at dst; false: it has none (yet). A picture of a
+// TGRCode course the server doesn't hold is fetched from TGRCode (a second or more a request, and it rate-limits):
+// the server waits up to wait_ms for it, and keeps it for next time.
+static bool server_thumbnail(Cpu *c, uint64_t data_id, bool entire, uint64_t dst, uint32_t size, int wait_ms) {
+    char code[12], path[96];
+    data_id_to_code((uint32_t)data_id, code);
+    const char *test_none = getenv("RECOMP_MOD_TEST_NO_THUMB");  // (test: this course's picture is not there)
+    if (test_none && !strcmp(test_none, code) && !entire) return false;
+    snprintf(path, sizeof path, "/api/courses/%s/%s?wait_ms=%d", code, entire ? "entire_thumbnail" : "thumbnail",
+             wait_ms);
+    size_t len = 0;
+    uint8_t *jpeg = srv_get_bytes(path, &len);
+    bool ok = jpeg && sign_jpeg(c, dst, size, jpeg, len);
+    free(jpeg);
+    return ok;
+}
+
 static void relation_get(Cpu *c) {
     if (!mod_hundred()) { guest_call_orig(c, c->pc); return; }
-    uint64_t no = c->x[0], thumb = 0;
+    uint64_t no = c->x[0], ids[8], outs_of[8];
+    uint32_t n = 0;
     netobj_lock(c);
     uint64_t ring = no + 0x74bc8, entries = g64(ring), outs = g64(no + 0x8e608), downloading = g64(no + 0x8e5f0);
     uint32_t cap = g32(ring + 8), head = g32(ring + 0xc), count = g32(ring + 0x10), nout = g32(no + 0x8e600);
-    for (uint32_t i = 0; i < count && cap && entries; i++) {
-        uint64_t id = g64(entries + 0x1a8ull * ((head + i) % cap)), out = i < nout && outs ? g64(outs + 8ull * i) : 0;
-        if (!out) continue;
-        if (id == downloading && !thumb) thumb = out;  // the course being downloaded: the stand-in
-        else s32(out + 0x1bf9c, 0);  // the lists' thumbnails: none (the game shows its placeholder)
+    for (uint32_t i = 0; i < count && cap && entries && n < 8; i++) {
+        uint64_t out = i < nout && outs ? g64(outs + 8ull * i) : 0;
+        if (out) ids[n] = g64(entries + 0x1a8ull * ((head + i) % cap)), outs_of[n++] = out;
     }
     s32(no + 0x60, 0);
     netobj_unlock(c);
-    if (thumb) MLOG("thumbnail for course %llu: a stand-in (%s)\n", (unsigned long long)downloading,
-                    make_thumbnail(c, thumb) ? "made" : "failed");
+    // (outside the lock: HTTP; the buffers are this request's.) The ones the server holds first; then, for the
+    // others (which it is now fetching), a few seconds in all, more for a course being downloaded; whatever hasn't
+    // come by then shows the game's placeholder this time.
+    bool got[8] = {0};
+    uint32_t ngot = 0;
+    for (uint32_t i = 0; i < n; i++) ngot += got[i] = server_thumbnail(c, ids[i], false, outs_of[i], THUMB_BLOCK, 0);
+    uint64_t deadline = (uint64_t)time(NULL) + 4;
+    for (uint32_t i = 0; i < n; i++) {
+        if (got[i]) continue;
+        int left = (int)((int64_t)deadline - (int64_t)time(NULL)) * 1000;
+        int wait = ids[i] == downloading ? 7000 : left > 0 ? left : 0;
+        if (wait) ngot += got[i] = server_thumbnail(c, ids[i], false, outs_of[i], THUMB_BLOCK, wait);
+        if (got[i]) continue;
+        if (ids[i] == downloading && make_thumbnail(c, outs_of[i]))
+            MLOG("thumbnail for course %llu: a stand-in\n", (unsigned long long)ids[i]);
+        else s32(outs_of[i] + 0x1bf9c, 0);  // none: the game shows its placeholder
+    }
+    MLOG("thumbnails: %u of %u from the server\n", ngot, n);
+    c->x[0] = wrapper_ok();
+}
+
+// A Download of a course whose picture didn't come with the list (the server didn't have it yet): cDownload
+// (main+0x17661f0; +0x244 its state, 3: waiting for the picture, +600 the course's data id) looks at the course's
+// cache slot (profile +0x132858, slots of 0x1c1b8 bytes: block, +0x1c000 data id, +0x1c1b2 failed, +0x1c1b4 valid)
+// and stops at "A communication error occurred." when it is marked failed. The download asks for the picture again
+// (above: the server's, or the stand-in) and the cache takes it (valid), but the cache never clears the failed mark
+// of the list's attempt [obs: state 3, failed 1, valid 1 -> the error]. So: a valid slot loses that mark; one still
+// without a picture gets the server's or the stand-in, through the game's own cache function (which checks it).
+#define DOWNLOAD_EXEC MAIN_ADDR(0x17661f0)
+#define PROFILE MAIN_ADDR(0x2c115e0)
+#define THUMB_CACHE_PUT MAIN_ADDR(0x14b55b0)  // (profile, block, data id)
+
+static void retry_failed_thumbnail(Cpu *c, uint64_t id) {
+    uint64_t profile = g64(PROFILE), slots = profile ? g64(profile + 0x132858) : 0;
+    uint32_t n = profile ? g32(profile + 0x132850) : 0;
+    for (uint32_t i = 0; i < 100 && slots; i++) {
+        uint64_t slot = i < n ? slots + 0x1c1b8ull * i : slots;
+        if (g64(slot + 0x1c000) != id) continue;
+        if (!g8(slot + 0x1c1b2)) return;  // (not failed)
+        s8(slot + 0x1c1b2, 0);
+        if (g8(slot + 0x1c1b4)) {
+            MLOG("download of course %llu: its picture came again\n", (unsigned long long)id);
+            return;
+        }
+        bool real = server_thumbnail(c, id, false, slot, THUMB_BLOCK, 0);
+        if (!real && !make_thumbnail(c, slot)) return;
+        uint64_t save[3] = {c->x[0], c->x[1], c->x[2]}, lr = c->x[30];
+        c->x[0] = profile, c->x[1] = slot, c->x[2] = id;
+        guest_call(c, THUMB_CACHE_PUT);
+        c->x[0] = save[0], c->x[1] = save[1], c->x[2] = save[2], c->x[30] = lr;
+        MLOG("download of course %llu: its picture again (%s): %s\n", (unsigned long long)id,
+             real ? "from the server" : "a stand-in", g8(slot + 0x1c1b4) ? "valid" : "rejected");
+        return;
+    }
+}
+
+static void download_exec(Cpu *c) {
+    uint64_t self = c->x[0];
+    if (mod_hundred() && g32(self + 0x244) == 3 && g64(self + 600)) retry_failed_thumbnail(c, g64(self + 600));
+    guest_call_orig(c, c->pc);
+}
+
+// The whole-course map of a course's More info (main+0x14e2cf0)
+static void map_get(Cpu *c) {
+    if (!mod_hundred()) { guest_call_orig(c, c->pc); return; }
+    uint64_t no = c->x[0];
+    netobj_lock(c);
+    uint64_t id = g64(no + 0x8e428);
+    s32(no + 0x60, 0);
+    netobj_unlock(c);
+    bool ok = server_thumbnail(c, id, true, no + 0x75428, MAP_BLOCK, 6000);
+    if (!ok) memset((void *)(uintptr_t)(no + 0x75428), 0, MAP_BLOCK);
+    MLOG("map of course %llu: %s\n", (unsigned long long)id, ok ? "from the server" : "none");
     c->x[0] = wrapper_ok();
 }
 
@@ -451,6 +602,8 @@ __attribute__((constructor)) static void edit_register(void) {
     hle_override(INFO_APPEAR_EXEC, info_window, "mod: Coursebot info window Appear (edit)");
     hle_override(INFO_DISP_EXEC, info_window, "mod: Coursebot info window Disp (edit)");
     hle_override(MAIN_ADDR(0x14e0e70), relation_get, "mod: relation object (thumbnail) download");
+    hle_override(MAIN_ADDR(0x14e2cf0), map_get, "mod: relation object (whole-course map) download");
+    hle_override(DOWNLOAD_EXEC, download_exec, "mod: Course World cDownload (a picture that failed)");
     hle_override(DL_INFO_EXEC, dl_info, "mod: Coursebot downloaded cCourseInfoWindow (edit)");
     hle_override(DL_TO_PLAY_EXEC, dl_to_play, "mod: Coursebot downloaded cToPlay (edit)");
 }

@@ -118,7 +118,9 @@ NVN(nvnQueueSubmitCommands) {
     const uint64_t *handles = AP(2);
     if (getenv("LARECOMP_TRACE_CALLS"))
         for (int i = 0; i < n; i++) LOG("[trace] Submit %d/%d handle %llx\n", i, n, (unsigned long long)handles[i]);
+    backend_prefetch(handles, n);
     for (int i = 0; i < n; i++) backend_execute(handles[i]);
+    renderer_prefetch_verify();
 }
 NVN(nvnQueueFlush) { (void)c; }
 NVN(nvnQueueFinish) { (void)c; renderer_sync(); }
@@ -597,6 +599,22 @@ NVN(nvnProgramFinalize) { free(HOST(NvnProgram, A(0))); SET_HOST(A(0), 0); }
 NVN(nvnProgramSetDebugLabel) { (void)c; }
 NVN(nvnProgramSetSampleShading) { (void)c; }
 NVN(nvnProgramSetSubroutineLinkage) { RET(1); }
+// (measurement, LARECOMP_PROG_STATS=1) when each program got its shaders, so the renderer can log how long before
+// its first draw that was
+#define SETAT_N 8192
+static struct { uint64_t p, ns; } g_setat[SETAT_N];
+static void setat_put(uint64_t p, uint64_t ns) {
+    uint32_t i = (uint32_t)(p >> 4) & (SETAT_N - 1);
+    for (int k = 0; k < SETAT_N && g_setat[i].p && g_setat[i].p != p; k++) i = (i + 1) & (SETAT_N - 1);
+    g_setat[i].p = p, g_setat[i].ns = ns;
+}
+uint64_t nvn_program_set_ns(const void *p) {
+    uint32_t i = (uint32_t)((uint64_t)(uintptr_t)p >> 4) & (SETAT_N - 1);
+    for (int k = 0; k < SETAT_N && g_setat[i].p; k++, i = (i + 1) & (SETAT_N - 1))
+        if (g_setat[i].p == (uint64_t)(uintptr_t)p) return g_setat[i].ns;
+    return 0;
+}
+
 static void set_shaders(Cpu *c, int stride) {
     NvnProgram *p = HOST(NvnProgram, A(0));
     int n = (int)A(1);
@@ -625,6 +643,13 @@ static void set_shaders(Cpu *c, int stride) {
         p->stages[stage].const_offset = *(const uint32_t *)(control + 0x700);
         p->stages[stage].const_size = *(const uint32_t *)(control + 0x6FC);
         p->stage_mask |= 1u << stage;
+    }
+    static int stats = -1;
+    if (stats < 0) stats = getenv("LARECOMP_PROG_STATS") != NULL;
+    if (stats) {
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        setat_put((uint64_t)(uintptr_t)p, (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec);
     }
     RET(1);
 }

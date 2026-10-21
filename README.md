@@ -58,13 +58,13 @@ itself. Android and iOS / iPadOS have no download: they're built yourself from s
 
 **100 Mario Challenge**
 
-| Difficulty select | World map | Start card |
+| Difficulty select | World map | Course-in card |
 |---|---|---|
-| ![100 Mario Challenge difficulty select](docs/screenshots/100mario-select.jpg) | ![Super Expert world map with Bowser's castle](docs/screenshots/100mario-map.jpg) | ![Start card with 100 little Marios](docs/screenshots/100mario-card.jpg) |
+| ![100 Mario Challenge difficulty select](docs/screenshots/100mario-select.jpg) | ![Super Expert world map with Bowser's castle](docs/screenshots/100mario-map.jpg) | ![SMM2's course-in card with 100 lives](docs/screenshots/100mario-card.jpg) |
 
 | Ending | Credits |
 |---|---|
-| ![Peach thanks Mario](docs/screenshots/100mario-ending.jpg) | ![Credits listing each cleared course and its maker](docs/screenshots/100mario-credits.jpg) |
+| ![Peach thanks Mario](docs/screenshots/100mario-ending.jpg) | ![Credits: each cleared course as an SMM2 course card with its course ID and maker](docs/screenshots/100mario-credits.jpg) |
 
 ## Status
 

@@ -13,6 +13,7 @@
 struct hundred_credit {
     char name[66];   // course name, UTF-8
     char maker[22];  // maker name, UTF-8
+    char code[12];   // course ID, XXX-XXX-XXX ("" if unknown)
 };
 
 struct hundred_status {
@@ -41,10 +42,13 @@ enum {
 // ---- the flow's (mods/smm1/flow.c), called by the mod
 void hundred_flow_open(void);            // the player chose 100 Mario (Course World's Endless Challenge, ruleset hundred)
 bool hundred_flow_active(void);          // an SMM1 full screen is up: the game's frame is hidden, input goes to the flow
+bool hundred_flow_covering(void);        // ... and has faded in all the way: nothing of the game's frame shows
 bool hundred_flow_overlay(void);         // an SMM1 overlay is up over the course (pause, skip, clear, card): input to it
 void hundred_flow_pause(void);           // the player paused during a run (the mod keeps SMM2's own pause from opening)
 void hundred_flow_course_started(void);  // the course is on screen and playing (the start card may go)
 void hundred_flow_course_in(void);       // SMM2 has left its map for the course scene (SMM2's course-in card comes)
+void hundred_flow_cover(void);           // SMM2's screen is black on its way back to its Endless menu after a Save &
+                                         // Quit: keep it black until the select comes out of it
 void hundred_course_result(int outcome);
 bool hundred_flow_ready_to_start(void);  // the course may start playing (the card is up, or no SMM1 screen is): SMM2
                                          // loads underneath the map and holds the course's first play frame until
@@ -64,6 +68,10 @@ void hundred_play_skip(void);      // SMM1's skip (held button): end this course
 void hundred_run_save_quit(void);  // Save & Quit: keep the continue data, leave the course
 void hundred_run_finish(void);     // the run is over (won, or game over): clear its continue data
 void hundred_flow_exit(void);      // B on the difficulty select: back to SMM2's Course World (the flow closes)
+bool hundred_menu_in(void);        // SMM2's Endless menu is up under the select, so B can take it back (false for a
+                                   // moment after Challenge Modes: the select opens while that menu is still coming)
+bool hundred_menu_left(void);      // after hundred_flow_exit: that menu has finished leaving for Course World (the
+                                   // select stays up until then, so the menu isn't seen sliding away)
 
 // Challenge Modes (owner, 2026-10-19): Course World's "Challenge Modes" button opens the mode used last; ZL / ZR (or a
 // tap on the header) switch between the 100 Mario Challenge and SMM2's own Endless Challenge; L / R stay the

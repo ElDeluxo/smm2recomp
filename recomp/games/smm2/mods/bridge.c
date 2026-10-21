@@ -45,7 +45,11 @@ static volatile int broken_d = -1;       // a corrupt course left the run of thi
 static volatile uint64_t broken_tap;     // the Challenge Modes button was tapped (after a corrupt course) then
 static volatile int tab_target = -1;     // a difficulty to select with L / R
 static volatile int tab_presses;
-static volatile uint64_t menu_page, menu_seen;  // the Endless menu page and the frame it was last in Disp
+static volatile uint64_t menu_page, menu_seen;
+static volatile uint64_t back_since, disappear_seen;  // B to Course World asked (hundred_flow_exit); the menu's
+                                                      // Disappear last ran  // the Endless menu page and the frame it was last in Disp
+static volatile uint64_t opening_since;  // the flow opened as the menu was asked for (seq_activate; presented frame,
+                                         // 0 none) and the menu hasn't reached its Disp yet
 static volatile bool play_queued;      // Play asked for while the result screen is up
 static volatile bool suspending;       // Save & Quit under way: the menu's return reports it
 static volatile bool suspend_posted;   // the game posted its suspend (the confirm window was answered)
@@ -372,6 +376,8 @@ static void select_pending_tab(Cpu *c, uint64_t page) {
 static void menu_disp(Cpu *c) {
     pthread_once(&once, driver_start);  // (its thread also catches the Challenge Modes presses)
     uint64_t now0 = renderer_present_count();
+    bool opened = opening_since;  // (the flow opened as the menu was asked for: not again, even if B closed it)
+    opening_since = 0;
     if (drv == DRV_BROKEN && broken_d >= 0 && broken_tap > drv_since) {  // (back after a corrupt course)
         LOG("[mod] bridge: back on the Endless menu after the corrupt course: Continue\n");
         tab_target = broken_d, broken_d = -1, over_save = false;
@@ -422,9 +428,65 @@ static void menu_disp(Cpu *c) {
         LOG("[mod] bridge: Endless menu entered: flow test run\n");
         const char *cont = getenv("RECOMP_MOD_FLOW_TEST_CONTINUE");
         hundred_run_start(test_difficulty(), cont && atoi(cont));
-    } else if (!hundred_flow_active()) {
+    } else if (!opened && !hundred_flow_active()) {  // (normally it opened already, seq_activate below)
         LOG("[mod] bridge: Endless menu entered: the 100 Mario flow opens\n");
         hundred_flow_open();
+    }
+}
+
+// ---- Challenge Modes chosen on Course World: the 100 Mario select comes instead of SMM2's Endless menu
+// Course World's Endless sub-sequence (NetworkEndlessModeSeq, registered at main+0x1b20910) leaves its Idle for
+// Activate (index 2, exec main+0x1a22730) once Course World has the run records (its status download: the spinner).
+// Activate's first frame activates the menu page; the next ones wait for the page and go on to Appear, which brings
+// the menu in (its In) [obs research/decomp/menus/v303/endlessseq; frames 4852 / 4856 / 4882 for Activate, the
+// menu's Appear and its first Disp]. In the 100 Mario mode the flow opens on that first frame and Activate is held
+// until the select has faded in over Course World, so SMM2's menu comes in under it unseen. (The flow used to open
+// on the menu's first Disp, and SMM2's Endless menu showed for half a second before the select.) A run's Save & Quit
+// comes back without Activate (the sequence is in Appear at once, its menu up under SMM2's fade from black [obs]):
+// menu_disp reports it there and the select fades in over that menu, as before.
+#define SEQ_ACTIVATE_EXEC MAIN_ADDR(0x1a22730)
+__attribute__((weak)) bool hundred_flow_covering(void) { return true; }
+
+static void seq_activate(Cpu *c) {
+    uint64_t now = renderer_present_count();
+    if (g32(c->x[0] + 0x244) == 0) {
+        // (menu_disp's conditions for opening: no run going or coming back, Challenge Modes on 100 Mario)
+        if (mod_hundred_offered() && test_difficulty() < 0 && run_d < 0 && !g_mod.mode_endless && !mod_smm2_session() &&
+            !hundred_flow_active() && !leaving_won && !suspending) {
+            LOG("[mod] bridge: Challenge Modes chosen: the 100 Mario flow opens\n");
+            opening_since = now ? now : 1;
+            hundred_flow_open();
+        }
+    } else if (opening_since && !hundred_flow_covering() && now - opening_since < 40) {
+        return;  // (the select is still fading in: the menu waits; at most 40 frames, e.g. a switch to Endless)
+    }
+    guest_call_orig(c, SEQ_ACTIVATE_EXEC);
+}
+
+// ---- back from a run's Save & Quit (from the pause, or Quit on the result screen): black until the select
+// SMM2's scene changes go through its resident fade (ResidentSeq/UISceneFadeSeq): Out (enter main+0x192f1a0, exec
+// main+0x192f470: the Out animation, 30 frames for the plain black one), then a state that only waits, the screen
+// black, while the next scene loads (enter main+0x192f580), then In (main+0x192f5a0) [obs research/decomp (the
+// fade's state functions); frames 8730 / 8761 / 8771 for Out, black and In on the way back after a Quit]. The way
+// back to the Endless menu skips Activate (above): the menu is up under SMM2's fade from black, and the select used
+// to come over it ~0.3 s later. So on that black the flow's own black comes up and stays, and the select comes out
+// of it when the menu reports the run (menu_disp: HUNDRED_GIVEUP_SAVE). (A won run goes back under the flow's
+// ending; a game over goes through SMM2's GAME OVER scene to Course World, not the menu [obs]: neither shows it.)
+#define FADE_OUT_ENTER MAIN_ADDR(0x192f1a0)
+#define FADE_BLACK_ENTER MAIN_ADDR(0x192f580)
+__attribute__((weak)) void hundred_flow_cover(void) {}
+static volatile uint64_t fade_page;  // the fade's page (its Out's this): the black state's enter is a bare return
+
+static void fade_out(Cpu *c) {
+    fade_page = c->x[0];
+    guest_call_orig(c, FADE_OUT_ENTER);
+}
+static void fade_black(Cpu *c) {
+    guest_call_orig(c, FADE_BLACK_ENTER);
+    if (c->x[0] != fade_page || test_difficulty() >= 0 || !mod_hundred_rules() || leaving_won) return;
+    if (suspending && run_d >= 0) {
+        LOG("[mod] bridge: SMM2 goes back to its Endless menu: the flow keeps the screen black\n");
+        hundred_flow_cover();
     }
 }
 
@@ -773,8 +835,17 @@ void hundred_run_finish(void) {
 void hundred_flow_exit(void) {  // (B on SMM2's Endless menu underneath: Course World)
     LOG("[mod] bridge: back to Course World\n");
     pthread_once(&once, driver_start);
+    back_since = renderer_present_count(), disappear_seen = 0;
     set_drv(DRV_BACK);
 }
+// After hundred_flow_exit: SMM2's Endless menu has finished leaving (its Disappear ran and has stopped), so Course
+// World is what is under the select. (false until then; the flow also gives up waiting after a while)
+bool hundred_menu_left(void) {
+    uint64_t now = renderer_present_count();
+    return back_since && disappear_seen > back_since && now - disappear_seen > 2;
+}
+// (the menu reaches its Disp about 45 frames after the flow opens on Activate; 300 frames: it never came)
+bool hundred_menu_in(void) { return !opening_since || renderer_present_count() - opening_since > 300; }
 
 bool hundred_modes_available(void) { return mod_hundred_offered(); }
 void hundred_mode_switch(void) {  // ZL / ZR / the tap on the flow's select: SMM2's own Endless Challenge
@@ -829,6 +900,7 @@ static void end_endless_status(Cpu *c) {
     guest_call_orig(c, END_ENDLESS_STATUS_ENTER);
 }
 static void menu_disappear(Cpu *c) {
+    disappear_seen = renderer_present_count();
     // (towards Course World: the next visit opens on the mode used last)
     if (g32(c->x[0] + 0x244) == 0) mod_set_smm2_session(g_mod.mode_endless);
     guest_call_orig(c, MENU_DISAPPEAR_EXEC);
@@ -929,6 +1001,9 @@ static void tab_probe(Cpu *c) {
 
 void bridge_register(void) {
     hle_override(MENU_DISP_EXEC, menu_disp, "mod: Endless menu Disp (bridge)");
+    hle_override(SEQ_ACTIVATE_EXEC, seq_activate, "mod: Course World's Endless Activate (bridge)");
+    hle_override(FADE_OUT_ENTER, fade_out, "mod: scene fade Out (bridge)");
+    hle_override(FADE_BLACK_ENTER, fade_black, "mod: scene fade black (bridge)");
     hle_override(PAUSE_EXEC, pause_exec, "mod: Endless pause (bridge)");
     hle_override(PLAY_EXEC, play_exec, "mod: Endless play state (bridge)");
     hle_override(MENU_DISAPPEAR_EXEC, menu_disappear, "mod: Endless menu Disappear (bridge)");

@@ -1128,6 +1128,23 @@ renderers upload a texture when a sprite first uses it. Measured on the same cou
   Basics sets its own flag (which also grows the title-course rotation from 8 to 10), power-up
   lessons set nothing; Nina's introduction is one flag for every lesson kind (save +0x100 bit 10).
 
+## 2026-10-20 — Shader prefetch: a submission's first-use builds start side by side; draws wait, never skip
+**Decision:** before a submission's lists run, both backends walk them on a copy of the executor state and start the
+programs, pipelines and compute programs their draws need, on worker threads; a draw waits for its own build (on
+Vulkan running it itself while it's still queued). Default; `LARECOMP_NO_SHADER_PREFETCH=1` keeps R1's inline builds,
+`LARECOMP_ASYNC_SHADERS=1` LAS's skipping. Design: `docs/superpowers/specs/2026-10-20-shader-prefetch-design.md`;
+numbers: `recomp/docs/smm2-bringup.md` ("Shader prefetch").
+- **Why:** R1's blocking compiles kept the one-shot renders but stalled for the sum of a load's compiles (a 19.6 s
+  frame cold on the Mac); prefetch keeps the rule (no skipped draw) and stalls for about the slowest instead: cold
+  worst frame 19.6 -> 2.8 s (Mac), 6.9 -> 2.6 s (iPad); warm unchanged.
+- **The scan is advisory:** a key it gets wrong only means that draw builds its own and waits, as before; the scan
+  and the draws share the key functions (`apply_state`, `program_keys`, `pass_layout`, the pipeline key), and the pass
+  formats it predicts are checked against the real pass on every pipeline miss.
+- **Not done:** Metal's translation stays on the game thread (0.14 ms a shader, 22 ms on the worst load frame,
+  measured); no record-time scan (more lead time, guessed state); no start-up build of the archive descriptions.
+**What would change it:** a game whose one submission carries less than a frame (lead time too short: then scan at
+`EndRecording`), or a scan cost over 0.5 ms a frame on a target (then memoise lists that found nothing).
+
 ## 2026-10-19 — Android: guest window at 0x800000000, game code built on the Mac, APK without Gradle
 The recomp builds for Android arm64 (`make -C recomp TARGET=android-arm64 GAME=smm2 apk install push-data`; how-to in
 `recomp/README.md`, "Building (Android)"). The choices:
@@ -1722,3 +1739,30 @@ the mod from TGRCode or our own server, and 100 Mario stays on.
 can only work through a real NEX server.
 **Would change:** the owner wanting Nextendo's Course World too (`course_world=backend` already gives it), or
 Nextendo refusing logins whose Course World traffic doesn't reach them.
+## 2026-10-20 — Frame generation: our own interpolation, the game stays at 60
+
+**Decision:** a Video-tab setting, "Frame generation: Off / 120 fps" (`frame_gen` in `smm2.ini`, off by default),
+shows one generated frame between each pair of real frames on displays of 100 Hz and more.
+- **The game logic stays at 60 Hz.** SMM2 moves one fixed step per present, and `display_pace` keeps the presents
+  at 60. Unlocking that speeds the game up and breaks the input-replay match with Ryujinx. The generated frames
+  exist only on the screen: the player traces of a scripted run are identical with the setting off and on.
+- **Our own interpolation, not Apple's MTLFXFrameInterpolator.** That API wants the engine's depth and motion
+  vectors, and the runtime only sees the finished colour image at present time. So motion is estimated from
+  consecutive frames:
+  - a luma pyramid, then block matching coarse to fine (1/16, 1/8, 1/4, then 1 px)
+  - the median of the neighbouring vectors as a cost-checked candidate
+  - a warp that tries each block's vector and its neighbours' for every pixel
+  - fallbacks: the still pixel, one real image where something appears or disappears, and the previous frame on a
+    scene cut
+  One source serves both backends (`runtime/nvn/framegen_src.c`: MSL and GLSL), so Metal (macOS, iOS) and Vulkan
+  (Windows, Linux, Android) behave the same.
+- **Presentation:** the generated frame is presented at once and the real one 1/120 s later
+  (`presentDrawable:afterMinimumDuration:` on Metal; a present thread on Vulkan, with every submit, present and
+  device wait under one queue lock). This costs about 8 ms of input lag. The menu is never interpolated: it is built
+  once per real frame and drawn on both images.
+- **No generation below 100 Hz**, after a hitch (real frames not 12-22 ms apart: also the game's 30 fps mode), across
+  a size, format or crop change, and while the game is held.
+**Why:** the owner asked for an fps unlock "done with frame gen" (2026-10-20); true high-fps rendering (hooking
+object and camera transforms) was judged far too invasive.
+**Would change:** engine-side motion vectors (would allow MetalFX's interpolator or FSR 3), or rates above 120
+(the passes already take a phase `t`).

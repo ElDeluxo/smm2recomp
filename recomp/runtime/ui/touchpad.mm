@@ -36,7 +36,22 @@ static const Control CONTROLS[] = {
 };
 static const int NCONTROLS = sizeof CONTROLS / sizeof *CONTROLS;
 
-static float cx(const Control &c, float w, float h) { return c.x < 0 ? w + c.x * h : c.x * h; }
+// The window's safe area (iPhone: the notch / Dynamic Island in landscape): left and right insets in pixels, kept by
+// the UI thread (safe-area events, touches) for both threads. The controls keep clear of them.
+static std::atomic<float> g_inset_l{0}, g_inset_r{0};
+static void update_insets(SDL_Window *win) {
+    SDL_Rect safe;
+    int ww = 0, wh = 0, pw = 0, ph = 0;
+    if (!win || !SDL_GetWindowSafeArea(win, &safe) || !SDL_GetWindowSize(win, &ww, &wh) ||
+        !SDL_GetWindowSizeInPixels(win, &pw, &ph) || ww <= 0)
+        return;
+    float k = (float)pw / (float)ww;
+    g_inset_l = (float)safe.x * k, g_inset_r = (float)(ww - safe.x - safe.w) * k;
+}
+
+static float cx(const Control &c, float w, float h) {
+    return c.x < 0 ? w - g_inset_r.load() + c.x * h : g_inset_l.load() + c.x * h;
+}
 
 #if defined(__APPLE__)
 #include <TargetConditionals.h>
@@ -86,6 +101,10 @@ static void recompute(float w, float h, const float (*pos)[2]) {
 
 // UI thread: true when the event was the controller's (the touch screen and the game's other input don't see it)
 extern "C" bool touchpad_handle_event(const SDL_Event *e) {
+    if (e->type == SDL_EVENT_WINDOW_SAFE_AREA_CHANGED || e->type == SDL_EVENT_WINDOW_RESIZED) {
+        update_insets(SDL_GetWindowFromID(e->window.windowID));
+        return false;
+    }
     if (e->type != SDL_EVENT_FINGER_DOWN && e->type != SDL_EVENT_FINGER_MOTION && e->type != SDL_EVENT_FINGER_UP &&
         e->type != SDL_EVENT_FINGER_CANCELED)
         return false;
@@ -94,6 +113,7 @@ extern "C" bool touchpad_handle_event(const SDL_Event *e) {
     int w = 1, h = 1;
     SDL_Window *win = SDL_GetWindowFromID(e->tfinger.windowID);
     if (win) SDL_GetWindowSizeInPixels(win, &w, &h);
+    if (e->type == SDL_EVENT_FINGER_DOWN) update_insets(win);
     float px = e->tfinger.x * w, py = e->tfinger.y * h;
     int slot = -1;
     for (int i = 0; i < 10; i++)

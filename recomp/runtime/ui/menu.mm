@@ -34,6 +34,8 @@ void input_reset(void);
 void controls_bindings_draw(float scale);  // controls_ui.mm
 #include "../input_bind.h"
 #include "../paths.h"
+#include "../nvn/framegen.h"
+#include "system_font.h"
 }
 
 // ------------------------------------------------------------------ state shared with the main thread
@@ -351,14 +353,13 @@ static void init(void) {
     io.IniFilename = NULL;
     ImFontConfig cfg;
     cfg.OversampleH = 2;
-    const char *paths[] = {"/System/Library/Fonts/Avenir Next.ttc", "/System/Library/Fonts/Helvetica.ttc",
-                           "C:/Windows/Fonts/segoeui.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-                           "/usr/share/fonts/TTF/DejaVuSans.ttf", "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf"};
-    for (const char *p : paths) {
-        if (FILE *f = fopen(p, "rb")) fclose(f);  // a missing file is an assertion in ImGui, not a NULL return
-        else continue;
-        if (!g_font) g_font = io.Fonts->AddFontFromFileTTF(p, 34 * g_atlas_scale, &cfg);
-        if (g_font && !g_font_big) { ImFontConfig b = cfg; b.FontNo = 0; g_font_big = io.Fonts->AddFontFromFileTTF(p, 56 * g_atlas_scale, &b); }
+    char sys[1024];
+    int face = 0;
+    if (ui_system_font(sys, sizeof sys, &face)) {  // (system_font.mm: an existing file; a missing one asserts in ImGui)
+        cfg.FontNo = face;
+        g_font = io.Fonts->AddFontFromFileTTF(sys, 34 * g_atlas_scale, &cfg);
+        if (g_font) g_font_big = io.Fonts->AddFontFromFileTTF(sys, 56 * g_atlas_scale, &cfg);
+        LOG("[menu] font %s\n", sys);
     }
     // the menu window itself: Baloo 2 SemiBold, as on the start screen (shipped, OFL), at its Settings window's sizes; the
     // FPS counter, overlays and on-screen keyboard keep the fonts above
@@ -368,7 +369,12 @@ static void init(void) {
         g_menu_font = io.Fonts->AddFontFromFileTTF(baloo, 39 * g_atlas_scale, &cfg);
         g_menu_font_big = io.Fonts->AddFontFromFileTTF(baloo, 72 * g_atlas_scale, &cfg);
     }
-    if (!g_font) g_font = io.Fonts->AddFontDefault();
+    if (!g_font) {  // (no font file: ImGui's own, at the menu's size rather than its 13 px)
+        LOG("[menu] no system font: the built-in one\n");
+        ImFontConfig d;
+        d.SizePixels = 34 * g_atlas_scale;
+        g_font = io.Fonts->AddFontDefault(&d);
+    }
     if (!g_font_big) g_font_big = g_font;
     if (!g_menu_font || !g_menu_font_big) g_menu_font = g_font, g_menu_font_big = g_font_big;
     style_init();
@@ -535,6 +541,11 @@ static void tab_display(void) {
     opt_choice("Anti-aliasing", &g_settings.antialias, aa, 2, AA_OFF,
                "Smooths jagged edges of the game image before it is scaled to the window. SMAA: finds the edges and "
                "blends only along them, so textures stay sharp. Most useful at a lower internal resolution.");
+    static const char *fg[] = {"Off", "120 fps"};
+    opt_choice("Frame generation", &g_settings.frame_gen, fg, 2, FRAMEGEN_OFF,
+               "Adds a generated frame between each pair of real frames for 120 fps on 120 Hz displays (ProMotion, "
+               "high-refresh monitors). The game itself still runs at 60. Adds a little input lag; fast motion may show "
+               "small artifacts. Does nothing on a 60 Hz display.");
 
     opt_section("Game");
     opt_toggle("Remove blur", &g_settings.blur_removal, false,
@@ -903,6 +914,30 @@ static void touch_drag_scroll(ImGuiIO &io, float scale) {
     last = io.MousePos;
 }
 
+static bool g_drew;  // the last menu_render drew (menu_redraw draws it again)
+
+#ifdef __APPLE__
+void menu_redraw(id<MTLDevice> dev, id<MTLCommandBuffer> cb, id<MTLTexture> target) {
+    (void)dev;
+    if (!g_drew) return;
+    ImGui::SetCurrentContext(g_ctx);
+    MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
+    rp.colorAttachments[0].texture = target;
+    rp.colorAttachments[0].loadAction = MTLLoadActionLoad;
+    rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+    id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:rp];
+    ImGui_ImplMetal_RenderDrawData(ImGui::GetDrawData(), cb, enc);
+    [enc endEncoding];
+}
+#else
+void menu_redraw(void *cmd, uint32_t target_w, uint32_t target_h) {
+    (void)target_w, (void)target_h;
+    if (!g_drew) return;
+    ImGui::SetCurrentContext(g_ctx);
+    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), (VkCommandBuffer)cmd);  // inside the window image's rendering
+}
+#endif
+
 #ifdef __APPLE__
 void menu_render(id<MTLDevice> dev, id<MTLCommandBuffer> cb, id<MTLTexture> target) {
     const double tw = target.width, th = target.height;
@@ -915,6 +950,7 @@ void menu_render(void *cmd, uint32_t target_w, uint32_t target_h) {
     int ov_w = 0, ov_h = 0, ov_full = 0;
     uint64_t ov_seq = 0;
     const uint8_t *ov_img = game_overlay_image(&ov_w, &ov_h, &ov_full, &ov_seq);
+    g_drew = false;
     if (!open && !kbd && !g_settings.show_fps && !ov_img && !touchpad_visible()) {
         if (g_inited) { pthread_mutex_lock(&q_lock); q_events.clear(); pthread_mutex_unlock(&q_lock); }
         return;
@@ -967,7 +1003,15 @@ void menu_render(void *cmd, uint32_t target_w, uint32_t target_h) {
         ImGui::SetNextWindowBgAlpha(0.5f);
         ImGui::Begin("##fps", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
                                         ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing);
-        ImGui::Text("%.0f fps", io.Framerate);
+        static uint64_t real0, gen0;  // frame generation: the share of generated frames, over about half a second
+        static double t0, out_ratio;
+        if (now - t0 > 0.5) {
+            uint64_t dr = g_fg_real - real0, dg = g_fg_generated - gen0;
+            out_ratio = dr ? 1.0 + (double)dg / dr : 1.0;
+            real0 = g_fg_real, gen0 = g_fg_generated, t0 = now;
+        }
+        if (out_ratio > 1.05) ImGui::Text("%.0f fps (%.0f with frame generation)", io.Framerate, io.Framerate * out_ratio);
+        else ImGui::Text("%.0f fps", io.Framerate);
         ImGui::End();
     }
 
@@ -1024,6 +1068,7 @@ void menu_render(void *cmd, uint32_t target_w, uint32_t target_h) {
 
     if (kbd) keyboard_draw(io, scale);
     ImGui::Render();
+    g_drew = true;
     g_text_busy = open && ui_text_busy();
 #ifdef __APPLE__
     id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:rp];

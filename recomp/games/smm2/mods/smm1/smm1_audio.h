@@ -14,6 +14,8 @@ typedef struct {
 } SPcm;
 SPcm *smm1_bfstm_decode(const uint8_t *d, size_t n);
 SPcm *smm1_bfwav_decode(const uint8_t *d, size_t n);
+SPcm *smm1_bwav_decode(const uint8_t *d, size_t n);                    // an SMM2 BWAV
+SPcm *smm1_bars_sound(const uint8_t *d, size_t n, const char *name);  // the named BWAV of an SMM2 BARS (NULL: none)
 
 void smm1_bgm(const char *name, bool loop);  // a stream of Sound/Resource/Stream (cached), from its start; NULL stops
 void smm1_bgm_fade(int frames);  // fade the music out over this many 60 Hz frames
@@ -22,4 +24,5 @@ double smm1_bgm_pos(void);       // the music's position in its own samples (-1:
 const char *smm1_bgm_name(void);
 void smm1_se_bank(const char *bank);          // load a sound bank ("NetWorldMapScene", "UI_Play_CourseIn100Mario_00")
 bool smm1_se(const char *name);              // a sound effect of a loaded bank, by name (false: none)
+void smm1_play(SPcm *p);                     // a decoded sound, once, as a sound effect (kept by the caller)
 void smm1_game_sound(bool on);               // the game's own sound under the screens (faded)

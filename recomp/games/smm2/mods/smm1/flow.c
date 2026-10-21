@@ -13,8 +13,9 @@
 //
 // Transitions: SMM2's screens and the flow's meet through SMM2's own block wipe (its Endless screens' way: the result
 // screen's Next -> the map or the ending, the ending -> the select), the map's iris goes to SMM2's card through
-// black, and the select fades in over SMM2's Endless menu and out of it (opening, Challenge Modes, B), so no screen
-// cuts in at once.
+// black, and the select fades in over SMM2's screens and out of them (opening: over Course World, the Endless menu
+// held back until it is in; Challenge Modes and B: over SMM2's Endless menu), so no screen cuts in at once. After a
+// Save & Quit the select comes out of black: the flow's black takes over from SMM2's fade (hundred_flow_cover).
 //
 // The flow ticks once per presented frame (60 Hz). The mod's calls (game threads) are queued and handled at the
 // next tick.
@@ -51,6 +52,9 @@ static void fake_course(int i, struct hundred_credit *c) {
     static const char *makers[8] = {"Luigi", "Toadette", "Peach", "Daisy", "Wario", "Yoshi", "Rosalina", "Kamek"};
     snprintf(c->name, sizeof c->name, "%s %d", names[i % 8], i + 1);
     snprintf(c->maker, sizeof c->maker, "%s", makers[i % 8]);
+    static const char *codes[8] = {"FL2-3HW-MFG", "7KD-QY4-0SG", "R9B-LMG-W1F", "C04-8XN-HJ6",
+                                   "VT3-Q0K-2PD", "M5Y-GJ7-K8R", "B1H-6WD-XQN", "4G0-YK4-T9C"};
+    snprintf(c->code, sizeof c->code, "%s", codes[i % 8]);
 }
 WEAK bool hundred_run_status(struct hundred_status *o) {
     fake.used = true;
@@ -86,6 +90,8 @@ WEAK void hundred_run_save_quit(void) {
 }
 WEAK void hundred_run_finish(void) { fake.used = true; fake.saved[fake.d] = false, fake.playing = 0; }
 WEAK void hundred_flow_exit(void) { fake.used = true; }
+WEAK bool hundred_menu_in(void) { return true; }
+WEAK bool hundred_menu_left(void) { return true; }
 // Challenge Modes (the mod): SMM2's Endless as the other mode on Course World's "Challenge Modes" button
 WEAK bool hundred_modes_available(void) { return getenv("RECOMP_HUNDRED_TEST_MODES") != NULL; }
 WEAK void hundred_mode_switch(void) { fake.used = true; }
@@ -93,7 +99,7 @@ WEAK void hundred_mode_switch(void) { fake.used = true; }
 WEAK bool hundred_smm1_card(void) { return getenv("RECOMP_HUNDRED_SMM1_CARD") && atoi(getenv("RECOMP_HUNDRED_SMM1_CARD")); }
 
 // ================================================================ queue (mod -> flow)
-enum { Q_OPEN = 1, Q_PAUSE, Q_STARTED, Q_RESULT, Q_ENDING, Q_COURSE_IN };
+enum { Q_OPEN = 1, Q_PAUSE, Q_STARTED, Q_RESULT, Q_ENDING, Q_COURSE_IN, Q_COVER };
 static pthread_mutex_t g_q = PTHREAD_MUTEX_INITIALIZER;
 static int g_queue[32][2], g_nq;
 static struct hundred_credit g_end_credits[16];
@@ -122,6 +128,10 @@ static struct {
     bool may_start;      // (for the run side's thread) hundred_flow_ready_to_start()
     bool tap, touching;  // a touch lifted this frame (at tap_x, tap_y: game pixels); a touch is down
     bool touch_stale;    // the touch down began before the flow opened (its lift is no tap)
+    bool back_due;       // B on the select while SMM2's menu underneath wasn't in yet: B once it is
+    int exit_wait;       // B was taken: the select stays until SMM2's menu underneath has left (frames waited)
+    bool covered;        // black over SMM2's way back to its Endless menu (hundred_flow_cover): the select lifts it
+    int cover_at;        // (F.ov.tick it came up)
     int tap_x, tap_y;
     char test[64];
     long test_at;
@@ -228,7 +238,9 @@ static void to_select(void) {
     ov_hide(&F.ov);
     F.sel = s;
     F.state = s ? S_SELECT : S_CLOSED;
-    if (s && X.veil <= 0 && !WP.anim) fade_in();  // (over SMM2's Endless menu; after the ending the dip covers it)
+    F.back_due = false, F.exit_wait = 0;
+    if (F.covered) F.covered = false, X.veil_to = 0;  // (out of the black that hid SMM2's menu coming back)
+    if (s && X.veil <= 0 && !WP.anim) fade_in();  // (over SMM2's screen; after the ending the dip covers it)
     static const int t[] = {60};
     static const char *w[] = {"select"};
     shots_at(1, t, w);
@@ -330,7 +342,7 @@ static void on_result(int outcome) {
             if (!hundred_play_next()) LOGF("the run side did not take the next course\n");
         }
         break;
-    case HUNDRED_MISS:  // SMM2's retry; with no life left, SMM2's game over, then its Endless menu reopens the select
+    case HUNDRED_MISS:  // SMM2's retry; with no life left, SMM2's GAME OVER scene, then Course World [obs]
         if (F.st.lives > 0) F.state = S_PLAYING;
         else {
             close_scenes();
@@ -416,6 +428,9 @@ static void handle_queue(void) {
         case Q_STARTED:
             if (F.state == S_INTRO && F.intro) intro_started(F.intro);  // (the card goes: Out over the course)
             break;
+        case Q_COVER:
+            if (!F.full) X.veil = X.veil_to = 1, F.covered = true, F.cover_at = F.ov.tick;
+            break;
         case Q_COURSE_IN:
             if (F.state == S_INTRO && F.intro) intro_course_in(F.intro);  // (SMM2's card: the black may go)
             break;
@@ -495,11 +510,21 @@ static void tick(unsigned buttons) {
     F.prev = buttons;
     F.ov.tick++;
     shots_tick();
+    if (F.covered && F.ov.tick - F.cover_at > 300) F.covered = false, X.veil_to = 0;  // (no select came: let go)
     fades_tick();
     if (X.then) in.pressed = 0, F.tap = false;  // (a fade out under way: its screen takes nothing more)
     bool resume = false;
     switch (F.state) {
     case S_SELECT: {
+        if (F.exit_wait) {  // (the select hides SMM2's Endless menu while it slides away, then fades over Course World)
+            if (hundred_menu_left() || ++F.exit_wait > 240) {
+                LOGF("back to Course World: SMM2's menu %s after %d frames\n", F.exit_wait > 240 ? "still there" : "left",
+                     F.exit_wait);
+                F.exit_wait = 0;
+                fade_out(T_EXIT, 24);
+            }
+            break;
+        }
         static bool auto_started;  // (one run: back on the select after it, nothing more is pressed)
         if (auto_d() >= 0 && F.sel && !auto_started) {  // (unattended: the difficulty, then New Game)
             int t = F.sel->tick;
@@ -509,6 +534,11 @@ static void tick(unsigned buttons) {
             if (t == 200) in.pressed |= BT_DOWN;  // (New Game, not Continue)
             if (t == 240) in.pressed |= BT_A, auto_started = true;
         }
+        // (B takes SMM2's menu underneath back to Course World: one pressed while it is still coming in counts once
+        // it is in, so that menu doesn't come and go on screen after the select has left)
+        if (in.pressed & BT_B) F.back_due = true;
+        in.pressed &= ~BT_B;
+        if (F.back_due && hundred_menu_in()) in.pressed |= BT_B, F.back_due = false;
         int ev = select_step(F.sel, &in, &F.st, &resume);
         if (ev == EV_NONE && F.tap && select_header_hit(F.sel, F.tap_x, F.tap_y)) smm1_se("SE_PageNext1"), ev = EV_MODE;
         if (ev == EV_TAB) smm1_bgm_track(track_for(F.sel->d));
@@ -517,9 +547,9 @@ static void tick(unsigned buttons) {
                  buttons & ~in.pressed, F.tap, F.sel->tick);
             fade_out(T_MODE, CROSS_FRAMES), smm1_bgm_fade(16);
         }
-        if (ev == EV_BACK) {  // B: SMM2's menu underneath leaves for Course World while the map plays its Out
+        if (ev == EV_BACK) {  // B: SMM2's menu underneath leaves for Course World; the select fades once it has
             hundred_flow_exit();
-            fade_out(T_EXIT, 32), smm1_bgm_fade(32);
+            F.exit_wait = 1, smm1_bgm_fade(32);
         }
         if (ev == EV_EXIT && !X.then) { close_scenes(); F.state = S_CLOSED; }
         else if (ev == EV_START) {
@@ -613,10 +643,12 @@ static bool build(LQuads *q, uint8_t bg[4]) {
 // ================================================================ the mod's calls
 void hundred_flow_open(void) { post(Q_OPEN, 0); }
 bool hundred_flow_active(void) { return F.full; }
+bool hundred_flow_covering(void) { return F.full && X.op >= 1 && !X.then; }
 bool hundred_flow_overlay(void) { return !F.full && F.captured; }
 void hundred_flow_pause(void) { post(Q_PAUSE, 0); }
 void hundred_flow_course_started(void) { post(Q_STARTED, 0); }
 void hundred_flow_course_in(void) { post(Q_COURSE_IN, 0); }
+void hundred_flow_cover(void) { post(Q_COVER, 0); }
 void hundred_course_result(int outcome) { post(Q_RESULT, outcome); }
 void hundred_ending_show(int d, int n, const struct hundred_credit *c) {
     pthread_mutex_lock(&g_q);
@@ -751,6 +783,8 @@ static unsigned test_input(uint64_t frame) {
 }
 static LQuads g_last;
 static bool g_worker_on;
+const uint8_t *smw_goal_image(int *w, int *h, int *full, uint64_t *seq);  // (mods/smw_goal.c: its circle)
+void smw_goal_poll(void);
 
 // Once per presented frame (renderers, runtime/ui/menu.mm): tick the flow, queue this frame's image, return the
 // newest finished one (RGBA8 1280 x 720; *full: opaque, the game's frame hidden), or NULL for none. *seq changes
@@ -773,6 +807,7 @@ const uint8_t *game_overlay_image(int *w, int *h, int *full, uint64_t *seq) {
         F.test[0] = 0;
         flow_test_open(spec);
     }
+    smw_goal_poll();
     // (the buttons and the touch are followed while the flow is closed too: a button or a touch held when it opens,
     // e.g. the ZL / ZR or the tap that switched to it, is no press of its own)
     unsigned b = (unsigned)input_player_buttons() | test_input(renderer_present_count());
@@ -790,7 +825,7 @@ const uint8_t *game_overlay_image(int *w, int *h, int *full, uint64_t *seq) {
         g_has_front = false;
         F.full = F.captured = false;
         F.may_start = true;
-        return NULL;
+        return smw_goal_image(w, h, full, seq);  // (nothing of the flow's: the SMW goal wipe's circle, or none)
     }
     tick(b);
     LQuads *q = &g_last;

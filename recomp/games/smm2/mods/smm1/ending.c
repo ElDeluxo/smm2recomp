@@ -8,8 +8,9 @@
 //    rows, InOut 1420 frames, "END") for Normal and Expert, _01 (8 rows, 1020, "TO BE CONTINUED...") for Easy, _03
 //    (6 rows, 1020, "THE END") for Super Expert - listing each cleared course (name, maker) under "Course Design".
 //    Each row is drawn in SMM2's look instead of SMM1's Mii row (owner, 2026-10-19: the makers' Miis are not there):
-//    SMM2's own course card (Play_CourseIn_00 from the game's romfs: the yellow course-name banner with the maker
-//    underneath, no Mii, no flag), placed where SMM1's row is on each frame, so the roll keeps SMM1's timing.
+//    SMM2's own course card (Play_CourseIn_00 from the game's romfs: the yellow course-name banner with the course ID
+//    and the maker underneath, no Mii, no flag), placed where SMM1's row is on each frame, so the roll keeps SMM1's
+//    timing.
 //    180 frames after the credits the Mystery Mushroom costume window opens (the costumes mod: hundred_costume_reward).
 // Neither scene reads the controller: nothing skips [obs].
 #include "ending.h"
@@ -98,11 +99,27 @@ Ending *ending_new_style(int d, int n, const struct hundred_credit *c, int style
             lay_hold_end(row, "AnimDefault");
             lay_text(row, "T_CourseName_00", c[i].name);
             lay_text(row, "T_PlayerName_00", c[i].maker);
+            lay_text(row, "T_CourseID_00", c[i].code);
             static const char *hide[] = {"N_Align_00", "N_Info_00", "N_EventAlign_00", "N_EventFirst_00",
                                          "P_GhostVolumenone_00", "L_LoadingGhost_00", "L_MiiIcon_00",
-                                         "L_NationalFlag_00", "T_CourseID_00", "N_Caracter_00", NULL};
+                                         "L_NationalFlag_00", "N_Caracter_00", NULL};
             for (int k = 0; hide[k]; k++) lay_show(row, hide[k], false);
             lay_show(row, "N_MakerAnim_00", true);
+            // as the game lays the card out in Endless [obs: its course-in card]: the name centred (no quest / world
+            // number), the course ID at the left of the maker strip; the maker's name moves right into the Mii's
+            // place, level with the ID's margin [inf: a choice, there is no Mii]
+            float centre[2] = {0, 0}, maker[2] = {64, 0};
+            lyt_set_pane(row->in, "T_CourseName_00", centre, -1);
+            lyt_set_pane(row->in, "N_Maker_00", maker, -1);
+            // the name and ID in the course name's weight: their border-less brown is a hairline at the roll's scale
+            // [inf: a choice; the game draws them at full size]
+            for (int k = 0; k < 2; k++) {
+                int pi = lyt_pane_index(row->res, k ? "T_CourseID_00" : "T_PlayerName_00");
+                if (pi < 0) continue;
+                LPane *p = &row->res->pane[pi];
+                p->txt.flags &= ~4;
+                memcpy(row->res->mat[p->txt.mat].black, row->res->mat[p->txt.mat].white, 3);
+            }
             e->rows[i] = row;
             if (i + 1 > e->nrows) e->nrows = i + 1;
         }

@@ -23,7 +23,8 @@ stage_common() {
     cp runtime/cpu.h runtime/simd.h runtime/simd_fp.h runtime/gamelib.h runtime/game.h tools/gamelib_entry.c "$dest/gamelib-src/"
     cp games/smm2/hle_symbols.txt "$dest/gamelib-src/hle_symbols.txt"
     cp games/smm2/patches.py "$dest/gamelib-src/patches.py"
-    cp games/smm2/mods/patches.py "$dest/gamelib-src/mods/patches.py"
+    # every mod patch file games/smm2/patches.py loads (patches.py, smm1_extras.py): the same files GAMELIB_ID hashes
+    cp games/smm2/mods/*.py "$dest/gamelib-src/mods/"
     # the compiler
     [ -d "build/zig-$zt" ] || ZIG_TARGET=$zt ZIG_OUT="build/zig-$zt" tools/fetch_zig.sh
     cp -R "build/zig-$zt" "$dest/zig"

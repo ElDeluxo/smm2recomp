@@ -289,6 +289,8 @@ Added for SMM2:
 |---|---|
 | `SMM2_SEED=<n>` | fixed seed for the game's global random generator: every boot shows the same title course and frames repeat exactly (`4`: the course Ryujinx shows) |
 | `LARECOMP_CG_SHOT=<frame>` or `<first>:<last>:<step>` | capture the window through the window server (colour-managed, like the Ryujinx reference grabs); with a range, `LARECOMP_SHOT_PATH` is a printf pattern (`shot_%05d.png`). For comparisons: `LARECOMP_WINDOW=1280x720 LARECOMP_SCALE=1` |
+| `LARECOMP_NO_SHADER_PREFETCH=1` | build shaders and pipelines on first use, inline (the default prefetch mode starts a submission's builds side by side before its draws run, and a draw waits only for its own; `docs/superpowers/specs/2026-10-20-shader-prefetch-design.md`) |
+| `LARECOMP_PREFETCH_VERIFY=1` | (tests) check the prefetch scan's state against the executor's after each submission; `[shader] prefetch verify` lines name what differs |
 | `LARECOMP_ASYNC_SHADERS=1` | compile shaders in the background and skip their draws meanwhile (LAS's behaviour, Metal and Vulkan; SMM2 then misses one-shot renders) |
 | `LARECOMP_NO_PIPELINE_CACHE=1` | (Metal) don't use the pipeline cache `cache/pipelines/` in the data folder (compiled pipelines kept across runs and app updates; delete `cache/` to reset) |
 | `LARECOMP_NO_PRECOMPILED=1` | (Metal) don't load precompiled shaders (`cache/metallib/`, made by `tools/precompile_shaders.sh <data>/cache/metallib macos <data>/cache/shaders`; an iOS app's bundled `metallib/`) |

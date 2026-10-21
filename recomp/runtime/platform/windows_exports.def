@@ -10,3 +10,4 @@ fnprof_hit
 g_fnprof DATA
 smm2_player_hook
 smm2_mod_after
+smm1_extras_after

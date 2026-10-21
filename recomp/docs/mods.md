@@ -100,7 +100,7 @@ calls (read from the client vtable slot it uses):
 
 | Request (method id) | Function (main+) | Answered from |
 |---|---|---|
-| course lists: PickUp (84, "Hot"), PointRanking (71, "Popular", by difficulty), Latest (73, "New"), Advanced (72, detailed search: difficulty, style, sort), PostedBy (74, a maker's courses), BestTime / FirstClear (81 / 80) | 0x14d8550 (search type +0x746e8) | `GET /api/courses?sort=popular\|new&style=&offset=&limit=100`, filtered into the game's difficulty bands; a maker's courses from `GET /api/makers/<id>`; followed / liked / played-by lists and versus: empty |
+| course lists: PickUp (84, "Hot"), PointRanking (71, "Popular", by difficulty), Latest (73, "New"), Advanced (72, detailed search: difficulty, style, sort), PostedBy (74, a maker's courses), BestTime / FirstClear (81 / 80) | 0x14d8550 (search type +0x746e8) | `GET /api/courses?sort=popular\|new&style=&offset=&limit=100`, filtered into the game's difficulty bands; a maker's courses from `GET /api/makers/<id>`; a player's Played Courses / Liked Courses (PlayedBy 76, PositiveRatedBy 75) from `GET /api/makers/<id>/played` / `liked`; followed makers and versus: empty |
 | GetUserOrCourse (131): the ID search | 0x14dc0d0 | `GET /api/courses/<code>`, else `GET /api/makers/<code>` |
 | GetUsers (48): the makers of listed courses, a maker's page | 0x14d02d0, 0x14d7780, 0x14d2f00 | `GET /api/makers/<id>`: name, maker code, likes received and maker points from their courses; the default Mii |
 | SearchUsers* (50, 51, 57, 58): leaderboards | 0x14d1820 (kind +0x73a14) | `GET /api/rankings/maker_points` (makers, also the period's board), `endless_<d>` (Endless), `clears` |
@@ -109,19 +109,37 @@ calls (read from the client vtable slot it uses):
 | PostPlayResult (96) | 0x14e30e0 | `POST /api/courses/<code>/play`, and `/clear {time_ms}` on a clear (not for Endless courses: those are counted by the Endless reports) |
 | SearchComments (94 / 95), PostCommentText (91) | 0x14e8ec0, 0x14e96b0 | `GET` / `POST /api/courses/<code>/comments` (text) |
 | CanPostCourse (60), the course upload (66 + upload + 67), DeleteObject | 0x14e0d40, 0x14de3f0, 0x14e0c50 | allowed; the game's own course (header "SCDL", not yet encrypted) to `POST /api/courses` as the signed-in maker (`?based_on=` for an edited copy, below), its code back as the upload's data id; `DELETE /api/courses/<code>` |
-| GetReqGetInfoHeadersInfo (134) + HTTP: thumbnails ("relation objects") | 0x14e0e70 (`edit.c`) | none on our server; the course being downloaded gets a stand-in (below), the lists keep the game's placeholder |
+| GetReqGetInfoHeadersInfo (134) + HTTP: a course's picture ("relation objects", 5 at a time) | 0x14e0e70 (`edit.c`) | `GET /api/courses/<code>/thumbnail?wait_ms=` (below) |
+| the same for a course's whole-course map (More info) | 0x14e2cf0 (`edit.c`) | `GET /api/courses/<code>/entire_thumbnail?wait_ms=` |
 
-Course World courses download and play exactly like the Endless ones (the same GetObject). Not served: thumbnails
-(the game shows its placeholder), Super Worlds, Ninji speedruns, notifications, follows, Network Play.
+Course World courses download and play exactly like the Endless ones (the same GetObject). Not served: Super Worlds,
+Ninji speedruns, notifications, follows, Network Play.
+
+**Thumbnails** (a course's picture on its card and course page, its whole-course map under More info): the server
+keeps them as JPEGs (`thumbnails/<code>.jpg`, `<code>-entire.jpg` in its folder). For a course from TGRCode's archive
+the server fetches both from TGRCode (`level_thumbnail` is the game's thumbnail block, `level_entire_thumbnail` a
+plain JPEG), one request at a time with the course imports: first those a player is waiting for, then, while it has
+nothing else to do, those of every course it holds. TGRCode takes a second or more a picture and rate-limits, so the
+mod asks with `wait_ms` (a few seconds in all for a list's five, 6 s for a map): what hasn't come by then shows the
+game's placeholder this time and is there next time. The mod signs each JPEG into the block the game checks (the
+JPEG, then in the last 0x64 bytes its size, HMAC-SHA256 under a key from four seed words, the seeds; main+0x1698a80)
+with the game's own functions; the map's 0x19000-byte block takes the same tail [obs: the map shows]. Our own
+uploads have no thumbnails yet (the game uploads them with the course; not kept).
 
 **Download** (the course page's Download, into the Coursebot's Downloaded Courses) works: SMM2 waits for the
 course's thumbnail before it hands the download to the Coursebot (cDownload, main+0x17661f0, needs a valid entry in
-the thumbnail cache) and keeps a course only with a thumbnail it can check (JPEG size 1..0x1bf9c, HMAC-SHA256 under a
-key from four seed words, main+0x1698a80; otherwise "Corrupt data was found so the course has been deleted."). Our
-server has no thumbnails, so `edit.c` answers the thumbnail request with a stand-in for the course being downloaded:
-a 640 x 360 one-colour JPEG encoded by the mod (grey-blue [inf]), signed with the game's own functions as its blank
-thumbnail is. [obs] the course is saved (`course_data_120.bcd` + `course_thumb_120.btl`) and shows in Downloaded
-Courses after a restart, with the stand-in thumbnail.
+the thumbnail cache, slots of 0x1c1b8 bytes: +0x1c000 data id, +0x1c1b2 failed, +0x1c1b4 valid) and keeps a course
+only with a thumbnail it can check (otherwise "Corrupt data was found so the course has been deleted."). A course the
+server has no picture for gets a stand-in: a 640 x 360 one-colour JPEG encoded by the mod (grey-blue [inf]), signed
+the same way. A course whose picture didn't come with the list stopped the download at "A communication error
+occurred." [obs]: the download asks for the picture again and the cache takes it, but keeps the list's failed mark,
+which cDownload checks first; the mod clears that mark (and fills a slot still without a picture) while cDownload
+waits. [obs] downloads saved (`course_data_120.bcd` + `course_thumb_120.btl`, the real picture; `_121` after a
+withheld picture, `RECOMP_MOD_TEST_NO_THUMB=<code>`, the stand-in).
+
+**Played Courses** (a maker page's tab): the server keeps each player's played courses, newest first (300): a play
+posted from Course World, and every course of a challenge run (Endless, 100 Mario) on its first report; a store from
+before this starts from the courses its runs passed. **Liked Courses**: the courses the player liked.
 
 ### Edit any course (`games/smm2/mods/edit.c`)
 
@@ -165,6 +183,26 @@ SMM2's window of a downloaded course has only Play, Play Together and Delete, so
   upload id from is still [?]. The upload with `based_on` hasn't been run in game (the server side is tested:
   `edited_copies_credit_the_original`). Typed course names arrive garbled: runtime/hle/swkbd.c answers in UTF-8,
   SMM2 reads UTF-16 (not this mod's file).
+- 2026-10-21 re-test (main build, `RECOMP_EDIT_CTL`): Download → Make (tap) → Course Maker → an edit → Save As into an
+  empty My Courses slot works, and the typed name now arrives intact ("Edited Copy"; the swkbd UTF-16 fix). The
+  d-pad cursor still goes Play → Delete → the list tabs, skipping Make. The game's enable call (main+0x761190) only
+  sets the button's enabled bytes (+0x3a / +0xbc in its two lists) and a bit in a pane controller's mask (+0x218 →
+  +0x14b0), so the cursor's targets come from somewhere else (not found yet). On that run SMM2's current course was
+  slot 2, not the download, so the Course Maker took the download from storage, not the reset copy. The copy and the
+  editor's Save / Load card show the yellow arrow mark. Upload is greyed until a clear check, which is SMM2's normal
+  rule.
+- Fixed 2026-10-21: the Course Maker reloads the course into the current-course buffer (save manager +0x58) during
+  the scene change, after the mod's reset of the prepared slot. Both buffers held creation id 1 and upload id
+  0x100001 once it was up. A helper thread now resets that buffer's header whenever the original's comes back (20 s
+  after the request). Checked in game: the Save / Load menu then offers Save As and Load only, as for a new course;
+  after Save As the saved copy's header has flags 0 and upload id 0. The yellow arrow mark on its card stays, so it
+  isn't an "uploaded" mark: own, uncleared courses have it too.
+- Found 2026-10-21: Save As gives the copy a new creation id (e.g. e099c3d7 -> cf2b3d34), so `smm2edit.txt`, which is
+  keyed by creation id, doesn't find it at upload. Fixed the same day: Save As asks for a name and Load doesn't, so
+  while the copy is in the Course Maker, a new creation id in its buffer right after a name entry
+  (`g_swkbd_entries`, runtime/hle/swkbd.c) carries the record to the new id. A change without a name entry (another
+  course loaded) ends the watch. Checked in game: `655ff576 -> 7f8d0ecf`, both in `smm2edit.txt`. The upload itself
+  needs a clear check first and hasn't been run in game.
 - Proposed, not built: an Edit on Course World's course card (Download, then straight into the Course Maker when
   the Coursebot has saved it); in Endless / 100 Mario, "save to Coursebot for later" from SMM2's result screen
   (SMM1 offers no edit there).
@@ -177,7 +215,8 @@ course-name keyboard of Save As. `RECOMP_EDIT_TRACE=1` logs the window's UI even
 ### The bridge (100 Mario)
 
 `hundred.h` is the interface between the run side (here) and the flow (SMM1's screens). With `ruleset=hundred`,
-when the game enters its Endless menu the run side calls `hundred_flow_open()`; the flow then shows SMM1's screens
+when Challenge Modes is chosen on Course World (its Endless sub-sequence's Activate, main+0x1a22730, before the menu
+comes in) the run side calls `hundred_flow_open()`; the flow then shows SMM1's screens
 and calls `hundred_run_start()`, `hundred_play_next()`, `hundred_play_skip()`, `hundred_run_finish()` and reads
 `hundred_run_status()`; the run side reports `hundred_flow_course_started()` and `hundred_course_result()`.
 
@@ -236,8 +275,14 @@ setting (`hundred_smm1_card=1`) the flow shows SMM1's card instead, and a course
 at its first play frame until `hundred_flow_ready_to_start()` (the card is up). **Transitions:** after the result screen's
 Next SMM2's own block wipe (`Cmn_Fade_00` OutBlock / InBlock from the game's romfs, drawn by the flow) covers it and
 uncovers the map (or the ending); the ending goes to the select the same way; the
-select fades in over SMM2's Endless menu when it opens and out when Challenge Modes switches or B leaves (B starts
-SMM2's way back to Course World at once, under the map's Out). **Challenge Modes input:** the buttons and the
+select fades in over Course World when it opens (SMM2's Activate is held until the select is in, so SMM2's Endless
+menu comes in under it unseen; it used to open on that menu's first Disp, which showed SMM2's menu for half a second
+first) and out over SMM2's Endless menu when Challenge Modes switches or B leaves (B starts SMM2's way back to Course
+World at once, under the map's Out; a B pressed while that menu is still coming in counts once it is in,
+`hundred_menu_in()`). After a Save & Quit (the pause's, or Quit on the result screen) SMM2's way back skips that
+Activate and shows its menu as it fades in from black; the flow's black comes up on SMM2's black (the scene fade's
+waiting state, enter main+0x192f580: `hundred_flow_cover()`) and the select comes out of it. A won run goes back under
+the ending; a game over goes to Course World through SMM2's GAME OVER scene. **Challenge Modes input:** the buttons and the
 touch held when the flow opens count as held, not pressed, until they are let go: SMM2's menu acts on a ZL / ZR in
 the very frame it comes, before the flow has seen it held, so the select used to take the same press and switch
 straight back to Endless (half the switches back to 100 Mario bounced, in a test with the player's own key path); on SMM2's menu a
@@ -319,7 +364,7 @@ every difficulty draws from all of them.
   It is timed for `SMM2_SEED=4` and the save in `/Volumes/SSD/smm-work/recomp-mods/private/smm2/save` (Course
   World seen before, no first-visit intro): copy that `save/` over yours if the script lands elsewhere.
   `LARECOMP_HOST_INPUT=<frame>:shot:<name>,...` saves window shots into `private/smm2/build/`.
-- Entering the Endless menu under `ruleset=hundred` calls `hundred_flow_open()`: the flow takes over from there
+- Choosing Challenge Modes under `ruleset=hundred` calls `hundred_flow_open()`: the flow takes over from there
   (it calls `hundred_run_start()`, `hundred_play_next()` ...). `RECOMP_MOD_FLOW_TEST=<0..3>` instead plays the run
   without the flow (the stand-in in `bridge.c`).
 - `RECOMP_MOD_AUTOPLAY=jump` plays each course (right + run + jump) and skips it with the test input after
@@ -352,9 +397,11 @@ every difficulty draws from all of them.
 ### Limits
 
 - Not online yet: Network Play (plan: `DECISIONS.md` "Online multiplayer"), Super Worlds, Ninji speedruns,
-  thumbnails, follows, notifications; they answer "not connected" or empty.
+  follows, notifications; they answer "not connected" or empty.
 - The Maker avatar is the console's default Mii with your account's name (creating one needs the Mii editor applet,
-  which the runtime doesn't have).
+  which the runtime doesn't have). `online.c` puts it in the save's user settings (+0x60) when there is none, so the
+  avatar icon at the top left of Course World's menus shows it from the start (it was a white box until a maker page
+  brought the record's Mii).
 - No SMM2 Mii-costume rewards (the server sends no notifications).
 
 ## SMM1 extras: one setting per SMM1 feature
@@ -421,6 +468,69 @@ and in the Ryujinx trace build (`tools/replay_sync.py`'s comparison): 606 of 606
 12 KB player object and the input block too.
 
 ## The game's own network stack (backends local-nex and nextendo): a local NEX server and Nextendo Network
+## SMW goal wipe (`games/smm2/mods/smw_goal.c`)
+
+In Super Mario World style courses, a goal-tape clear in real play ends the way SMW's levels do: once the fanfare is
+over, a black circle closes on Mario with SMW's own goal-wipe sound. Then:
+
+- where SMM2 shows its clear panel (Course World, Story, Endless / 100 Mario...), the black fades into the panel's own
+  wipe and COURSE CLEAR! card; Next then leaves the course as SMM2 does;
+- where it shows none (My Courses), the screen stays black while SMM2 changes scene under it, and the black fades away
+  when the next screen is up.
+
+The castle's axe, online versus and the Course Maker's test play are left as they were. On by default: the Mods tab's
+"SMW goal wipe" switch, `smw_goal_wipe=0/1` in `smm2mods.ini`, or `RECOMP_SMW_GOAL_WIPE=0/1` (wins over the ini).
+
+- **The sound** is SMW's original (`SuperMarioWorld_43_GoalWipe`, 0.8 s at 32 kHz), which SMM2 keeps in its story
+  mode's sound bank `Sound/Resource/Quest_UndoDog.bars`. The mod reads it from the player's RomFS (`rov_read_game`) and
+  decodes it (`smm1_bars_sound`, `smm1_bwav_decode`: SMM2's BARS of BWAVs, DSP-ADPCM, in `smm1/smm1_audio.c`); it
+  plays through the mods' mixer (`smm1_play`). Nothing is shipped.
+- **The circle** is drawn host-side (`smw_iris`, an antialiased circle over 1280 x 720) through
+  `game_overlay_image`, which the 100 Mario flow owns: it hands its frames to `smw_goal_image` while it has nothing
+  of its own to show, and calls `smw_goal_poll` every frame. The centre is the body of the player who broke the tape
+  (actor x / y at +0x230 / +0x234, mapped through the camera's view rect); the screen centre when that can't be read.
+  The circle takes the sound's 0.8 s, then 0.25 s of black.
+- **The timing** comes from MariowGoal's own Fade-state thunks (enter main+0x12d2890, execute main+0x12d28a0: every
+  goal type has its own, so the axe never comes here). The enter override arms the wipe once per goal (the demo
+  controller sits at the same address course after course, and the Fade can start after the fanfare's counter has run
+  out: the Fade comes on a 480-frame timer, the fanfare plays in real time, so slow frames leave no counter to see).
+  SMM2's Fade waits while a fade is under way or while the demo's counter (fanfare, then 35 frames) runs; then it
+  opens the clear panel, or asks for the scene change. The execute override starts the armed circle on the first
+  frame the Fade would go on and skips the Fade until the circle is shut (a skipped frame changes nothing: the Fade
+  only waits). Then the Fade runs: a scene change asked for (the scene manager's byte at +0x344)
+  keeps the black until the new scene exists; otherwise the black fades 54 frames later, when the panel's staircase
+  wipe covers the course.
+- Research (private): `research/specs/smw-goal-wipe.md`.
+- Test: `RECOMP_SMW_GOAL_SHOTS=<every>` saves a window shot every `<every>` frames for 4 s from the wipe's start
+  (`build/smwgoal_<frame>.png`). The 100 Mario test recipe above with a server holding only `MW_*` test courses
+  clears SMW courses unattended.
+
+## Muncher hit box (SMM1) (`games/smm2/mods/muncher_hitbox.c`)
+
+Munchers hurt the player the way SMM1's did. In SMM2 a one-tile gap between two Muncher columns can only be fallen or
+jumped through dead centre; with the mod Mario has SMM1's room of about 2 px either side. Off by default: the Mods
+tab's "Muncher hit box (SMM1)" switch, `muncher_smm1_hitbox=0/1` in `smm2mods.ini`, or `RECOMP_MUNCHER_SMM1_HITBOX=0/1`
+(wins over the ini). It applies from the next frame.
+
+- **SMM2** gives a Muncher one body, a 16 x 16 box that is also a spike: any side the player touches hurts. The
+  player's wall sensors reach 7.9 px either side of him, so in a 16 px gap more than 0.1 px off centre is a touch
+  [obs: in a test course Mario 2.2 px off centre is pushed to x = gap centre - 0.1 and dies].
+- **SMM1** (Block.rpx v208) builds the Muncher from two bodies: the same 16 x 16 box, harmless, for everything else,
+  and a spike box 2 px smaller on every side (12 x 12) for the player. Enemies' sensors skip the spike box. The player
+  meets the spike 2 px later from any side, so for him the gap is 20 px wide and he can be 2.1 px off centre.
+- **The mod** gives the player SMM1's box. While a player's per-frame update runs (main+0x158a590, called through the
+  player's vtable), every live Muncher's body is shrunk to the inner box: its edges and its world bounds (the player's
+  queries go by both) are scaled by 12/16 about the box's centre, so a Big Muncher's loses 4 px a side. They are put
+  back byte for byte when the update returns. Enemies, items and everything else still meet the 16 x 16 box. Munchers
+  are found when they are built (main+0x107d340, the build function both Muncher profiles point at) and dropped when
+  they are destroyed (main+0x107ed30 / 0x107ed80).
+- **Tested** on macOS with a title-screen test course (two Muncher columns, a one-tile gap, small Mario riding donut
+  blocks straight down at offsets -2.2, -0.7, +0.8, +2.3, +3.8 px from the gap's centre): off, he dies at every offset;
+  on, he reaches the floor at -0.7 and +0.8 and dies at the others, pushed out 2 px later than without the mod. Big
+  Munchers and enemies on Munchers weren't run.
+- Research (private): `research/specs/objects/57-muncher.md` (section "Hit box").
+
+## The game's own network stack (backend local-nex): groundwork for Nextendo and a local NEX server
 
 The mod above *fakes* being online: nifm / acc / friends / mii answer locally, the enl session logs in without NEX,
 and the game's request functions are answered from our HTTP server. The runtime also has a **real network stack**

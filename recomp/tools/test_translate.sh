@@ -13,8 +13,8 @@ MODE=${3:-both}
 REF=${REF:-652e234}
 OUT=build/test_translate
 mkdir -p "$OUT/old" "$OUT/dump"
-git show "$REF:runtime/nvn/maxwell/translate.c" > "$OUT/old/translate.c"
-git show "$REF:runtime/nvn/maxwell/shader.h" > "$OUT/old/shader.h"
+git show "$REF:./runtime/nvn/maxwell/translate.c" > "$OUT/old/translate.c"
+git show "$REF:./runtime/nvn/maxwell/shader.h" > "$OUT/old/shader.h"
 CC=${CC:-clang}
 RENAME="-Dmaxwell_translate=old_maxwell_translate -Dmaxwell_free=old_maxwell_free
  -Dmaxwell_disassemble=old_maxwell_disassemble -Dmaxwell_gmem_base=old_maxwell_gmem_base

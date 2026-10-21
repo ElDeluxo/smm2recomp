@@ -78,7 +78,7 @@ static Json *maker_get(const char *id) {
 void world_search(Cpu *c, uint64_t no, uint32_t type) {
     uint32_t page = g32(no + NO_PAGE), want_band = 4, want_style = 5;
     char path[256], id[16] = "";
-    const char *sort = "popular";
+    const char *sort = "popular", *player_list = NULL;
     bool by_maker = false, none = false;
     switch (type) {
     case 0: case 5: break;                                      // pick up, terms ranking: popular
@@ -91,11 +91,18 @@ void world_search(Cpu *c, uint64_t no, uint32_t type) {
         break;
     case 6: by_maker = true; break;                             // a maker's courses
     case 8: case 9: by_maker = true; break;                     // records / first clears by a maker: filtered below
-    default: none = true; break;                                // followed / liked / played by, versus: none kept
+    case 7: player_list = "liked"; break;                       // liked by a player
+    case 10: player_list = "played"; break;                     // played by a player
+    default: none = true; break;                                // followed makers, versus: none kept
     }
     Json *j = NULL;
     if (by_maker) {
         if (mod_maker_id(g64(no + NO_SEARCH_PID), id)) j = maker_get(id);
+    } else if (player_list) {
+        if (mod_maker_id(g64(no + NO_SEARCH_PID), id) && page == 0) {
+            snprintf(path, sizeof path, "/api/makers/%s/%s", id, player_list);
+            j = srv_call("GET", path, NULL, NULL);
+        }
     } else if (!none) {
         snprintf(path, sizeof path, "/api/courses?sort=%s&offset=%u&limit=100%s%s", sort, page * 100,
                  want_style < 5 ? "&style=" : "", want_style < 5 ? STYLES[want_style] : "");
@@ -119,7 +126,7 @@ void world_search(Cpu *c, uint64_t no, uint32_t type) {
     netobj_unlock(c);
     LOG("[mod] course list (%s%s%s, page %u): %u courses\n", type < 14 ? SEARCH_NAMES[type] : "?", id[0] ? " " : "",
         id, page, count);
-    bool ok = none || by_maker || j;
+    bool ok = none || by_maker || player_list || j;
     json_free(j);
     finish(c, no, ok, 2);
 }

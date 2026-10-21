@@ -143,7 +143,7 @@ DEPINC   := -I$(SDL)/include
 OSFLAGS  := -DGAMELIB_STATIC
 RT_SRC   := $(filter-out runtime/gamebuild.c,$(RT_SRC))
 LDFLAGS  := -L$(SDL)/lib -lSDL3 -framework CoreFoundation -framework Foundation -framework Metal $(if $(filter ios,$(PLATFORM)),-framework MetalFX) \
-            -framework QuartzCore -framework UIKit -framework ImageIO -framework CoreGraphics -framework UniformTypeIdentifiers \
+            -framework QuartzCore -framework UIKit -framework CoreText -framework ImageIO -framework CoreGraphics -framework UniformTypeIdentifiers \
             -framework AVFoundation -framework AudioToolbox -framework CoreAudio -framework CoreHaptics -framework CoreMotion \
             -framework GameController -framework CoreBluetooth -framework OpenGLES -framework CoreVideo -framework CoreMedia -framework CoreServices
 BACKEND_SRC := $(wildcard runtime/nvn/*.m)
@@ -159,7 +159,7 @@ FFMPEG   := $(or $(DEPS),/opt/homebrew/opt/ffmpeg)
 EXE      := $(B)/$(GAME_ID)recomp
 DEPINC   := -I$(SDL)/include -I$(FFMPEG)/include
 LDFLAGS  := -L$(SDL)/lib -lSDL3 -Wl,-rpath,$(SDL)/lib $(if $(FFMPEG_LIBS),-L$(FFMPEG)/lib $(FFMPEG_LIBS) -Wl$(comma)-rpath$(comma)$(FFMPEG)/lib) \
-            -framework CoreFoundation -framework Foundation -framework Metal -framework MetalFX -framework QuartzCore -framework AppKit -framework ImageIO -framework CoreGraphics -framework UniformTypeIdentifiers
+            -framework CoreFoundation -framework Foundation -framework Metal -framework MetalFX -framework QuartzCore -framework AppKit -framework CoreText -framework ImageIO -framework CoreGraphics -framework UniformTypeIdentifiers
 BACKEND_SRC := $(wildcard runtime/nvn/*.m)
 BACKEND_OBJ := $(patsubst runtime/%.m,$(B)/rt/%.o,$(BACKEND_SRC))
 IMGUI_OBJ += $(B)/imgui/imgui_impl_metal.o
@@ -245,13 +245,17 @@ MBEDTLS  := third_party/mbedtls
 MBEDTLS_FLAGS := -I$(MBEDTLS)/include -Iruntime/net -DMBEDTLS_USER_CONFIG_FILE='"mbedtls_user_config.h"'
 MBEDTLS_OBJ := $(patsubst $(MBEDTLS)/library/%.c,$(B)/mbedtls/%.o,$(wildcard $(MBEDTLS)/library/*.c))
 # The course server inside the app (core/crates/embed, runtime/net/embed_server.h): linked when its library is built
-# (`make embed-server`: cargo) or EMBED_SERVER=1, Apple builds for now; a build never needs Rust otherwise.
+# (`make embed-server`: cargo; Windows / Linux cross builds compile its C parts with zig, tools/zigcc.sh) or
+# EMBED_SERVER=1; a build never needs Rust otherwise.
 EMBED_TRIPLE := $(if $(filter ios,$(PLATFORM)),aarch64-apple-ios,$(if $(filter iossim,$(PLATFORM)),aarch64-apple-ios-sim,$(if $(filter macos,$(PLATFORM)),aarch64-apple-darwin)))
+EMBED_TRIPLE := $(or $(EMBED_TRIPLE),$(if $(filter windows,$(PLATFORM)),x86_64-pc-windows-gnu),$(if $(filter linux,$(PLATFORM)),$(ARCH)-unknown-linux-gnu))
 EMBED_LIB := $(if $(EMBED_TRIPLE),../core/target/$(EMBED_TRIPLE)/release/libmmk_embed.a)
 EMBED_SERVER ?= $(if $(wildcard $(EMBED_LIB)),1,0)
+# (what Rust's standard library needs from the system there)
+EMBED_SYSLIBS := $(if $(filter windows,$(PLATFORM)),-lws2_32 -luserenv -lbcrypt -lntdll -ladvapi32,$(if $(filter linux,$(PLATFORM)),-lpthread -ldl -lm))
 ifeq ($(EMBED_SERVER),1)
 OSFLAGS  += -DRECOMP_EMBED_SERVER
-LDFLAGS  += $(EMBED_LIB)
+LDFLAGS  += $(EMBED_LIB) $(EMBED_SYSLIBS)
 endif
 
 RTFLAGS  := -O2 -g -fno-strict-aliasing -Wall -Wno-unused-function -Iruntime -Iruntime/nvn $(DEPINC) $(OSFLAGS) $(GAMEDEFS)
@@ -292,8 +296,10 @@ $(B)/rt/net/roots.o: RTFLAGS += $(MBEDTLS_FLAGS)
 $(B)/rt/net/nextendo.o: RTFLAGS += $(MBEDTLS_FLAGS)
 $(B)/rt/net/nextendo.o: runtime/net/mbedtls_user_config.h
 
-# a game's own glue (games/<game>/*.c), compiled like the runtime
-$(B)/rt/games/%.o: games/%.c $(RT_HDRS)
+# a game's own glue (games/<game>/*.c), compiled like the runtime; its own headers too (a struct that grows in one
+# must rebuild every file that includes it)
+GAME_HDRS := $(shell find $(GAMEDIR) -name '*.h' -not -path '*/generated/*' 2>/dev/null)
+$(B)/rt/games/%.o: games/%.c $(RT_HDRS) $(GAME_HDRS)
 	@mkdir -p $(dir $@)
 	$(CC) $(RTFLAGS) -c $< -o $@
 
@@ -411,10 +417,13 @@ app-macos:
 	    RECOMP_VERSION=$(RECOMP_VERSION) build/$(GAME)-app/$(GAME_ID)recomp
 	RECOMP_VERSION=$(RECOMP_VERSION) MACOS_MIN=$(APP_MACOS_MIN) tools/bundle_macos.sh build/$(GAME)-app/$(GAME_ID)recomp
 
-# The course server inside the app (core/crates/embed) for this target, with cargo
+# The course server inside the app (core/crates/embed) for this target, with cargo (no debug info: it would add ~80 MB
+# to each package)
+EMBED_ENV := $(if $(ZTARGET),ZIG="$(abspath $(ZIG))" ZIGCC_TARGET=$(ZTARGET) \
+             CC_$(subst -,_,$(EMBED_TRIPLE))="$(CURDIR)/tools/zigcc.sh" AR_$(subst -,_,$(EMBED_TRIPLE))="$(CURDIR)/tools/zigar.sh")
 embed-server:
-	$(if $(EMBED_TRIPLE),,$(error embed-server: macOS / iOS builds only for now))
-	cd ../core && cargo build -p mmk-embed --release --target $(EMBED_TRIPLE)
+	$(if $(EMBED_TRIPLE),,$(error embed-server: no Rust target for $(TARGET)))
+	cd ../core && rustup target add $(EMBED_TRIPLE) >/dev/null 2>&1; $(EMBED_ENV) CARGO_PROFILE_RELEASE_DEBUG=0 cargo build -p mmk-embed --release --target $(EMBED_TRIPLE)
 
 # Run from the data folder (saves, settings and shader caches go there); RUN_ARGS / env vars as the runtime reads them
 run: all
@@ -438,7 +447,35 @@ run-smm2:
 	$(MAKE) GAME=smm2 run
 JOBS ?= $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 
+# Shader prefetch's build states / waits / pending table (runtime/nvn/buildsync.c), no game files
+build/test_buildsync: tools/test_buildsync.c runtime/nvn/buildsync.c runtime/nvn/buildsync.h
+	@mkdir -p build
+	$(HOSTCC_TEST) -O1 -Wall -pthread '-DLOG(...)=printf(__VA_ARGS__)' -o $@ tools/test_buildsync.c runtime/nvn/buildsync.c
+test-buildsync: build/test_buildsync
+	./build/test_buildsync
+HOSTCC_TEST ?= cc
+
+# Frame generation (runtime/nvn/framegen*): the per-frame decision, and the passes on synthetic images (Metal)
+build/test_framegen_logic: tools/test_framegen_logic.c runtime/nvn/framegen.c runtime/nvn/framegen.h
+	@mkdir -p build
+	clang -O1 -DFG_NO_SDL -I runtime -o $@ tools/test_framegen_logic.c runtime/nvn/framegen.c
+build/test_framegen: tools/test_framegen.m runtime/nvn/framegen_metal.m runtime/nvn/framegen_src.c runtime/nvn/framegen.h
+	@mkdir -p build
+	clang -O1 -fobjc-arc -DFG_NO_SDL -I runtime -framework Metal -framework Foundation -o $@ tools/test_framegen.m \
+	    runtime/nvn/framegen_metal.m runtime/nvn/framegen_src.c
+test-framegen: build/test_framegen_logic build/test_framegen
+	build/test_framegen_logic
+	build/test_framegen
+
+# The overlay menu's font file (runtime/ui/system_font.mm)
+build/test_system_font: tools/test_system_font.mm runtime/ui/system_font.mm runtime/ui/system_font.h
+	@mkdir -p build
+	clang++ -O1 -fobjc-arc -I runtime -framework CoreText -framework CoreFoundation -framework Foundation -o $@ \
+	    tools/test_system_font.mm runtime/ui/system_font.mm
+test-ui: build/test_system_font
+	build/test_system_font
+
 build/test_shaders: tools/test_shaders.m runtime/nvn/maxwell/translate.c runtime/nvn/maxwell/shader.h
 	clang -O1 -fobjc-arc -framework Metal -framework Foundation -o $@ tools/test_shaders.m runtime/nvn/maxwell/translate.c
 
-.PHONY: all venv setup gen clean-gen run gen-objs runtime-objs test-tools smm2 run-smm2 package embed-server app app-macos apk install push-data
+.PHONY: all venv setup gen clean-gen run gen-objs runtime-objs test-tools test-buildsync test-framegen test-ui smm2 run-smm2 package embed-server app app-macos apk install push-data

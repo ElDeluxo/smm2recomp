@@ -16,6 +16,9 @@ What it looks for, per file:
   - the SHA-256 of the v3.0.3 ExeFS files (recomp/games/smm2/versions.py: hashes of the player's own files)
   - lines shaped like console keys; text that looks like recompiled game code
   - a runtime executable with recompiled game functions linked in
+
+It also fails a package that leaves out a file the first-launch recompile needs: once a package has gamelib-src/,
+it must hold every file there that tools/package_lib.sh copies (each of recomp/games/smm2/mods/*.py among them).
 """
 from __future__ import annotations
 
@@ -48,6 +51,9 @@ DATA_FILES = {'prod.keys', 'title.keys', 'dev.keys', 'setup.json', 'launcher.ini
 GAMELIB = re.compile(r'^smm2game\.(dylib|dll|so)(\.id)?$|^lasgame\.')
 GEN_CHUNK = re.compile(r'^(main|sdk)_(\d{3}|table)\.c$')
 GUEST_FN = re.compile(rb'f_7[0-9a-f]{9}\b')  # (recompiled functions are named by guest address: f_71xxxxxxxx)
+# what the launcher's recompile reads from gamelib-src/ (runtime/gamebuild.c, recomp/games/smm2/patches.py)
+GAMELIB_REQUIRED = ['cpu.h', 'simd.h', 'simd_fp.h', 'gamelib.h', 'game.h', 'gamelib_entry.c', 'hle_symbols.txt',
+                    'patches.py'] + sorted('mods/' + p.name for p in (ROOT / 'recomp/games/smm2/mods').glob('*.py'))
 TEXT_LIMIT = 5 * 1024 * 1024
 HASH_LIMIT = 64 * 1024 * 1024
 
@@ -165,12 +171,19 @@ def check(path: Path) -> int:
         return 1
     n = bad = 0
     total = 0
+    gamelib = None  # the files under gamelib-src/, once the package has that folder
     for rel, size, read in items:
         n += 1
         total += size
+        if '/gamelib-src/' in '/' + rel:
+            gamelib = gamelib or set()
+            gamelib.add(('/' + rel).split('/gamelib-src/', 1)[1])
         for problem in check_member(rel, size, read):
             print(f'GAME CONTENT? {path.name}/{rel}: {problem}')
             bad += 1
+    for missing in [f for f in GAMELIB_REQUIRED if gamelib is not None and f not in gamelib]:
+        print(f'MISSING {path.name}: gamelib-src/{missing} (the first-launch recompile needs it)')
+        bad += 1
     if bad:
         print(f'check_package: {path}: {bad} problem(s) in {n} files: this package must not be published')
         return 1

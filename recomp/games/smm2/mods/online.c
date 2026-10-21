@@ -237,6 +237,7 @@ static void get_my_user_hybrid(Cpu *c) {
     LOG("[mod] GetUsers (own): the backend's record, our Endless bests %u/%u/%u/%u\n", best[0], best[1], best[2],
         best[3]);
 }
+void mii_default_charinfo(uint8_t out[0x58], const char *nickname);  // runtime/services/mii.c
 
 static void get_my_user(Cpu *c) {
     if (mod_hybrid()) { get_my_user_hybrid(c); return; }
@@ -261,7 +262,6 @@ static void get_my_user(Cpu *c) {
         s64(e + 0x58, pid);
         // The Maker avatar: a valid Mii (the default one, named after the account). Without one Course World asks
         // for a new avatar, which needs the console's Mii editor.
-        extern void mii_default_charinfo(uint8_t out[0x58], const char *nickname);
         mii_default_charinfo((uint8_t *)(uintptr_t)(e + 0x9c), name);
         for (int d = 0; d < 4; d++) s32(e + 0x114 + 4 * d, best[d]);
         s8(e + 0x1ec, 1);  // a registered Course World user (Course World's top screen checks it, with the id)
@@ -274,6 +274,18 @@ static void get_my_user(Cpu *c) {
     if (settings && g64(settings + 0x2b0) && *(volatile uint16_t *)(uintptr_t)g64(settings + 0x2b0) == 0) {
         put_utf16(g64(settings + 0x2b0), 11, name);
         LOG("[mod] Maker avatar name set to \"%s\" (default Mii)\n", name);
+    }
+    // ... and its Mii (the save's user settings, *(main+0x2a39088) +0x20: CharInfo at +0x60). The login's
+    // SyncUserProfile (main+0x14b09e0) copies it into the profile the menus draw the avatar from (the icon at the
+    // top left); without one the icon stays a white box until a maker page brings the record's Mii.
+    uint64_t user_settings = g64(MAIN_ADDR(0x2a39088)) ? g64(g64(MAIN_ADDR(0x2a39088)) + 0x20) : 0;
+    if (user_settings) {
+        uint64_t create_id[2];
+        memcpy(create_id, (const void *)(uintptr_t)(user_settings + 0x60), 16);
+        if (!create_id[0] && !create_id[1]) {
+            mii_default_charinfo((uint8_t *)(uintptr_t)(user_settings + 0x60), name);
+            LOG("[mod] Maker avatar Mii set to the default Mii\n");
+        }
     }
     MLOG("GetUsers (own): %s, best %u/%u/%u/%u\n", name, best[0], best[1], best[2], best[3]);
     s32(no + 0x60, 0);
