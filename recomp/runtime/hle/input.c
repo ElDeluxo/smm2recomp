@@ -30,6 +30,24 @@ static uint8_t keys_down[SDL_SCANCODE_COUNT];
 static SDL_Gamepad *pad;
 static _Atomic int64_t sampling;
 
+// Players 2-4 (local multiplayer: Play Together): each further controller is the next player, Npad No. 2..4 (ids
+// 1..3), through the same controller bindings. Player 1 keeps the keyboard, the on-screen controller and the first
+// controller. LARECOMP_INPUT2 (same form as LARECOMP_INPUT) is a scripted player 2 for tests.
+#define EXTRA_PADS 3
+static SDL_Gamepad *extra_pad[EXTRA_PADS];
+static _Atomic uint64_t extra_buttons[EXTRA_PADS];
+static _Atomic int32_t extra_lx[EXTRA_PADS], extra_ly[EXTRA_PADS], extra_rx[EXTRA_PADS], extra_ry[EXTRA_PADS];
+static _Atomic uint64_t script2_buttons;
+static _Atomic int32_t script2_lx, script2_ly;
+static bool script2_on(void) {
+    static int on = -1;
+    if (on < 0) on = getenv("LARECOMP_INPUT2") != NULL;
+    return on;
+}
+static bool extra_connected(int i) { return extra_pad[i] || (i == 0 && script2_on()); }
+static void style_changed(void);
+static bool real_gamepad(SDL_JoystickID id);
+
 // Host keys / buttons held by a test script (LARECOMP_HOST_INPUT, input_frame): they go through the bindings
 static uint8_t test_keys[SDL_SCANCODE_COUNT];
 static _Atomic uint32_t test_pad;
@@ -68,6 +86,41 @@ static void recompute_pad(void) {
     pad_ly = -SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFTY);
     pad_rx = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHTX);
     pad_ry = -SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHTY);
+}
+
+static void recompute_extra(int i) {
+    SDL_Gamepad *g = extra_pad[i];
+    uint32_t host = 0;
+    if (g) {
+        for (int k = 0; k < SDL_GAMEPAD_BUTTON_COUNT; k++)
+            if (SDL_GetGamepadButton(g, (SDL_GamepadButton)k)) host |= 1u << k;
+        if (SDL_GetGamepadAxis(g, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) > 16000) host |= 1u << PADB_LTRIGGER;
+        if (SDL_GetGamepadAxis(g, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) > 16000) host |= 1u << PADB_RTRIGGER;
+    }
+    uint64_t b = 0;
+    for (int k = 0; k < BIND_PAD_COUNT; k++)
+        if (g_bind_pad[k] >= 0 && g_bind_pad[k] < PADB_HOST_COUNT && (host >> g_bind_pad[k] & 1)) b |= 1ull << k;
+    extra_buttons[i] = b;
+    extra_lx[i] = g ? SDL_GetGamepadAxis(g, SDL_GAMEPAD_AXIS_LEFTX) : 0;
+    extra_ly[i] = g ? -SDL_GetGamepadAxis(g, SDL_GAMEPAD_AXIS_LEFTY) : 0;
+    extra_rx[i] = g ? SDL_GetGamepadAxis(g, SDL_GAMEPAD_AXIS_RIGHTX) : 0;
+    extra_ry[i] = g ? -SDL_GetGamepadAxis(g, SDL_GAMEPAD_AXIS_RIGHTY) : 0;
+}
+
+// A controller that isn't player 1's: the next free player's (logged; the game hears of it by its style set event)
+static void open_extra(SDL_JoystickID id) {
+    if ((pad && SDL_GetGamepadID(pad) == id) || !real_gamepad(id)) return;
+    for (int i = 0; i < EXTRA_PADS; i++)
+        if (extra_pad[i] && SDL_GetGamepadID(extra_pad[i]) == id) return;
+    for (int i = 0; i < EXTRA_PADS; i++)
+        if (!extra_pad[i]) {
+            extra_pad[i] = SDL_OpenGamepad(id);
+            if (!extra_pad[i]) return;
+            LOG("[input] player %d: %s\n", i + 2, SDL_GetGamepadName(extra_pad[i]));
+            recompute_extra(i);
+            style_changed();
+            return;
+        }
 }
 
 // Forget held keys (the menu took focus); the gamepad is re-read on its next event.
@@ -167,6 +220,7 @@ void input_handle_event(const SDL_Event *e) {
         int n = 0;
         SDL_JoystickID *ids = SDL_GetGamepads(&n);
         if (n > 0 && !pad && real_gamepad(ids[0])) { pad = SDL_OpenGamepad(ids[0]); LOG("[input] gamepad: %s\n", SDL_GetGamepadName(pad)); note_family(); }
+        for (int i = 1; i < n; i++) open_extra(ids[i]);
         SDL_free(ids);
     }
     switch (e->type) {
@@ -177,13 +231,24 @@ void input_handle_event(const SDL_Event *e) {
         break;
     case SDL_EVENT_GAMEPAD_ADDED:
         if (!pad && real_gamepad(e->gdevice.which)) { pad = SDL_OpenGamepad(e->gdevice.which); LOG("[input] gamepad: %s\n", SDL_GetGamepadName(pad)); note_family(); }
+        else open_extra(e->gdevice.which);
         break;
     case SDL_EVENT_GAMEPAD_REMOVED:
         if (pad && SDL_GetGamepadID(pad) == e->gdevice.which) { SDL_CloseGamepad(pad); pad = NULL; note_family(); }
+        for (int i = 0; i < EXTRA_PADS; i++)
+            if (extra_pad[i] && SDL_GetGamepadID(extra_pad[i]) == e->gdevice.which) {
+                LOG("[input] player %d: controller removed\n", i + 2);
+                SDL_CloseGamepad(extra_pad[i]);
+                extra_pad[i] = NULL;
+                recompute_extra(i);
+                style_changed();
+            }
         recompute_pad();
         break;
     case SDL_EVENT_GAMEPAD_AXIS_MOTION: case SDL_EVENT_GAMEPAD_BUTTON_DOWN: case SDL_EVENT_GAMEPAD_BUTTON_UP:
         recompute_pad();
+        for (int i = 0; i < EXTRA_PADS; i++)
+            if (extra_pad[i]) recompute_extra(i);
         break;
     }
 }
@@ -454,6 +519,24 @@ void input_frame(uint64_t frame) {
         extern uint64_t g_test_buttons, g_test_buttons_until;  // (LARECOMP_PLACE action script)
         if (frame < g_test_buttons_until) b |= g_test_buttons;
     }
+    if (script2_on()) {  // (a scripted player 2: buttons and the four stick directions)
+        static char buf2[4096];
+        uint64_t b2 = 0;
+        int32_t x2 = 0, y2 = 0;
+        snprintf(buf2, sizeof buf2, "%s", getenv("LARECOMP_INPUT2"));
+        char *save = NULL;
+        for (char *tok = strtok_r(buf2, ",", &save); tok; tok = strtok_r(NULL, ",", &save)) {
+            unsigned long start = 0, len = 10;
+            char name[32] = "";
+            if (sscanf(tok, "%lu:%31[A-Z_0-9]:%lu", &start, name, &len) < 2 || frame < start || frame >= start + len) continue;
+            if (!strcmp(name, "STICK_UP")) y2 = 32767;
+            else if (!strcmp(name, "STICK_DOWN")) y2 = -32767;
+            else if (!strcmp(name, "STICK_LEFT")) x2 = -32767;
+            else if (!strcmp(name, "STICK_RIGHT")) x2 = 32767;
+            for (int i = 0; i < 16; i++) if (!strcmp(name, names[i])) b2 |= 1ull << i;
+        }
+        script2_buttons = b2, script2_lx = x2, script2_ly = y2;
+    }
     script_buttons = b;
     script_lx = lx;
     script_ly = ly;
@@ -495,7 +578,28 @@ static void fill_state(Cpu *c, uint8_t *s, uint32_t id, bool single) {
     *(int64_t *)s = ++sampling;
     static int nlog;
     if (nlog < 6 && (sampling % 600) == 1) { nlog++; LOG("[input] GetNpadState id %#x lr %llx\n", id, c->x[30]); }
-    if (id != 0) return;  // docked: only player 1 (FullKey); Handheld stays disconnected
+    if (id >= 1 && id <= EXTRA_PADS) {  // players 2-4: their own controllers (none: disconnected)
+        int i = (int)id - 1;
+        if (!extra_connected(i) || padscript_active()) return;
+        bool menu = menu_input_captured();
+        uint64_t b = menu ? 0 : extra_buttons[i] | (i == 0 ? script2_buttons : 0);
+        int32_t lx = menu ? 0 : clamp_axis(extra_lx[i] + (i == 0 ? script2_lx : 0));
+        int32_t ly = menu ? 0 : clamp_axis(extra_ly[i] + (i == 0 ? script2_ly : 0));
+        int32_t rx = menu ? 0 : extra_rx[i], ry = menu ? 0 : extra_ry[i];
+        if (lx < -16000) b |= 1ull << 16;
+        if (ly > 16000) b |= 1ull << 17;
+        if (lx > 16000) b |= 1ull << 18;
+        if (ly < -16000) b |= 1ull << 19;
+        if (rx < -16000) b |= 1ull << 20;
+        if (ry > 16000) b |= 1ull << 21;
+        if (rx > 16000) b |= 1ull << 22;
+        if (ry < -16000) b |= 1ull << 23;
+        *(uint64_t *)(s + 8) = b;
+        *(int32_t *)(s + 16) = lx, *(int32_t *)(s + 20) = ly, *(int32_t *)(s + 24) = rx, *(int32_t *)(s + 28) = ry;
+        *(uint32_t *)(s + 32) = 1;  // IsConnected
+        return;
+    }
+    if (id != 0) return;  // docked: Handheld stays disconnected
     if (padscript_active()) {  // a scripted replay (RECOMP_PAD_SCRIPT): the script's buttons alone, sticks at rest
         *(uint64_t *)(s + 8) = padscript_buttons();
         *(uint32_t *)(s + 32) = 1;  // IsConnected
@@ -628,22 +732,30 @@ HLE_FUNC("_ZN2nn3hid13GetNpadStatesEPNS0_16NpadJoyLeftStateEiRKj", hid_states_le
 HLE_FUNC("_ZN2nn3hid13GetNpadStatesEPNS0_17NpadHandheldStateEiRKj", hid_states_handheld) { fill_states(c); }
 HLE_FUNC("_ZN2nn3hid13GetNpadStatesEPNS0_17NpadJoyRightStateEiRKj", hid_states_right) { fill_states(c); }
 
-// FullKey for player 1 only (we report docked mode, where Handheld is unavailable)
+// FullKey for player 1, and for players 2-4 with a controller (we report docked mode, where Handheld is unavailable)
 HLE_FUNC("_ZN2nn3hid15GetNpadStyleSetERKj", hid_style_set) {
     uint32_t id = *(uint32_t *)(uintptr_t)c->x[0];
     static int nlog;
     if (nlog++ < 4) LOG("[input] GetNpadStyleSet id %#x\n", id);
-    c->x[0] = id == 0 ? 1 : 0;  // docked: no handheld controller
+    c->x[0] = id == 0 || (id >= 1 && id <= EXTRA_PADS && extra_connected((int)id - 1)) ? 1 : 0;
 }
 
 // BindNpadStyleSetUpdateEvent(id, SystemEventType*, clear mode): signaled once so the game sees a
 // controller connected.
 #include "../kernel.h"
+static KEvent *style_events[16];
+static int nstyle_events;
+static void style_changed(void) {  // (UI thread: a controller came or went) every bound style set event
+    pthread_mutex_lock(&g_klock);
+    for (int i = 0; i < nstyle_events; i++) kernel_signal(style_events[i]);
+    pthread_mutex_unlock(&g_klock);
+}
 HLE_FUNC("_ZN2nn3hid27BindNpadStyleSetUpdateEventERKjPNS_2os15SystemEventTypeENS3_14EventClearModeE", hid_bind_style_event) {
     uint32_t w, r;
     KEvent *ev = kernel_create_event_pair(&w, &r);
     pthread_mutex_lock(&g_klock);
     kernel_signal(ev);
+    if (nstyle_events < 16) style_events[nstyle_events++] = ev;
     pthread_mutex_unlock(&g_klock);
     uint64_t clear_mode = c->x[2];
     c->x[0] = c->x[1];
@@ -668,4 +780,29 @@ HLE_FUNC("_ZN2nn3hid22GetVibrationDeviceInfoEPNS0_19VibrationDeviceInfoERKNS0_21
     uint32_t h = *(uint32_t *)(uintptr_t)c->x[1];
     info[0] = 1;        // VibrationDeviceType_LinearResonantActuator
     info[1] = h & 1;    // position: left / right
+}
+
+// Controller support (the system's "change grip / order" screen): on the Switch nn::hid::ShowControllerSupport launches
+// a library applet; our am service has none, so a game waiting for it (SMM2: Play Together) would hang. It is answered
+// at once with the controllers as they are: player 1 and one more player per further controller (players 2-4).
+// ControllerSupportArg: u8 min players, u8 max players, ...; ControllerSupportResultInfo: s8 players, u8 pad[3],
+// u32 selected Npad id.
+int input_players(void) {
+    int n = 1;
+    for (int i = 0; i < EXTRA_PADS; i++) n += extra_connected(i);
+    return n;
+}
+HLE_FUNC("_ZN2nn3hid21ShowControllerSupportEPNS0_27ControllerSupportResultInfoERKNS0_20ControllerSupportArgE",
+         hid_show_controller_support) {
+    uint64_t out = c->x[0], arg = c->x[1];
+    int min = arg ? *(const int8_t *)(uintptr_t)arg : 0, max = arg ? *(const int8_t *)(uintptr_t)(arg + 1) : 0;
+    int n = input_players();
+    if (max > 0 && n > max) n = max;
+    if (out) {
+        *(int8_t *)(uintptr_t)out = (int8_t)n;
+        *(uint32_t *)(uintptr_t)(out + 4) = 0;  // Npad No. 1
+    }
+    LOG("[hid] controller support (players %d..%d): %d player(s)%s\n", min, max, n,
+        n < min ? " - fewer than the game asks for" : "");
+    c->x[0] = 0;
 }

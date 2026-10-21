@@ -352,12 +352,14 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
   off by default; our own interpolation for Metal and Vulkan, not MetalFX's; game logic stays 60 Hz). Owner on
   the iPad: "doesn't look amazing at this stage". Left: picture quality, the iPad's shown-frames count, a real
   120 Hz display. Spec: `docs/superpowers/specs/2026-10-20-frame-generation-design.md`
-- ⬜ **Local multiplayer input, players 1-4** (owner, 2026-10-20): today the runtime opens one SDL gamepad
-  and reports only player 1 (`runtime/hle/input.c`: `fill_state` returns for any id but 0, `GetNpadStyleSet`
-  reports 2-4 disconnected), so a second controller is never seen. Needed: every connected controller mapped
-  to a player slot, ids 1-3 filled, style set / update event per player, the controller-assignment screen the
-  game shows before Play Together. Gives SMM2's own Play Together (up to 4 on one device) as Nintendo built it.
-  Not started.
+- 🔄 **Local multiplayer input, players 1-4** (owner, 2026-10-20; built 2026-10-21): every further controller is
+  the next player, Npad No. 2..4, through the same bindings (`runtime/hle/input.c`). Player 1 keeps the keyboard,
+  the on-screen controller and the first controller. `GetNpadState(s)` and `GetNpadStyleSet` report players 2-4
+  while their controller is there. The style set update events fire when a controller comes or goes. The controller
+  support applet (Play Together's "how many players") is answered at once with the players there are.
+  `LARECOMP_INPUT2` scripts a player 2 for tests. Checked in game (macOS, scripted player 2): a downloaded course's
+  Play Together shows Mario and Luigi on the card, and in the course Luigi runs on player 2's input while Mario
+  stands. Left: real second / third / fourth controllers (none here), and controllers connected mid-game.
 - ⬜ **Endless / 100 Mario in local co-op** (owner, 2026-10-20; needs the item above): challenge runs played
   together on one device. SMM2's Endless and SMM1's 100 Mario are single-player, so this is a mod, off by
   default: start each challenge course the way Play Together does, and decide the rules (shared or separate
