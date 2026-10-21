@@ -105,6 +105,12 @@ Ending *ending_new_style(int d, int n, const struct hundred_credit *c, int style
                                          "L_NationalFlag_00", "N_Caracter_00", NULL};
             for (int k = 0; hide[k]; k++) lay_show(row, hide[k], false);
             lay_show(row, "N_MakerAnim_00", true);
+            // the run's order on the card's own number badge (Story mode's course number) [inf: a choice]
+            lay_show(row, "W_WorldNo_00", false), lay_show(row, "T_WorldNum_00", false);
+            lay_show(row, "W_QuestNo_00", true), lay_show(row, "T_QuestNo_00", true);
+            char num[8];
+            snprintf(num, sizeof num, "%d", i + 1);
+            lay_text(row, "T_QuestNo_00", num);
             // as the game lays the card out in Endless [obs: its course-in card]: the name centred (no quest / world
             // number), the course ID at the left of the maker strip; the maker's name moves right into the Mii's
             // place, level with the ID's margin [inf: a choice, there is no Mii]
@@ -223,7 +229,7 @@ void ending_draw(Ending *e, LQuads *out) {
         bool vis;
         if (!lyt_pane_global(e->credits->in, part, cr, &a, &vis) || a <= 0) continue;
         float cx = (cr[0][0] + cr[3][0]) / 2, cy = (cr[0][1] + cr[3][1]) / 2;
-        const float k = 0.6f;  // (97 high on SMM1's 120-unit row pitch)
+        const float k = 0.66f;  // (107 high on SMM1's 120-unit row pitch: the text reads better, gaps stay)
         float xy[2] = {cx, cy - 223 * k}, sc[2] = {k, k};
         lyt_set_pane(e->rows[i]->in, "N_All_00", xy, a * 255);
         lyt_set_pane_scale(e->rows[i]->in, "N_All_00", sc);
