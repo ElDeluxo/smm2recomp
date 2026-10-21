@@ -1358,7 +1358,15 @@ static int compile_program(Prog *pr) {  // (BUILD_READY or BUILD_FAILED; the cal
     NSError *err = nil;
     static MTLCompileOptions *vopts;
     static dispatch_once_t once;
-    dispatch_once(&once, ^{ vopts = [MTLCompileOptions new]; vopts.preserveInvariance = YES; });
+    static MTLCompileOptions *fopts;  // (nil: the defaults)
+    dispatch_once(&once, ^{
+        vopts = [MTLCompileOptions new];
+        vopts.preserveInvariance = YES;
+        if (getenv("LARECOMP_SAFE_MATH")) {  // (test: IEEE maths instead of fast maths, both stages)
+            if (@available(macOS 15.0, iOS 18.0, *)) vopts.mathMode = MTLMathModeSafe, (fopts = [MTLCompileOptions new]).mathMode = MTLMathModeSafe;
+            LOG("[shader] safe maths (LARECOMP_SAFE_MATH)\n");
+        }
+    });
     double t0 = now_ms();
     // LARECOMP_SHADER_SALT=<text>: tag sources so Metal's disk cache misses (measure cold first-use compiles)
     NSString *salt = getenv("LARECOMP_SHADER_SALT") ? [NSString stringWithFormat:@"\n// %s\n", getenv("LARECOMP_SHADER_SALT")] : @"";
@@ -1371,7 +1379,7 @@ static int compile_program(Prog *pr) {  // (BUILD_READY or BUILD_FAILED; the cal
     if (vdone)
         [dev newLibraryWithSource:entry_source('v', pr->vi->msl, salt) options:vopts
                 completionHandler:^(id<MTLLibrary> l, NSError *e) { vl = l; verr = e; dispatch_semaphore_signal(vdone); }];
-    if (!fl) fl = [dev newLibraryWithSource:entry_source('f', pr->fi->msl, salt) options:nil error:&err];
+    if (!fl) fl = [dev newLibraryWithSource:entry_source('f', pr->fi->msl, salt) options:fopts error:&err];
     if (vdone) dispatch_semaphore_wait(vdone, DISPATCH_TIME_FOREVER);
     if (!vl) { LOG("[shader] VS compile failed: %s\n%s\n", verr.localizedDescription.UTF8String, pr->vi->msl); return BUILD_FAILED; }
     if (!fl) { LOG("[shader] FS compile failed: %s\n%s\n", err.localizedDescription.UTF8String, pr->fi->msl); return BUILD_FAILED; }
