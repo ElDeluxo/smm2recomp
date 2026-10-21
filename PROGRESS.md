@@ -407,8 +407,11 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     is 1; retries keep the last course's count; anything else, Endless included, stores one player (main+0x16dffb4).
   - A hook point there (`patches.py`, `hooks.c`; `RECOMP_COOP_TEST=<n>`) writes n players. In a 100 Mario course
     with a scripted player 2 the count reads 2 in the course, but only Mario spawns: the second player needs more
-    than the count (likely the per-player controller / character slots Play Together fills in, +0x330). Next:
-    decompile where the play scene creates players from the set-up's list.
+    than the count. 2026-10-22: the set-up's two per-player records (0x100 bytes each, at +0x18) are byte for byte
+    the same as a real Play Together course's, so the data isn't what's missing: Endless's play scene doesn't create
+    a second player actor. Next: find where the play scene creates players (Ghidra project copy:
+    /Volumes/SSD/smm-work/ghidra/agents/edit-smm2, script research/decomp/smw-goal/scripts/Multi.java; JAVA_HOME is
+    Homebrew's openjdk@21). Not in v0.4.0.
   - Owner, 2026-10-22: the 100 Mario ending shows all the players in the rescue scene if that's reasonable, else
     whoever cleared the last course; the lives card shows each player ("give that a shot").
 - ⬜ **OpenCourse World as a course source** (owner, 2026-10-22): https://opencourse.world/ selectable as one of the
