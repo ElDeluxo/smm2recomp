@@ -189,8 +189,16 @@ SMM2's window of a downloaded course has only Play, Play Together and Delete, so
   +0x14b0), so the cursor's targets come from somewhere else (not found yet). On that run SMM2's current course was
   slot 2, not the download, so the Course Maker took the download from storage, not the reset copy. The copy and the
   editor's Save / Load card show the yellow arrow mark. Upload is greyed until a clear check, which is SMM2's normal
-  rule. Next: what the arrow mark reads, and making the reset copy the current course (save manager +0x58 / +0x60)
-  before the scene change.
+  rule.
+- Fixed 2026-10-21: the Course Maker reloads the course into the current-course buffer (save manager +0x58) during
+  the scene change, after the mod's reset of the prepared slot. Both buffers held creation id 1 and upload id
+  0x100001 once it was up. A helper thread now resets that buffer's header whenever the original's comes back (20 s
+  after the request). Checked in game: the Save / Load menu then offers Save As and Load only, as for a new course;
+  after Save As the saved copy's header has flags 0 and upload id 0. The yellow arrow mark on its card stays, so it
+  isn't an "uploaded" mark: own, uncleared courses have it too.
+- Found 2026-10-21: Save As gives the copy a new creation id (e.g. e099c3d7 -> cf2b3d34), so `smm2edit.txt`, which is
+  keyed by creation id, doesn't find it at upload: the "Based on" credit is lost. Next: hook Save As (old -> new
+  creation id) and carry the record over.
 - Proposed, not built: an Edit on Course World's course card (Download, then straight into the Course Maker when
   the Coursebot has saved it); in Endless / 100 Mario, "save to Coursebot for later" from SMM2's result screen
   (SMM1 offers no edit there).

@@ -12,6 +12,9 @@
 #include <string.h>
 #include <time.h>
 
+#include <pthread.h>
+#include <unistd.h>
+
 #include "mod.h"
 #include "../../../runtime/net/json.h"
 
@@ -179,6 +182,30 @@ static void make_own(uint64_t file, uint32_t creation) {
     s32(file + 8, crc32_of((const uint8_t *)(uintptr_t)hdr, COURSE_BODY));
 }
 
+// The Course Maker loads the course again during the scene change, into the Coursebot's current-course buffer (save
+// manager +0x58), whatever the reset prepared slot held [obs: both buffers held the download's creation id and upload
+// id once the Course Maker was up]. Its Save / Load menu and Save As read that buffer's header [obs: with it reset,
+// the menu offers Save As and Load only, as for a new course]. So for a while after the request, this resets that
+// header whenever the original's comes back.
+static struct { uint32_t orig_creation, creation; uint64_t orig_upload; } g_reset;
+static void *reset_after_load(void *arg) {
+    (void)arg;
+    int applied = 0;
+    for (int i = 0; i < 1250; i++) {  // (20 s)
+        uint64_t mgr = g64(SAVE_MGR), cur = mgr ? g64(mgr + 0x58) : 0;
+        if (cur && g32(cur) == 1 && !memcmp((const void *)(uintptr_t)(cur + 0xc), "SCDL", 4)) {
+            uint64_t hdr = cur + 0x10;
+            if (g32(hdr + 0x24) == g_reset.orig_creation && g64(hdr + 0x28) == g_reset.orig_upload) {
+                make_own(cur, g_reset.creation);
+                if (!applied++) LOG("[mod] edit: the Course Maker's course made the player's own (creation id %08x)\n",
+                                    g_reset.creation);
+            }
+        }
+        usleep(16000);
+    }
+    return NULL;
+}
+
 static void prepare_copy(int32_t slot) {
     uint64_t save = g64(SAVE_MGR) ? g64(g64(SAVE_MGR) + 0x20) : 0;
     if (!save) return;
@@ -199,14 +226,18 @@ static void prepare_copy(int32_t slot) {
     LOG("[mod] edit: %s by %s (creation id %08x -> %08x, upload id %llu, flags %#x) -> a course of your own\n",
         code[0] ? code : "?", maker[0] ? maker : "?", g32(hdr + 0x24), creation, (unsigned long long)g64(hdr + 0x28),
         g32(hdr + 0x18));
+    g_reset.orig_creation = g32(hdr + 0x24), g_reset.orig_upload = g64(hdr + 0x28), g_reset.creation = creation;
     make_own(file, creation);
+    pthread_t th;
+    if (pthread_create(&th, NULL, reset_after_load, NULL) == 0) pthread_detach(th);
     // the Coursebot also keeps the selected slot's whole data (course, thumbnail, replay: 0xe0000) at save manager
     // +0x58 for its "current course" (+0x60); the loader takes that copy when the number is the current one
     uint64_t mgr = g64(SAVE_MGR), cur = mgr ? g64(mgr + 0x58) : 0;
     bool current = cur && (int32_t)g32(mgr + 0x60) == slot && g32(cur) == 1 &&
                    !memcmp((const void *)(uintptr_t)(cur + 0xc), "SCDL", 4);
     if (current) make_own(cur, creation);
-    MLOG("edit: current course %d%s\n", mgr ? (int32_t)g32(mgr + 0x60) : -1, current ? " (its copy too)" : "");
+    MLOG("edit: current course %d%s (its buffer %llx, the prepared slot %llx)\n", mgr ? (int32_t)g32(mgr + 0x60) : -1,
+         current ? " (its copy too)" : "", (unsigned long long)cur, (unsigned long long)file);
     if (code[0]) remember_origin(creation, code, maker);
 }
 

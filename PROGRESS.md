@@ -220,8 +220,9 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     Coursebot window of a downloaded course (SMM1's Edit placement), the Course Maker opens with the course, an edit
     saved to My Courses and played (screens private); ✅ typed names intact on Save As (re-tested 2026-10-21);
     ⬜ d-pad cursor onto Make (touch works; the cursor's target list isn't the enable call's, see mods.md),
-    ⬜ the copy's "uploaded" mark cleared (2026-10-21: still shown; the Course Maker loaded the download from
-    storage because SMM2's current course was another slot, so the reset copy wasn't used), ⬜ upload credit in game (server `based_on` done and tested),
+    ✅ the copy is the player's own (2026-10-21: reset after the Course Maker's reload; saved copy has upload id 0;
+    the yellow arrow on cards isn't an upload mark), ⬜ "Based on" credit survives Save As (Save As makes a new
+    creation id; `smm2edit.txt` is keyed by it), ⬜ upload credit in game (server `based_on` done and tested),
     ⬜ Edit on the course card / Endless (proposed)
   - 🔄 **Our open-source server everywhere the game would reach Nintendo** (`recomp/docs/mods.md`,
     `games/smm2/mods/world.c`): ✅ Course World's course lists (Hot, Popular, New, detailed search, a
