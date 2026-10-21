@@ -348,13 +348,19 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     is covered in cyan / blue speckle, and the same frame on the Mac is clean. The scenery and the Koopa match. The
     speckle pattern changes from run to run. Ruled out on the iPad: BC decoding (`RECOMP_BC_SOFT=1`: same
     speckle) and Maxwell's FMZ multiply (now translated as the hardware does it, 0 x anything = 0; same speckle).
-    Next test, built but not yet run (the iPad dropped the connection): `LARECOMP_ZERO_TEXTURES=1` clears every new
-    colour texture to zero, every mip level and slice. Metal leaves new textures undefined: zeros on the Mac, leftovers
-    on iOS. If the speckle goes, a texture the game expects zeroed (e.g. unrendered probe mips) is the cause.
+    Also ruled out on the iPad (2026-10-21, `recomp-test.env` switches): zero-cleared new textures
+    (`LARECOMP_ZERO_TEXTURES=1`, the frame stays byte-identical), IEEE maths in the shaders (`LARECOMP_SAFE_MATH=1`),
+    mip levels (`LARECOMP_LOD_MAX=0`: the scenery changes, Mario's speckle doesn't). Positions are already invariant.
+    The frame is deterministic. The speckle shows what's behind Mario (sky, water), so his pixels are dropped. Lead:
+    3D World Mario is drawn into a character layer (RG11B10F + RG16F with his view depth, cleared to 1.0), then a
+    composite discards where that depth says "nothing" or loses to the scene depth (bring-up notes "Linux arm64").
+    Lavapipe shows NaNs in the same composite (his eyes). Next: an Xcode GPU capture on the iPad (needs it local,
+    not over Tailscale) of the character layer's RG16F target and the composite's discard.
   - ⬜ The water in the background looks a bit too shiny. The 3D World liquid surfaces already differ most from
     Ryujinx (castle lava 2.28 % px > 24), so check specular and reflection on liquids.
 
-- ⬜ **Vulkan fixes found by the SM35 port (2026-10-21, not yet in SMM2):** (1) shader global memory is one storage
+- 🔄 **Vulkan fixes found by the SM35 port (2026-10-21; (1) ported on branch `b5-dev`, compiles, Metal output
+  unchanged, not yet run on a Vulkan device):** (1) shader global memory is one storage
   buffer over the 3.2 GB heap, but a GPU only reaches `maxStorageBufferRange` of it (128 MB on lavapipe and Adreno,
   1-2 GB on some desktop GPUs; reads past that give 0): SM35 uses bufferDeviceAddress where available
   (sm35recomp e292dce). (2) without host memory import (Android emulator, many phones) global memory reads give 0:
@@ -375,7 +381,12 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
   `LARECOMP_INPUT2` scripts a player 2 for tests. Checked in game (macOS, scripted player 2): a downloaded course's
   Play Together shows Mario and Luigi on the card, and in the course Luigi runs on player 2's input while Mario
   stands. Left: real second / third / fourth controllers (none here), and controllers connected mid-game.
-- ⬜ **Endless / 100 Mario in local co-op** (owner, 2026-10-20; needs the item above): challenge runs played
+- ⬜ **Endless / 100 Mario in local co-op** (owner, 2026-10-20; rules decided 2026-10-21: as SMM2's local
+  multiplayer does, lives shared, a life lost when all players are down, cleared when anyone reaches the goal.
+  Found so far: Play Together's player count comes from the controller manager (its controller support call,
+  main+0xe35190); the Coursebot starts courses with scene request reasons 5 (Play), 6 and 7 (main+0x16e3d60,
+  +0x16e6f20), and which one is Play Together isn't known yet: a runtime hook can't see the direct call, so the next
+  step is a generator patch or Ghidra on the Play Together button's state): challenge runs played
   together on one device. SMM2's Endless and SMM1's 100 Mario are single-player, so this is a mod, off by
   default: start each challenge course the way Play Together does, and decide the rules (shared or separate
   lives, a clear when any player reaches the goal, whose form the ending shows). `mods/endless.c` keeps one
