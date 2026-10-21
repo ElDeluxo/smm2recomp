@@ -377,6 +377,9 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
   game's own miss, lives card and restart are fast-forwarded unseen, so lives still count and nothing changes when
   it's off. Coursebot 1.6 s instead of ~4.6, 100 Mario 2.3 s instead of 9.7, test play's return to the editor about
   0.5 s. Owner: skip the lives card, and apply it in test play. `recomp/docs/mods.md`, DECISIONS 2026-10-21
+- ✅ **100 Mario New Game on SMM2's menu** (2026-10-21): the bridge's presses could back out to Course World (then
+  the map's Play presses opened the Mii outfit editor) when the run had no clears yet or the difficulty needed no
+  change. It now reads whether SMM2's menu shows Continue (the menu's record: lives and a clear). Checked both ways
 - ✅ **Setup from NSPs on every OS** (testers' Windows reports, 2026-10-21): applying the 3.0.3 update was broken
   everywhere. The base RomFS was handed over in the wrong coordinates, and a memcpy overlap in hactool crashed it on
   Windows. Fixed; the result is byte-identical to a known-good 3.0.3 extraction (macOS, and the Windows hactool
