@@ -285,18 +285,18 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
   slightly off (timing). Probably tied to the SLink sound trigger table not being decoded (sounds are
   placed by name, not frame-exact). Not started.
 - ⬜ **100 Mario polish (owner's test, 2026-10-20: "overall it's not bad"):**
-  - 🔄 The SMM1 screens (select, map, card) are louder than SMM2's. They should sound the same. SMM1's voices
-    were mixed in at full gain (`mods/smm1/smm1_audio.c`). Done (2026-10-21): each sound now plays at its own
-    SMM1 volume from its `.bameta` (AMTA). Every 100 Mario sound has 0.787. The select music's tracks are
-    0.55-0.91 on top of that. Measured from the owner's SMM1 files. The Audio tab's volume already applies after
-    the mix. Left: measure SMM1's screens against SMM2's menus in game (`LARECOMP_SMM1_GAIN=<x>` to try levels),
-    then set `SMM1_MIX`.
-  - 🔄 Leaving Challenge Modes still flashes the other mode's screen for a moment. For example, closing it from
+  - ✅ The SMM1 screens (select, map, card) were louder than SMM2's (owner, 2026-10-20). Fixed 2026-10-21. Each
+    SMM1 sound plays at its own `.bameta` volume (0.787; the select's tracks 0.55-0.91 on top). The level is set
+    against SMM2's mix: `SMM1_MIX` 0.3 in `mods/smm1/smm1_audio.c`. Measured with `LARECOMP_AUDIO_WAV` on macOS:
+    the select's music went from -27 dB RMS to -37.7 dB, against -38.0 dB for SMM2's Endless menu and Course World.
+  - ✅ Leaving Challenge Modes still flashes the other mode's screen for a moment. For example, closing it from
     100 Mario shows Endless for about a second. The ZL / ZR switch itself is much better now. Cause: on B the
     select faded out in 32 frames, but the B press on SMM2's Endless menu underneath only comes after the
     player's B is released (`DRV_BACK`), and that menu then slides away. Done (2026-10-21, not yet run): the
     select stays until the menu's Disappear has run and stopped (`hundred_menu_left`; 4 s at most), then fades
-    over Course World. Left: check it in game, and check leaving from SMM2's Endless side too.
+    over Course World. Checked in game 2026-10-21 (macOS, frames every 6 around B): the select stays 45 frames
+    while the menu leaves, then cross-fades into Course World; the Endless menu is never seen. Left: leaving from
+    SMM2's Endless side (owner to say if that one flashes too).
   - ⬜ The transition from 100 Mario's map / card into the course isn't exact yet, and lags slightly. Needs
     more testing and tuning against SMM1 and SMM2.
 - 🔄 **Mac app won't start the game; release zip lacks `smm1_extras.py` (owner, 2026-10-20 / 21):** one cause.

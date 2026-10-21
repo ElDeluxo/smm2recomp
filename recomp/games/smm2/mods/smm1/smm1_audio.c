@@ -190,8 +190,9 @@ typedef struct {
 
 // SMM1's sounds against SMM2's mix: SMM1 played them through its own engine at its own output level, which SMM2's
 // mix doesn't share. The .bameta volumes keep SMM1's balance between its sounds; this sets their level next to
-// SMM2's (LARECOMP_SMM1_GAIN overrides it, for measuring).
-#define SMM1_MIX 1.0f
+// SMM2's (LARECOMP_SMM1_GAIN overrides it, for measuring). Measured 2026-10-21 (LARECOMP_AUDIO_WAV, macOS): at 1 the
+// select's music was -27 dB RMS against -38 dB for SMM2's Endless menu and Course World music; 0.3 is -10.5 dB.
+#define SMM1_MIX 0.3f
 static float smm1_mix(void) {
     static float g = -1;
     if (g < 0) {
