@@ -104,6 +104,8 @@ LLD      := $(if $(CROSS_CC),,-fuse-ld=lld)  # (zig links with its own lld)
 PLATFORM_SRC := runtime/platform/$(if $(IOS),macos,$(patsubst android,linux,$(PLATFORM))).c  # (iOS: the macOS layer, TARGET_OS_IPHONE inside; Android: the Linux one, __ANDROID__ inside)
 IMGUI    := third_party/imgui
 GENFLAGS := -O1 -fno-strict-aliasing -Wno-return-type -Wno-unused-label -fvisibility=hidden -Iruntime
+# the name players see: the game's, a shorter one on phones and tablets (game.mk GAME_MOBILE_TITLE)
+GAME_TITLE := $(if $(filter ios iossim android,$(PLATFORM)),$(or $(GAME_MOBILE_TITLE),$(GAME_TITLE)),$(GAME_TITLE))
 GAMEDEFS := -DGAME_TITLE_ID=$(GAME_TITLE_ID)ull -DGAME_ID='"$(GAME_ID)"' -DGAME_TITLE='"$(GAME_TITLE)"' -DGAME_BUNDLE_ID='"$(GAME_BUNDLE_ID)"' \
             -DGAME_DISPLAY_VERSION='"$(GAME_DISPLAY_VERSION)"'
 

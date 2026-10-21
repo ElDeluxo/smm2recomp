@@ -73,10 +73,10 @@ write_readme() {
     case "$target" in
         windows-*) run='smm2recomp.exe' data='this folder (keep it somewhere you can write to, e.g. Documents - not Program Files)' ;;
         linux-*)   run='./smm2recomp' data='~/.local/share/smm2recomp' ;;
-        macos-*)   run='SMM2Recomp.app' data='~/Library/Application Support/org.smcraft.smm2recomp' ;;
+        macos-*)   run='Super Mario Maker 2.app' data='~/Library/Application Support/org.smcraft.smm2recomp' ;;
     esac
     cat > "$f" <<EOF
-SMM2 Recomp $ver ($target)
+Super Mario Maker 2 (recompiled) $ver ($target)
 
 Super Mario Maker 2 v3.0.3, recompiled for your computer from YOUR OWN game. Nothing of the game is in this
 download: you bring your dump, and the setup screen prepares everything from it, on your machine.
@@ -115,7 +115,7 @@ EOF
 macOS 15 or newer on Apple silicon. The app isn't notarized: the first time, right-click it and choose Open (macOS
 then checks the whole app once, which can take a few minutes). If
 macOS still refuses it or the recompiler ("zig", "python3", "hactool") is blocked, run once in Terminal:
-    xattr -dr com.apple.quarantine /path/to/SMM2Recomp.app
+    xattr -dr com.apple.quarantine "/path/to/Super Mario Maker 2.app"
 EOF
         ;;
     esac

@@ -14,7 +14,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 . tools/package_lib.sh
 EXE=${1:-build/smm2-app/smm2recomp}
-APP=build/SMM2Recomp.app
+TITLE=$(sed -n 's/^GAME_TITLE *:= *//p' games/smm2/game.mk)
+APP="build/$TITLE.app"
 DEPS=$PWD/build/deps
 ID=$(sed -n 's/^GAME_ID *:= *//p' games/smm2/game.mk)
 BUNDLE_ID=$(sed -n 's/^GAME_BUNDLE_ID *:= *//p' games/smm2/game.mk)
@@ -100,8 +101,8 @@ cat > "$C/Info.plist" <<EOF
     <key>CFBundleDevelopmentRegion</key><string>en</string>
     <key>CFBundleExecutable</key><string>${ID}recomp</string>
     <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
-    <key>CFBundleName</key><string>SMM2 Recomp</string>
-    <key>CFBundleDisplayName</key><string>SMM2 Recomp</string>
+    <key>CFBundleName</key><string>$TITLE</string>
+    <key>CFBundleDisplayName</key><string>$TITLE</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>$SHORT</string>
     <key>CFBundleVersion</key><string>$SHORT</string>

@@ -1,6 +1,8 @@
 # Super Mario Maker 2 (title 01009B90006DC000), version 3.0.3: what the shared Makefile needs to know.
 GAME_ID        := smm2
-GAME_TITLE     := SMM2 Recomp
+GAME_TITLE     := Super Mario Maker 2
+# (iOS / Android: home screens cut names past ~12 characters)
+GAME_MOBILE_TITLE := SMMaker 2
 GAME_BUNDLE_ID := org.smcraft.smm2recomp
 GAME_TITLE_ID  := 0x01009B90006DC000
 GAME_DISPLAY_VERSION := 3.0.3

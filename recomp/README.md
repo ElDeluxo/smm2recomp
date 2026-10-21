@@ -133,7 +133,7 @@ and only says so, with a link; the overlay menu's Mods tab has the switch ("Chec
 
 | Package | Made by | Contents | Size (v0.1.0-test) |
 |---|---|---|---|
-| `SMM2Recomp-macos-arm64.zip` | `make GAME=smm2 app-macos` (`tools/bundle_macos.sh`) | `SMM2Recomp.app`: the runtime (macOS 15+, SDL3 built for it by `tools/build_deps_macos.sh`), Resources: python, tools, gamelib-src, zig, hactool; signed ad hoc or with `RECOMP_MACOS_IDENTITY` | 96 MB (320 MB) |
+| `SMM2Recomp-macos-arm64.zip` | `make GAME=smm2 app-macos` (`tools/bundle_macos.sh`) | `Super Mario Maker 2.app`: the runtime (macOS 15+, SDL3 built for it by `tools/build_deps_macos.sh`), Resources: python, tools, gamelib-src, zig, hactool; signed ad hoc or with `RECOMP_MACOS_IDENTITY` | 96 MB (320 MB) |
 | `SMM2Recomp-windows-x86_64.zip` | `make TARGET=windows-x86_64 GAME=smm2 DEPS=... package` (`tools/package.sh`) | `smm2recomp.exe`, SDL3 / libiconv / shaderc DLLs, the same tools | 113 MB (425 MB) |
 | `SMM2Recomp-linux-x86_64.tar.gz`, `-linux-aarch64.tar.gz` | `make TARGET=linux-<arch> GAME=smm2 DEPS=... package` | `smm2recomp`, `lib/libshaderc.so.1`, the same tools | 113 MB (373 MB), 104 MB (341 MB) |
 

@@ -30,7 +30,7 @@ cat > "$APP/Info.plist" <<EOF
     <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
     <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
     <key>CFBundleName</key><string>$NAME</string>
-    <key>CFBundleDisplayName</key><string>SMM2 Recomp</string>
+    <key>CFBundleDisplayName</key><string>$(sed -n 's/^GAME_MOBILE_TITLE *:= *//p' games/smm2/game.mk)</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>$VERSION</string>
     <key>CFBundleVersion</key><string>$BUILD</string>

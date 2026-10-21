@@ -34,10 +34,10 @@ else
     # the app icon and a menu entry: install-desktop-entry.sh writes it to ~/.local/share/applications with this
     # folder's absolute paths (a .desktop file can't name files relative to itself)
     cp ../docs/branding/app-icon-256.png "$OUT/smm2recomp.png"
-    printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=SMM2 Recomp' \
+    printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=Super Mario Maker 2' \
         'Comment=Super Mario Maker 2, recompiled from your own dump' 'Exec=@DIR@/smm2recomp' 'Path=@DIR@' \
         'Icon=@DIR@/smm2recomp.png' 'Terminal=false' 'Categories=Game;' > "$OUT/smm2recomp.desktop"
-    printf '%s\n' '#!/bin/sh' '# Adds SMM2 Recomp to the desktop menu (with its icon), pointing at this folder' 'set -e' \
+    printf '%s\n' '#!/bin/sh' '# Adds Super Mario Maker 2 to the desktop menu (with its icon), pointing at this folder' 'set -e' \
         'dir=$(cd "$(dirname "$0")" && pwd)' 'mkdir -p "$HOME/.local/share/applications"' \
         'sed "s|@DIR@|$dir|g" "$dir/smm2recomp.desktop" > "$HOME/.local/share/applications/smm2recomp.desktop"' \
         'echo "Added: $HOME/.local/share/applications/smm2recomp.desktop"' > "$OUT/install-desktop-entry.sh"

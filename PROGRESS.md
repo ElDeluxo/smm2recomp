@@ -392,13 +392,10 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
   its jump are likely code (Block.rpx). Notes in `research/specs/smm1-extras-recomp-notes.md` (private). Confirm from the SMM1 files what it is: its
   model and animations, whether it changes the jump or physics, and how it turns up in courses. Then add it behind
   its own switch, next to the Mystery Mushroom costumes (`mods/costume.c`). Not started.
-- ⬜ **Rename the app** (owner, 2026-10-20): desktop (macOS app / menu bar, Windows, Linux, release packages)
-  maybe "Super Mario Maker 2", mobile (iOS / Android home screen, which cuts names past ~12 characters) something
-  shorter such as "SMMaker 2", instead of "SMM2 Recomp" everywhere. Not final: the full name is Nintendo's
-  trademark and the repo and releases are public. Set in `recomp/games/smm2/game.mk` and the packaging scripts
-  (`recomp/tools/make_ios_app.sh`, `bundle_macos.sh`, `make_android_apk.sh`, `package.sh`, `package_lib.sh`) and
-  `.github/workflows/release.yml`; on iOS the short name is `CFBundleDisplayName`. Decide whether bundle IDs, the
-  data folder and release file names change too (changing the iOS bundle ID loses the installed app's data).
+- ✅ **Rename the app** (owner, 2026-10-20; decided 2026-10-21): "Super Mario Maker 2" on desktop (window title,
+  setup screen, macOS app "Super Mario Maker 2.app", Linux menu entry), "SMMaker 2" on iOS and Android home screens
+  (game.mk `GAME_TITLE` / `GAME_MOBILE_TITLE`). Bundle IDs, data folders, exe names and package file names stay, so
+  saves and scripts carry over. From the release after v0.3.1.
 
 | Platform | Builds | Boots to title | Plays courses | Frames match Ryujinx | Input replays in sync |
 |---|---|---|---|---|---|

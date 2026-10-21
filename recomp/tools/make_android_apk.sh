@@ -42,7 +42,7 @@ cat > "$W/AndroidManifest.xml" <<EOF
     <uses-permission android:name="android.permission.VIBRATE" />
     <!-- extractNativeLibs false: the 0.5+ GB game code library is mapped from the APK, not copied out of it;
          no heap pointer tagging: host pointers stay plain 64-bit values -->
-    <application android:label="SMM2 Recomp" android:icon="@mipmap/ic_launcher" android:hasCode="true" android:extractNativeLibs="false"
+    <application android:label="$(sed -n 's/^GAME_MOBILE_TITLE *:= *//p' games/smm2/game.mk)" android:icon="@mipmap/ic_launcher" android:hasCode="true" android:extractNativeLibs="false"
         android:allowNativeHeapPointerTagging="false" android:largeHeap="true" android:isGame="true"
         android:appCategory="game" android:hardwareAccelerated="true">
         <activity android:name="org.libsdl.app.SDLActivity" android:exported="true"
