@@ -363,7 +363,9 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
   default: start each challenge course the way Play Together does, and decide the rules (shared or separate
   lives, a clear when any player reaches the goal, whose form the ending shows). `mods/endless.c` keeps one
   run per difficulty today. Not designed yet.
-- ⬜ **iPhone: on-screen L and ZL sit behind the notch** (owner, 2026-10-20, iPhone 12 mini): the touch
+- 🔄 **iPhone: on-screen L and ZL sit behind the notch** (owner, 2026-10-20, iPhone 12 mini; built 2026-10-21: the
+  controls are offset by the window's left / right safe-area insets, `SDL_GetWindowSafeArea`, updated on safe-area
+  and resize events and on touches; not yet seen on the iPhone): the touch
   controls (`recomp/runtime/ui/touchpad.mm`) don't keep clear of the safe area, so the L / ZL buttons are partly
   under the notch in landscape. Inset them by the window's safe area. The phone reached the title screen and ran
   well, then was killed for memory (jetsam `vm-pageshortage` at ~1.85 GB); owner isn't chasing that for now.
