@@ -1417,6 +1417,15 @@ static Prog *get_program(NvnProgram *p, ShaderKey *vkey, ShaderKey *fkey) {
     pr = [Prog new];
     pr->vs_code = p->stages[0].code_addr;
     g_prog_creates++;
+    if (getenv("LARECOMP_PROG_STATS")) {  // (measurement: how far ahead its shaders were set, whether the key is plain)
+        extern uint64_t nvn_program_set_ns(const void *p);
+        uint64_t set = nvn_program_set_ns(p), now = clock_gettime_nsec_np(CLOCK_MONOTONIC);
+        bool plain = true;
+        for (int i = 0; i < 32; i++) plain = plain && !vkey->attr_kind[i];
+        for (int i = 0; i < 8; i++) plain = plain && !fkey->rt_kind[i];
+        LOG("[progstat] new program %llx/%llx: shaders set %.0f ms before, key %s%s\n", p->stages[0].code_addr,
+            p->stages[1].code_addr, set ? (now - set) / 1e6 : -1.0, plain ? "plain" : "typed", vkey->vs_fn ? " gs" : "");
+    }
     cache[key] = pr;
     prog_tab[slot].key = h;
     prog_tab[slot].prog = (__bridge void *)pr;  // retained by the cache dictionary

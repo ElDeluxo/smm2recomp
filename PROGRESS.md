@@ -303,8 +303,12 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     9.3 s of compiler time). The first course frame waits up to 0.4-0.7 s, then one 1.6 s gap with a black
     frame. Once seen, a shader is in Metal's cache and the precompiled set, so it happens once per machine per
     style / theme. A smaller 0.57 s stall falls on the black between the iris and the card (the scene switch),
-    where it isn't seen. Possible fix (not started): compile the game's shaders ahead, at setup or in the
-    background at the title, so no course meets a cold shader. The rest of the animation still needs the
+    where it isn't seen. Measured how much earlier they could compile (`LARECOMP_PROG_STATS=1`; 35 new
+    programs at one course start): 34 use the default key, so a guess would be right. But the game sets their
+    shaders only shortly before the first draw: 6 under 0.1 s, 27 in 0.1-1 s, 2 over 1 s. Compiling at that
+    point would shorten the hitch by about half, not remove it. Left as is (once per machine per style /
+    theme). A full fix would compile the game's shaders well ahead (at setup or at the title), which is a
+    bigger project. The rest of the animation still needs the
     owner's eye against SMM1 / SMM2.
 - 🔄 **Mac app won't start the game; release zip lacks `smm1_extras.py` (owner, 2026-10-20 / 21):** one cause.
   Every v0.2.0 package left out `gamelib-src/mods/smm1_extras.py` (`tools/package_lib.sh` copied only
