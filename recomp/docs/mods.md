@@ -186,7 +186,10 @@ SMM2's window of a downloaded course has only Play, Play Together and Delete, so
   empty My Courses slot works, and the typed name now arrives intact ("Edited Copy"; the swkbd UTF-16 fix). The
   d-pad cursor still goes Play → Delete → the list tabs, skipping Make. The game's enable call (main+0x761190) only
   sets the button's enabled bytes (+0x3a / +0xbc in its two lists) and a bit in a pane controller's mask (+0x218 →
-  +0x14b0), so the cursor's targets come from somewhere else (not found yet). On that run SMM2's current course was
+  +0x14b0), so the cursor's targets come from somewhere else (not found yet). 2026-10-21: the controller's
+  +0x18 is a list of cursors (one per input index), each pointing at the button it's on (+0x10); disabling a focused
+  button only detaches the cursor (main+0x74dad0), and enabling attaches nothing. So the d-pad's neighbours are kept
+  elsewhere still (likely per window, built when the list's buttons are set up) [?]. On that run SMM2's current course was
   slot 2, not the download, so the Course Maker took the download from storage, not the reset copy. The copy and the
   editor's Save / Load card show the yellow arrow mark. Upload is greyed until a clear check, which is SMM2's normal
   rule.

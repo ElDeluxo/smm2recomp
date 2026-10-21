@@ -393,17 +393,21 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
   `LARECOMP_INPUT2` scripts a player 2 for tests. Checked in game (macOS, scripted player 2): a downloaded course's
   Play Together shows Mario and Luigi on the card, and in the course Luigi runs on player 2's input while Mario
   stands. Left: real second / third / fourth controllers (none here), and controllers connected mid-game.
-- ⬜ **Endless / 100 Mario in local co-op** (owner, 2026-10-20; rules decided 2026-10-21: as SMM2's local
-  multiplayer does, lives shared, a life lost when all players are down, cleared when anyone reaches the goal.
-  Found so far: Play Together's player count comes from the controller manager (its controller support call,
-  main+0xe35190); the Coursebot starts courses with scene request reasons 5 (Play), 6 and 7 (main+0x16e3d60,
-  +0x16e6f20), and which one is Play Together isn't known yet: a runtime hook can't see the direct call, so the next
-  step is a generator patch or Ghidra on the Play Together button's state): challenge runs played
-  together on one device. SMM2's Endless and SMM1's 100 Mario are single-player, so this is a mod, off by
-  default: start each challenge course the way Play Together does, and decide the rules (shared or separate
-  lives, a clear when any player reaches the goal, whose form the ending shows). `mods/endless.c` keeps one
-  run per difficulty today. Not designed yet.
-- 🔄 **iPhone: on-screen L and ZL sit behind the notch** (owner, 2026-10-20, iPhone 12 mini; built 2026-10-21: the
+- 🔄 **Endless / 100 Mario in local co-op** (owner, 2026-10-20; rules decided 2026-10-21: as SMM2's local
+  multiplayer does, lives shared, a life lost when all players are down, cleared when anyone reaches the goal).
+  Groundwork 2026-10-21:
+  - Play Together is the Coursebot's course start main+0x16e3d60 (scene change reason 6). It reads the player count
+    from `*(main+0x2a66498) + 0x494` (2 in a real Play Together course, 0 on the title course) and a per-player
+    character list (+0x330).
+  - The course set-up (main+0x16dfe..) takes that count only when a mode field (`[x24 + 0x880] -> +0x28 -> +0x18`)
+    is 1; retries keep the last course's count; anything else, Endless included, stores one player (main+0x16dffb4).
+  - A hook point there (`patches.py`, `hooks.c`; `RECOMP_COOP_TEST=<n>`) writes n players. In a 100 Mario course
+    with a scripted player 2 the count reads 2 in the course, but only Mario spawns: the second player needs more
+    than the count (likely the per-player controller / character slots Play Together fills in, +0x330). Next:
+    decompile where the play scene creates players from the set-up's list.
+  - Still the owner's to pick (pending): whose form the ending shows; whether the lives card shows each player.
+    Default until then: player 1's.
+- 🔄 **iPhone: on-screen L and ZL- 🔄 **iPhone: on-screen L and ZL sit behind the notch** (owner, 2026-10-20, iPhone 12 mini; built 2026-10-21: the
   controls are offset by the window's left / right safe-area insets, `SDL_GetWindowSafeArea`, updated on safe-area
   and resize events and on touches; not yet seen on the iPhone): the touch
   controls (`recomp/runtime/ui/touchpad.mm`) don't keep clear of the safe area, so the L / ZL buttons are partly

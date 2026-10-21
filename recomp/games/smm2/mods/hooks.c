@@ -41,6 +41,13 @@ static void retry_rollback(void) {
 void smm2_mod_after(Cpu *c, uint64_t addr) {
     extern bool costume_after(Cpu *c, uint64_t addr);  // (costume.c: its own hook points)
     if (costume_after(c, addr)) return;
+    if (addr == MAIN_ADDR(0x16dffb4)) {  // co-op groundwork (patches.py): the course set-up's one-player store
+        // RECOMP_COOP_TEST=<n>: n players there instead (Endless / 100 Mario: not enough on its own yet, PROGRESS)
+        static const char *n = (const char *)1;
+        if (n == (const char *)1) n = getenv("RECOMP_COOP_TEST");
+        if (n) s32(c->x[19], (uint32_t)atoi(n));
+        return;
+    }
     if (!mod_hundred_rules()) return;
     switch (addr - MAIN_ADDR(0)) {
     case 0x15877b0:  // strb w9, [x8, #0x48]: "skipped during the miss demo"

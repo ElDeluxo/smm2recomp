@@ -54,6 +54,9 @@ HOOK_POINTS = {
     # its first instruction (sub sp, sp, #0x80): from small Mario the Mystery item's form becomes 0 and the costume
     # goes on
     0x15a94a0: (0xD10203FF, 'costume: form change request'),
+    # Co-op (hooks.c, groundwork): the course set-up's player count when it isn't the Coursebot's Play Together (str w9 = 1,
+    # [x19, #0x8]!); Endless and 100 Mario courses get one player there
+    0x16dffb4: (0xB8008E69, 'co-op: the one-player store'),
 }
 
 
