@@ -370,7 +370,9 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
   under the notch in landscape. Inset them by the window's safe area. The phone reached the title screen and ran
   well, then was killed for memory (jetsam `vm-pageshortage` at ~1.85 GB); owner isn't chasing that for now.
 - ⬜ **"Lanky Mario" as an SMM1 mod** (owner, 2026-10-21): SMM1's tall, stretched, glitchy-looking Mario. This is
-  most likely the Weird Mushroom ("Weird Mario"), SMB1 style only. Confirm from the SMM1 files what it is: its
+  most likely the Weird Mushroom ("Weird Mario"), SMB1 style only. Found 2026-10-21: SMM1's name for it is
+  `KinokoFunny` (editor sounds in every style, edit DB entries); there is no separate model, so the stretch and
+  its jump are likely code (Block.rpx). Notes in `research/specs/smm1-extras-recomp-notes.md` (private). Confirm from the SMM1 files what it is: its
   model and animations, whether it changes the jump or physics, and how it turns up in courses. Then add it behind
   its own switch, next to the Mystery Mushroom costumes (`mods/costume.c`). Not started.
 - ⬜ **Rename the app** (owner, 2026-10-20): desktop (macOS app / menu bar, Windows, Linux, release packages)
