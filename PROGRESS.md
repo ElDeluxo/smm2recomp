@@ -354,6 +354,14 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
   - ⬜ The water in the background looks a bit too shiny. The 3D World liquid surfaces already differ most from
     Ryujinx (castle lava 2.28 % px > 24), so check specular and reflection on liquids.
 
+- ⬜ **Vulkan fixes found by the SM35 port (2026-10-21, not yet in SMM2):** (1) shader global memory is one storage
+  buffer over the 3.2 GB heap, but a GPU only reaches `maxStorageBufferRange` of it (128 MB on lavapipe and Adreno,
+  1-2 GB on some desktop GPUs; reads past that give 0): SM35 uses bufferDeviceAddress where available
+  (sm35recomp e292dce). (2) without host memory import (Android emulator, many phones) global memory reads give 0:
+  SM35 copies each draw's bound storage buffers into per-draw memory (3fce300). (3) Android 11+ can't read files
+  adb pushed into Android/data/<pkg>: SM35 falls back to the internal folder (a5e5395). Likely behind SMM2's
+  Vulkan-only differences (3D World Mario on lavapipe); port when Windows / Linux / Android get attention.
+
 ### Future (owner's backlog, not scheduled)
 - 🔄 **120 fps output by frame generation** (owner, 2026-10-19): built 2026-10-20 (Video tab, `frame_gen`,
   off by default; our own interpolation for Metal and Vulkan, not MetalFX's; game logic stays 60 Hz). Owner on
