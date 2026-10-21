@@ -330,6 +330,17 @@ void endless_apply_mode(void) {
     }
 }
 
+// Whether SMM2's Endless menu shows Continue for difficulty d, from the menu's copy of the record: a run that can go
+// on (+0x04 state 1 or 2) with lives (+0x30) and a history, i.e. a course cleared (+0x2c) [inf: a run with lives
+// and no clear shows New Game alone, research/specs/endless-challenge.md 1.2]. -1: no copy yet.
+int endless_menu_offers_continue(int d) {
+    uint64_t cache = g64(UI_CACHE);
+    if (d < 0 || d > 3 || !cache || !g64(cache + 0x15e598) || (uint32_t)d >= g32(cache + 0x15e590)) return -1;
+    uint64_t r = g64(cache + 0x15e598) + 0x38ull * (uint32_t)d;
+    uint32_t state = g32(r + 0x04);
+    return (state == 1 || state == 2) && g8(r + 0x30) != 0 && g32(r + 0x2c) != 0;
+}
+
 // ---- the next course, known before the game asks for it (the flow's start card shows it, as SMM1's does): the
 // server's queue only moves on a result, so asking for its head now gives what the game's own search gets later.
 
