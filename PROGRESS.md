@@ -393,6 +393,10 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
   `LARECOMP_INPUT2` scripts a player 2 for tests. Checked in game (macOS, scripted player 2): a downloaded course's
   Play Together shows Mario and Luigi on the card, and in the course Luigi runs on player 2's input while Mario
   stands. Left: real second / third / fourth controllers (none here), and controllers connected mid-game.
+  2026-10-22: a Controls-tab switch "Controllers start at player 2" (`pads_from_p2` in `smm2.ini`, off by default):
+  the keyboard and the on-screen controls are player 1 and every controller is the next player, so a keyboard and
+  one controller (the owner's PS5 pad) play two-player. Changing it lets go of every controller and takes them again
+  under the new rule. Seen in the menu; with real controllers: not yet tried
 - 🔄 **Endless / 100 Mario in local co-op** (owner, 2026-10-20; rules decided 2026-10-21: as SMM2's local
   multiplayer does, lives shared, a life lost when all players are down, cleared when anyone reaches the goal).
   Groundwork 2026-10-21:

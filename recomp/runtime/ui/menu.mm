@@ -469,6 +469,8 @@ static bool choice(const char *label, int *value, const char *const *names, int 
     return changed;
 }
 
+extern "C" void input_pads_reassign(void);  // runtime/hle/input.c
+
 static bool toggle(const char *label, bool *v) {
     const char *names[] = {"Off", "On"};
     int i = *v;
@@ -650,6 +652,13 @@ static void tab_about(void) {
          "screen, then Play.");
     ImGui::Spacing();
     header("Controls");
+    if (opt_toggle("Controllers start at player 2", &g_settings.pads_from_p2, false,
+                   "The keyboard and the on-screen controls are player 1, and every controller is the next player "
+                   "(player 2, 3, 4), for local multiplayer with a keyboard and one controller. Off: the first "
+                   "controller is player 1's too.")) {
+        settings_save();
+        input_pads_reassign();
+    }
     controls_bindings_draw(ImGui::GetFontSize() / 34);
     ImGui::Spacing();
     header("Menu");
