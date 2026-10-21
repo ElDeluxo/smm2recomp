@@ -88,6 +88,21 @@ class PackageCheckTests(unittest.TestCase):
         rc, out = self.run_check(z)
         self.assertEqual(rc, 1, out)
 
+    def test_missing_gamelib_file_fails(self):
+        # a package with gamelib-src/ must have every file the recompile reads (v0.2.0 shipped without
+        # mods/smm1_extras.py, so the first launch couldn't build the game code)
+        src = self.pkg / 'gamelib-src'
+        for rel in check_package.GAMELIB_REQUIRED:
+            (src / rel).parent.mkdir(parents=True, exist_ok=True)
+            (src / rel).write_text('# ok\n')
+        rc, out = self.run_check(self.pkg)
+        self.assertEqual(rc, 0, out)
+        self.assertIn('mods/smm1_extras.py', check_package.GAMELIB_REQUIRED)
+        (src / 'mods' / 'smm1_extras.py').unlink()
+        rc, out = self.run_check(self.pkg)
+        self.assertEqual(rc, 1, out)
+        self.assertIn('gamelib-src/mods/smm1_extras.py', out)
+
     def test_macos_zip_bundled_tools(self):
         # the .app one level deeper than the other packages' folders: zig's test certificates are still its own,
         # a certificate elsewhere in the app is not
@@ -181,6 +196,22 @@ class SetupTests(unittest.TestCase):
         m = setup.parse_cnmt(bytes(cnmt))
         self.assertEqual((m['title_id'], m['version'], m['type']), (versions.UPDATE_TITLE_ID, versions.UPDATE_VERSION, 0x81))
         self.assertEqual(m['contents'], [(bytes(range(16)).hex(), 1234, 1)])
+
+    def test_silent_hactool_is_not_blamed_on_keys(self):
+        # hactool that prints nothing and fails (it crashed or didn't start: v0.2.0 on Windows said only "no output"
+        # and blamed prod.keys): the error says so, with the exit code, and suggests extracted folders instead
+        exe = self.dir / 'hactool'
+        exe.write_text('#!/bin/sh\nexit 5\n')
+        exe.chmod(0o755)
+        keys = self.dir / 'prod.keys'
+        keys.write_text('')
+        out = io.StringIO()
+        with redirect_stdout(out), self.assertRaises(setup.SetupError) as e:
+            setup.Hactool(str(exe), str(keys)).run('-t', 'nca', 'x.nca', what='Reading x.nsp')
+        self.assertEqual(e.exception.code, 'HACTOOL_CRASH')
+        self.assertIn('exit code 5', e.exception.what)
+        self.assertNotIn('prod.keys', e.exception.hint)
+        self.assertIn('exit code 5', out.getvalue())
 
     def test_tool_output_is_masked(self):
         line = 'Titlekey (Decrypted) ' + 'ab' * 16

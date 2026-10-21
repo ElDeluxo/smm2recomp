@@ -292,22 +292,22 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     100 Mario shows Endless for about a second. The ZL / ZR switch itself is much better now.
   - ⬜ The transition from 100 Mario's map / card into the course isn't exact yet, and lags slightly. Needs
     more testing and tuning against SMM1 and SMM2.
-- ⬜ **Mac app won't open the game (owner, 2026-10-20):** the owner's local Mac build stops because the game files
-  aren't selected, and choosing them on the setup screen doesn't get it working. To check: which app it is
-  (/Applications release or a local build), its data folder (the dev one is a symlink to the SSD), what the
-  setup screen and `smm2recomp.log` say, and whether the chosen paths pass the 3.0.3 check.
-- ⬜ **Release zip lacks `smm1_extras.py` (owner, 2026-10-21):** reportedly missing from the release package
-  (`recomp/games/smm2/mods/smm1_extras.py`), so the first-launch recompile or the SMM1 extras can't use it. Check
-  what the packaging scripts copy (`package.sh`, `package_lib.sh`, `bundle_macos.sh`) against what the recompile
-  imports, add it, and make `scripts/check_package.py` fail when a needed tool file is missing.
-- ⬜ **Windows setup: reading the NSP fails with "no output" (owner, 2026-10-21, v0.2.0):** step 1 stops at
-  "Reading Super Mario Maker 2 [01009B90006DC000][v0].nsp failed: no output", with the generic advice about
-  `prod.keys`. The file is in `D:\Recomp\SuperMarioMaker2\SMM2Recomp-windows-x86_64\`. "No output" means the
-  bundled hactool printed nothing: it may not have started (DLLs, path with spaces / brackets, the D: drive),
-  the keys path may not have been passed, or it crashed. Get `logs\setup.log` from the owner. Check how the
-  launcher calls hactool on Windows (quoting, working directory, exit code), show hactool's exit code and stderr
-  in the error, and only blame the keys when hactool actually says so. This is the first run of the
-  NSP-extraction path through the screen (it was never tested end to end).
+- 🔄 **Mac app won't start the game; release zip lacks `smm1_extras.py` (owner, 2026-10-20 / 21):** one cause.
+  Every v0.2.0 package left out `gamelib-src/mods/smm1_extras.py` (`tools/package_lib.sh` copied only
+  `mods/patches.py`), so the first-launch recompile stopped at once. The owner's Mac app log shows it: steps 1-2
+  passed with their NSPs, keys and firmware, then `generator (main) failed: FileNotFoundError: ...
+  gamelib-src/mods/smm1_extras.py`. Fixed (2026-10-21): the packages copy every `mods/*.py`, and
+  `scripts/check_package.py` now fails a package that lacks a file the recompile reads (it flags the installed
+  v0.2.0 app). Also, that app's data folder is a link to the external SSD, so with the SSD unplugged it can't
+  start: the error now says the link points to a folder that isn't there. ⏳ Needs a new release (v0.2.1) to reach
+  the owner's Mac.
+- 🔄 **Windows setup: reading the NSP fails with "no output" (owner, 2026-10-21, v0.2.0):** step 1 stopped at
+  "Reading Super Mario Maker 2 [01009B90006DC000][v0].nsp failed: no output", and blamed `prod.keys`. The bundled
+  hactool printed nothing and failed. Its exe is normal: standard UCRT DLLs and a 16 MB stack; the largest frame
+  is `main` at 257 KB. So it most likely crashed. The cause is not known yet (no Windows machine here). Done
+  (2026-10-21): a silent hactool failure now says "hactool stopped without a message", with the exit code
+  decoded (access violation, missing DLL and so on), and no longer blames the keys; the exit code goes to the
+  setup log. ⏳ Needs the owner to run hactool once by hand on Windows, or the new message from v0.2.1.
 - ⬜ **3D World rendering on the iPad (owner's screenshot, 2026-10-20; 3D World ground course, Metal):**
   - ⬜ Mario's model has a grainy, speckled look across his face and overalls, like noise or broken dithering.
     It's not how he looks on the console. Compare the same frame with Ryujinx; suspects are his shading or AO
