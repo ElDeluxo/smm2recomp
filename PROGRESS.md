@@ -373,6 +373,15 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
   off by default; our own interpolation for Metal and Vulkan, not MetalFX's; game logic stays 60 Hz). Owner on
   the iPad: "doesn't look amazing at this stage". Left: picture quality, the iPad's shown-frames count, a real
   120 Hz display. Spec: `docs/superpowers/specs/2026-10-20-frame-generation-design.md`
+- ✅ **Quick level return** (owner, 2026-10-21; built 2026-10-21): a Mods-tab switch, off by default. After a miss the
+  game's own miss, lives card and restart are fast-forwarded unseen, so lives still count and nothing changes when
+  it's off. Coursebot 1.6 s instead of ~4.6, 100 Mario 2.3 s instead of 9.7, test play's return to the editor about
+  0.5 s. Owner: skip the lives card, and apply it in test play. `recomp/docs/mods.md`, DECISIONS 2026-10-21
+- ✅ **Setup from NSPs on every OS** (testers' Windows reports, 2026-10-21): applying the 3.0.3 update was broken
+  everywhere. The base RomFS was handed over in the wrong coordinates, and a memcpy overlap in hactool crashed it on
+  Windows. Fixed; the result is byte-identical to a known-good 3.0.3 extraction (macOS, and the Windows hactool
+  under Wine). An open report: one tester's firmware step reads no NCA at all ("117 NCAs unreadable"). The owner's
+  firmware works under Wine, so that's their keys or a newer firmware
 - 🔄 **Local multiplayer input, players 1-4** (owner, 2026-10-20; built 2026-10-21): every further controller is
   the next player, Npad No. 2..4, through the same bindings (`runtime/hle/input.c`). Player 1 keeps the keyboard,
   the on-screen controller and the first controller. `GetNpadState(s)` and `GetNpadStyleSet` report players 2-4

@@ -753,7 +753,10 @@ void backend_present(NvnTexture *t) {
                          (uint32_t)wh != g_vk.sc_extent.height))
             recreate_swapchain();
     }
-    if (fg_on && g_vk.swapchain && g_vk.sc_extent.width && g_vk.sc_extent.height) {
+    extern bool g_frame_hidden;  // (objects.c: a mod's fast-forward, no window image)
+    if (g_frame_hidden) {
+        have = false;
+    } else if (fg_on && g_vk.swapchain && g_vk.sc_extent.width && g_vk.sc_extent.height) {
         fgc = vk_framegen_image(fg_k, g_vk.sc_extent.width, g_vk.sc_extent.height);
         vk_offscreen_begin(fgc, black);
         have = true;

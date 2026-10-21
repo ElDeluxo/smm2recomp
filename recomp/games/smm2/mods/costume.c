@@ -316,6 +316,8 @@ static void goal_fanfare(Cpu *c) {
     if (mine) sound("goal");
 }
 static void down_fanfare(Cpu *c) {
+    extern void quick_retry_miss(void);  // (mods/quick_retry.c: the miss is fast-forwarded when it's on)
+    if ((uint32_t)c->x[2] == 7) quick_retry_miss();
     bool mine = costumes_on() && g_wear[0] && (uint32_t)c->x[2] == 7;
     if (mine) c->x[2] = 0;
     guest_call_orig(c, DOWN_FANFARE);

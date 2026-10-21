@@ -1744,3 +1744,28 @@ shows one generated frame between each pair of real frames on displays of 100 Hz
 object and camera transforms) was judged far too invasive.
 **Would change:** engine-side motion vectors (would allow MetalFX's interpolator or FSR 3), or rates above 120
 (the passes already take a phase `t`).
+
+## 2026-10-21 — Quick level return: fast-forward the game's own miss, nothing skipped in its logic
+
+**Decision:** a Mods-tab switch, "Quick level return" (`quick_retry` in `smm2mods.ini`, `RECOMP_QUICK_RETRY`),
+off by default. After a miss, the frames from the death fanfare to the restarted course run as fast as the
+machine can and aren't shown (`runtime/nvn/objects.c` `g_present_hidden`): no display pacing, no window image,
+but each frame's GPU work, the renderers' per-frame work and the 100 Mario flow's tick still run.
+- **The game does everything itself**: the miss, the lost life, the lives card, the course set up again. Nothing in
+  its logic is skipped or patched, so lives count as before (100 Mario and Endless: a miss still costs one), clears,
+  checkpoints, Start Over and the skip rules don't change, and with the switch off not one instruction of the game
+  runs differently (the hooks only return).
+- **The end of the fast-forward**: in Endless and 100 Mario the Endless scene's play state running again (after
+  the lives card, which the owner wanted skipped; up to 900 frames); elsewhere (Course World, Coursebot, test play)
+  the first player update after the course is built again (a stretch of frames with no player), each player update
+  extending it by 60 frames up to 360, so it lapses by itself where no player comes (test play's miss returns to the
+  Course Maker). The screen never stays still for long.
+- **Measured** (M-series Mac): a Coursebot course's miss to playing again 1.6 s (SMM2 ~4.6 s); 100 Mario 2.3 s
+  (SMM2 9.7 s, the lives card included); the fast-forward runs at about 270 frames a second.
+- **Applies in the Course Maker's test play too** (owner, 2026-10-21).
+- The death fanfare is heard only for as long as the fast-forward lasts; the next course music cuts it.
+**Why:** the owner asked for a quick retry mod (2026-10-21), off by default and exactly SMM2 when off. Patching
+SMM2's miss sequence (states, timers, the card) would mean changing game logic in several places per mode; running
+the same frames faster changes nothing the game can see except wall time.
+**Would change:** a restart that has to be quicker than the machine can run the miss frames (the reload itself, about
+0.7 s on an M-series Mac, isn't shortened), or the owner wanting the fanfare kept.

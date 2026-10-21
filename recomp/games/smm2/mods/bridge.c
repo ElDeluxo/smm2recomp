@@ -645,6 +645,8 @@ static void play_exec(Cpu *c) {
         return;
     }
     if (holding) holding = false, LOG("[mod] bridge: the course starts\n");
+    extern void quick_retry_play_state(void);  // (quick_retry.c: the course is playing again after a miss)
+    quick_retry_play_state();
     if (started_pending) course_started("play state");
     guest_call_orig(c, PLAY_EXEC);
 }

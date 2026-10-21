@@ -528,6 +528,38 @@ tab's "Muncher hit box (SMM1)" switch, `muncher_smm1_hitbox=0/1` in `smm2mods.in
   Munchers and enemies on Munchers weren't run.
 - Research (private): `research/specs/objects/57-muncher.md` (section "Hit box").
 
+## Quick level return (`games/smm2/mods/quick_retry.c`)
+
+After a miss the course starts again (at its start or the checkpoint) much sooner. Off by default: the Mods tab's
+"Quick level return" switch, `quick_retry=0/1` in `smm2mods.ini`, or `RECOMP_QUICK_RETRY=0/1` (wins over the ini).
+It applies immediately.
+
+- **How:** the game plays its own miss (the lost life, the lives card, the course set up again). The frames from
+  the death fanfare until the restarted course run as fast as the machine can and aren't shown
+  (`runtime/nvn/objects.c` `g_present_hidden`): no display pacing and no window image, but each frame's GPU work,
+  the renderers' per-frame work and the 100 Mario flow's tick still run. Nothing in the game's logic is changed.
+  Lives count as before (100 Mario and Endless: a miss still costs one), and so do clears, checkpoints and skips.
+  Off, the hooks only return.
+- **Start:** the death fanfare (music state 7: `costume.c` `down_fanfare`, main+0x17a4bc0).
+- **End:** in Endless and 100 Mario, the Endless scene's play state running again (`bridge.c` `play_exec`,
+  main+0x1bb9440), up to 900 frames. Elsewhere, the first player update after frames without one (`trace.c`), each
+  update extending the fast-forward by 60 frames, up to 360. Where no player comes (test play's miss goes back to
+  the Course Maker) it lapses by itself.
+- **Measured** (M-series Mac, muted test runs), miss to playing again:
+
+  | | SMM2 | Quick level return |
+  |---|---|---|
+  | Coursebot course | ~4.6 s | 1.6 s |
+  | 100 Mario (lives card included) | 9.7 s | 2.3 s |
+
+  Test play's miss went back to the Course Maker about 0.5 s after the miss. About 0.7 s of each restart is the
+  course's reload, which the fast-forward can't shorten. With the switch off, the same 100 Mario run missed at the
+  same point, took SMM2's 9.7 s, and never ran above 60 fps.
+- **Test:** a one-course server holding `testcourses/3W_water.course`, the 100 Mario recipe above with
+  `courses=server` (a copy of `smm2mods.ini` through `RECOMP_MOD_INI`), `RECOMP_HUNDRED_INPUT="5950:A:8,6150:A:8,6350:A:8"`
+  for the flow's map, and right held from frame 6700: Mario misses at frame ~9780. `LARECOMP_FPS_INTERVAL=0.25`
+  shows the fast-forward's rate. Don't save frames during it: the PNG writes slow every frame down.
+
 ## The game's own network stack (backend local-nex): groundwork for Nextendo and a local NEX server
 
 The mod above *fakes* being online: nifm / acc / friends / mii answer locally, the enl session logs in without NEX,
