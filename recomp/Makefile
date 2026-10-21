@@ -409,7 +409,8 @@ app-macos:
 # The course server inside the app (core/crates/embed) for this target, with cargo (no debug info: it would add ~80 MB
 # to each package)
 EMBED_ENV := $(if $(ZTARGET),ZIG="$(abspath $(ZIG))" ZIGCC_TARGET=$(ZTARGET) \
-             CC_$(subst -,_,$(EMBED_TRIPLE))="$(CURDIR)/tools/zigcc.sh" AR_$(subst -,_,$(EMBED_TRIPLE))="$(CURDIR)/tools/zigar.sh")
+             CC_$(subst -,_,$(EMBED_TRIPLE))="$(CURDIR)/tools/zigcc.sh" AR_$(subst -,_,$(EMBED_TRIPLE))="$(CURDIR)/tools/zigar.sh" \
+             $(if $(filter windows,$(PLATFORM)),CARGO_ENCODED_RUSTFLAGS="-Cdlltool=$(CURDIR)/tools/zigdlltool.sh"))
 embed-server:
 	$(if $(EMBED_TRIPLE),,$(error embed-server: no Rust target for $(TARGET)))
 	cd ../core && rustup target add $(EMBED_TRIPLE) >/dev/null 2>&1; $(EMBED_ENV) CARGO_PROFILE_RELEASE_DEBUG=0 cargo build -p mmk-embed --release --target $(EMBED_TRIPLE)
