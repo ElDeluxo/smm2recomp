@@ -182,6 +182,15 @@ SMM2's window of a downloaded course has only Play, Play Together and Delete, so
   upload id from is still [?]. The upload with `based_on` hasn't been run in game (the server side is tested:
   `edited_copies_credit_the_original`). Typed course names arrive garbled: runtime/hle/swkbd.c answers in UTF-8,
   SMM2 reads UTF-16 (not this mod's file).
+- 2026-10-21 re-test (main build, `RECOMP_EDIT_CTL`): Download → Make (tap) → Course Maker → an edit → Save As into an
+  empty My Courses slot works, and the typed name now arrives intact ("Edited Copy"; the swkbd UTF-16 fix). The
+  d-pad cursor still goes Play → Delete → the list tabs, skipping Make. The game's enable call (main+0x761190) only
+  sets the button's enabled bytes (+0x3a / +0xbc in its two lists) and a bit in a pane controller's mask (+0x218 →
+  +0x14b0), so the cursor's targets come from somewhere else (not found yet). On that run SMM2's current course was
+  slot 2, not the download, so the Course Maker took the download from storage, not the reset copy. The copy and the
+  editor's Save / Load card show the yellow arrow mark. Upload is greyed until a clear check, which is SMM2's normal
+  rule. Next: what the arrow mark reads, and making the reset copy the current course (save manager +0x58 / +0x60)
+  before the scene change.
 - Proposed, not built: an Edit on Course World's course card (Download, then straight into the Course Maker when
   the Coursebot has saved it); in Endless / 100 Mario, "save to Coursebot for later" from SMM2's result screen
   (SMM1 offers no edit there).
