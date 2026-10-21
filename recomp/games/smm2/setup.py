@@ -245,6 +245,11 @@ HACTOOL_CRASHES = {0xC0000005: 'it crashed: access violation', 0xC00000FD: 'it c
                    0xC0000135: 'a DLL it needs is missing', 0xC0000139: 'a DLL it needs is the wrong version',
                    0xC0000142: 'it could not start', 0xC000007B: 'it is built for another kind of Windows',
                    0xC0000409: 'it crashed: buffer overrun', 0xC0000374: 'it crashed: heap corruption'}
+# ... and the signals that stop it on Linux and macOS (a negative return code)
+HACTOOL_SIGNALS = {11: 'it crashed: segmentation fault', 6: 'it crashed: abort',
+                   7: 'it crashed: bus error (the file or its drive went away while it was read?)',
+                   4: 'it crashed: illegal instruction (a CPU it wasn\'t built for?)', 9: 'it was killed (out of memory?)',
+                   8: 'it crashed: arithmetic error'}
 
 
 class Hactool:
@@ -269,7 +274,8 @@ class Hactool:
             if not tail:
                 # hactool said nothing at all: it didn't start or it crashed, which isn't the keys' fault
                 code = r.returncode & 0xFFFFFFFF
-                why = HACTOOL_CRASHES.get(code, f'exit code {r.returncode} ({code:#x})')
+                why = (HACTOOL_SIGNALS.get(-r.returncode, f'it was stopped by signal {-r.returncode}')
+                       if r.returncode < 0 else HACTOOL_CRASHES.get(code, f'exit code {r.returncode} ({code:#x})'))
                 raise SetupError('HACTOOL_CRASH', f'{what} failed: hactool stopped without a message ({why})',
                                  'Please report this with the setup log. Meanwhile you can extract the game '
                                  'yourself (an emulator\'s "Extract ExeFS / RomFS" of the updated game) and choose '
@@ -420,9 +426,12 @@ def extract_containers(files, hac, stage):
     exefs, romfs = os.path.join(stage, 'exefs'), os.path.join(stage, 'romfs')
     for d in (exefs, romfs):
         shutil.rmtree(d, ignore_errors=True)
+    # The base is its whole decrypted RomFS section (-r --section1), hash levels and all, not the bare RomFS image
+    # (--romfs): the update's relocation table addresses the base in section offsets (3.0.3's: the RomFS data
+    # starts 0x588000 into the section), and hactool's --baseromfs reads them as they are.
     raw = os.path.join(stage, 'base.romfs')
     say('step', 'Extracting the game files')
-    hactool_watched(hac, raw, bsize, 0.05, 0.3, *tk, '-t', 'nca', f'--romfs={raw}', nca, what='Extracting the game')
+    hactool_watched(hac, raw, bsize, 0.05, 0.3, *tk, '-t', 'nca', '-r', f'--section1={raw}', nca, what='Extracting the game')
     os.remove(nca)
     if not os.path.isfile(raw) or os.path.getsize(raw) < (1 << 30):
         raise SetupError('DECRYPT', 'The game couldn\'t be decrypted',

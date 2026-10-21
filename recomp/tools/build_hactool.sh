@@ -26,6 +26,33 @@ mkdir -p "$DL"
 GOT=$( (shasum -a 256 2>/dev/null || sha256sum) < "$DL/hactool-$VER.tar.gz" | cut -d' ' -f1)
 [ "$GOT" = "$SHA" ] || { echo "hactool-$VER.tar.gz: sha256 $GOT, expected $SHA"; exit 1; }
 rm -rf "$SRC" && mkdir -p "$SRC" && tar -xzf "$DL/hactool-$VER.tar.gz" -C "$SRC" --strip-components 1
+# Fixes to 1.4.0 (nca.c):
+# - an update's (BKTR) relocation and subsection tables are spread out in place with memcpy over overlapping memory:
+#   Apple's and glibc's memcpy happen to cope, Windows' copies forwards and scrambles the tables, so applying an
+#   update crashed there (0xC0000005 in bktr_get_relocation). memmove.
+# - reads of fewer than 16 bytes inside one AES block: in a patched RomFS the bytes came from the stale sector_ofs
+#   instead of this read's block offset; in plain CTR sections the next seek dropped the bytes just read (upstream's
+#   fix #98, after 1.4.0)
+python3 - "$SRC/nca.c" <<'EOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+s = s.replace('memcpy(bktr_get_relocation_bucket(', 'memmove(bktr_get_relocation_bucket(')
+s = s.replace('memcpy(bktr_get_subsection_bucket(', 'memmove(bktr_get_subsection_bucket(')
+assert s.count('memmove(bktr_get_') == 2
+fixes = [
+    ('                memcpy(buffer, block_buf + ctx->sector_ofs, count);\n'
+     '                nca_section_fseek(ctx, ctx->bktr_ctx.virtual_seek + count);',
+     '                memcpy(buffer, block_buf + block_ofs, count);\n'
+     '                nca_section_fseek(ctx, ctx->bktr_ctx.virtual_seek + count);'),
+    ('                    nca_section_fseek(ctx, ctx->cur_seek - ctx->offset);\n                    return count;',
+     '                    nca_section_fseek(ctx, ctx->cur_seek - ctx->offset + ctx->sector_ofs);\n                    return count;'),
+]
+for a, b in fixes:
+    assert s.count(a) == 1, a
+    s = s.replace(a, b)
+open(p, 'w').write(s)
+EOF
 rm -rf "$OUT" && mkdir -p "$OUT/obj"
 export ZIG_GLOBAL_CACHE_DIR=$PWD/build/zig-cache ZIG_LOCAL_CACHE_DIR=$PWD/build/zig-cache
 CF=(-target "$ZT" -O2 -std=gnu11 -w -I"$SRC/mbedtls/include"

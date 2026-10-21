@@ -46,6 +46,16 @@ checks it, recompiles the game code on your computer, and then runs it.
    recompiles the game code with the bundled compiler: a few minutes to half an hour. Then the
    game starts, and later starts go straight to it.
 
+**If something goes wrong,** please open an [issue](https://github.com/smm2recomp/smm2recomp/issues)
+and attach the log files from the program's data folder: `smm2recomp.log` (the program) and
+`logs/setup.log` (the setup's steps). Neither contains key values. The data folder is:
+
+| System | Data folder |
+|---|---|
+| Windows | the unpacked folder, next to `smm2recomp.exe` |
+| Linux | `~/.local/share/smm2recomp` (or `$XDG_DATA_HOME/smm2recomp`) |
+| macOS | `~/Library/Application Support/org.smcraft.smm2recomp` |
+
 The setup screen tells you when a newer release is out and links to it; nothing is downloaded by
 itself. Android and iOS / iPadOS have no download: they're built yourself from source
 ([recomp/README.md](recomp/README.md)); iOS needs a Mac to build, sign and install the app.
