@@ -70,6 +70,8 @@ void hundred_run_finish(void);     // the run is over (won, or game over): clear
 void hundred_flow_exit(void);      // B on the difficulty select: back to SMM2's Course World (the flow closes)
 bool hundred_menu_in(void);        // SMM2's Endless menu is up under the select, so B can take it back (false for a
                                    // moment after Challenge Modes: the select opens while that menu is still coming)
+bool hundred_menu_left(void);      // after hundred_flow_exit: that menu has finished leaving for Course World (the
+                                   // select stays up until then, so the menu isn't seen sliding away)
 
 // Challenge Modes (owner, 2026-10-19): Course World's "Challenge Modes" button opens the mode used last; ZL / ZR (or a
 // tap on the header) switch between the 100 Mario Challenge and SMM2's own Endless Challenge; L / R stay the

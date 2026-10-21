@@ -91,6 +91,7 @@ WEAK void hundred_run_save_quit(void) {
 WEAK void hundred_run_finish(void) { fake.used = true; fake.saved[fake.d] = false, fake.playing = 0; }
 WEAK void hundred_flow_exit(void) { fake.used = true; }
 WEAK bool hundred_menu_in(void) { return true; }
+WEAK bool hundred_menu_left(void) { return true; }
 // Challenge Modes (the mod): SMM2's Endless as the other mode on Course World's "Challenge Modes" button
 WEAK bool hundred_modes_available(void) { return getenv("RECOMP_HUNDRED_TEST_MODES") != NULL; }
 WEAK void hundred_mode_switch(void) { fake.used = true; }
@@ -128,6 +129,7 @@ static struct {
     bool tap, touching;  // a touch lifted this frame (at tap_x, tap_y: game pixels); a touch is down
     bool touch_stale;    // the touch down began before the flow opened (its lift is no tap)
     bool back_due;       // B on the select while SMM2's menu underneath wasn't in yet: B once it is
+    int exit_wait;       // B was taken: the select stays until SMM2's menu underneath has left (frames waited)
     bool covered;        // black over SMM2's way back to its Endless menu (hundred_flow_cover): the select lifts it
     int cover_at;        // (F.ov.tick it came up)
     int tap_x, tap_y;
@@ -236,7 +238,7 @@ static void to_select(void) {
     ov_hide(&F.ov);
     F.sel = s;
     F.state = s ? S_SELECT : S_CLOSED;
-    F.back_due = false;
+    F.back_due = false, F.exit_wait = 0;
     if (F.covered) F.covered = false, X.veil_to = 0;  // (out of the black that hid SMM2's menu coming back)
     if (s && X.veil <= 0 && !WP.anim) fade_in();  // (over SMM2's screen; after the ending the dip covers it)
     static const int t[] = {60};
@@ -514,6 +516,15 @@ static void tick(unsigned buttons) {
     bool resume = false;
     switch (F.state) {
     case S_SELECT: {
+        if (F.exit_wait) {  // (the select hides SMM2's Endless menu while it slides away, then fades over Course World)
+            if (hundred_menu_left() || ++F.exit_wait > 240) {
+                LOGF("back to Course World: SMM2's menu %s after %d frames\n", F.exit_wait > 240 ? "still there" : "left",
+                     F.exit_wait);
+                F.exit_wait = 0;
+                fade_out(T_EXIT, 24);
+            }
+            break;
+        }
         static bool auto_started;  // (one run: back on the select after it, nothing more is pressed)
         if (auto_d() >= 0 && F.sel && !auto_started) {  // (unattended: the difficulty, then New Game)
             int t = F.sel->tick;
@@ -536,9 +547,9 @@ static void tick(unsigned buttons) {
                  buttons & ~in.pressed, F.tap, F.sel->tick);
             fade_out(T_MODE, CROSS_FRAMES), smm1_bgm_fade(16);
         }
-        if (ev == EV_BACK) {  // B: SMM2's menu underneath leaves for Course World while the map plays its Out
+        if (ev == EV_BACK) {  // B: SMM2's menu underneath leaves for Course World; the select fades once it has
             hundred_flow_exit();
-            fade_out(T_EXIT, 32), smm1_bgm_fade(32);
+            F.exit_wait = 1, smm1_bgm_fade(32);
         }
         if (ev == EV_EXIT && !X.then) { close_scenes(); F.state = S_CLOSED; }
         else if (ev == EV_START) {

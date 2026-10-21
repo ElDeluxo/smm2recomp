@@ -291,8 +291,12 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     0.55-0.91 on top of that. Measured from the owner's SMM1 files. The Audio tab's volume already applies after
     the mix. Left: measure SMM1's screens against SMM2's menus in game (`LARECOMP_SMM1_GAIN=<x>` to try levels),
     then set `SMM1_MIX`.
-  - ⬜ Leaving Challenge Modes still flashes the other mode's screen for a moment. For example, closing it from
-    100 Mario shows Endless for about a second. The ZL / ZR switch itself is much better now.
+  - 🔄 Leaving Challenge Modes still flashes the other mode's screen for a moment. For example, closing it from
+    100 Mario shows Endless for about a second. The ZL / ZR switch itself is much better now. Cause: on B the
+    select faded out in 32 frames, but the B press on SMM2's Endless menu underneath only comes after the
+    player's B is released (`DRV_BACK`), and that menu then slides away. Done (2026-10-21, not yet run): the
+    select stays until the menu's Disappear has run and stopped (`hundred_menu_left`; 4 s at most), then fades
+    over Course World. Left: check it in game, and check leaving from SMM2's Endless side too.
   - ⬜ The transition from 100 Mario's map / card into the course isn't exact yet, and lags slightly. Needs
     more testing and tuning against SMM1 and SMM2.
 - 🔄 **Mac app won't start the game; release zip lacks `smm1_extras.py` (owner, 2026-10-20 / 21):** one cause.

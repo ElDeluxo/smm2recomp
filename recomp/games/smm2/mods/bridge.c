@@ -45,7 +45,9 @@ static volatile int broken_d = -1;       // a corrupt course left the run of thi
 static volatile uint64_t broken_tap;     // the Challenge Modes button was tapped (after a corrupt course) then
 static volatile int tab_target = -1;     // a difficulty to select with L / R
 static volatile int tab_presses;
-static volatile uint64_t menu_page, menu_seen;  // the Endless menu page and the frame it was last in Disp
+static volatile uint64_t menu_page, menu_seen;
+static volatile uint64_t back_since, disappear_seen;  // B to Course World asked (hundred_flow_exit); the menu's
+                                                      // Disappear last ran  // the Endless menu page and the frame it was last in Disp
 static volatile uint64_t opening_since;  // the flow opened as the menu was asked for (seq_activate; presented frame,
                                          // 0 none) and the menu hasn't reached its Disp yet
 static volatile bool play_queued;      // Play asked for while the result screen is up
@@ -833,7 +835,14 @@ void hundred_run_finish(void) {
 void hundred_flow_exit(void) {  // (B on SMM2's Endless menu underneath: Course World)
     LOG("[mod] bridge: back to Course World\n");
     pthread_once(&once, driver_start);
+    back_since = renderer_present_count(), disappear_seen = 0;
     set_drv(DRV_BACK);
+}
+// After hundred_flow_exit: SMM2's Endless menu has finished leaving (its Disappear ran and has stopped), so Course
+// World is what is under the select. (false until then; the flow also gives up waiting after a while)
+bool hundred_menu_left(void) {
+    uint64_t now = renderer_present_count();
+    return back_since && disappear_seen > back_since && now - disappear_seen > 2;
 }
 // (the menu reaches its Disp about 45 frames after the flow opens on Activate; 300 frames: it never came)
 bool hundred_menu_in(void) { return !opening_since || renderer_present_count() - opening_since > 300; }
@@ -891,6 +900,7 @@ static void end_endless_status(Cpu *c) {
     guest_call_orig(c, END_ENDLESS_STATUS_ENTER);
 }
 static void menu_disappear(Cpu *c) {
+    disappear_seen = renderer_present_count();
     // (towards Course World: the next visit opens on the mode used last)
     if (g32(c->x[0] + 0x244) == 0) mod_set_smm2_session(g_mod.mode_endless);
     guest_call_orig(c, MENU_DISAPPEAR_EXEC);
