@@ -344,6 +344,13 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     to a small window, which hid them. The automatic render scale now goes down to a multiple of 0.2 on each axis
     (`runtime/nvn/output_scale.c`), so 1920x1080, 1600x900 and their halves and quarters all land on whole pixels;
     the same windows are then clean. Explicit test scales (`LARECOMP_SCALE`) stay as given.
+    **The iPad's own speckle is a different bug and is still there** (checked on the iPad 2026-10-22: it now renders
+    at 1.4, the heavy cyan speckle remains). Narrowed down with per-draw dumps (`LARECOMP_DEBUG_EACH_DRAW=1` plus the
+    new `LARECOMP_DEBUG_DRAW_FS=<fs,...>` filter, iPad vs Mac, `SMM2_SEED=4`, title frame 2386, 2752x2064): Mario's
+    colour layer is drawn the same on both (only a pixel or two of pose difference), and the scene has a Mario-shaped
+    hole until the composite draw with fragment program 72711e4500 (draw ~529 of the frame) lays the character layer
+    over it; the speckle is in the scene right after that. Next: dump the iPad's image after that draw (the run was
+    paused at that point), then the translated shader of 72711e4500 and what it reads (the RG16F depth layer).
     It's not how he looks on the console. Compare the same frame with Ryujinx; suspects are his shading or AO
     pass and texture or sampler state on the iPad's GPU. The Vulkan NaN blur at his eyes (line 98) may be related.
     Checked 2026-10-21: on the Mac, Mario on the 3D World title is smooth at render scale 1.0 and at 1.43 (the
