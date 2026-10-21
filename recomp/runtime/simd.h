@@ -5,7 +5,9 @@
 // for arithmetic / conversions / FRINTX/I, saturating FP->int conversions, fused multiply-add, ARM estimate
 // tables. Not modelled: FPSR cumulative exception bits and QC, FPCR trap enables, FP16 arithmetic (ARMv8.2).
 // FPCR.AHP is honoured by the half-precision conversions. Host assumptions: IEEE binary32/64, MXCSR (or the
-// host FPU) in round-to-nearest with denormals enabled; fma must be correctly rounded (build x86 with -mfma).
+// host FPU) in round-to-nearest with denormals enabled; fma must be correctly rounded: x86-64-v3 builds use hardware
+// vfmadd (-mfma via -march=x86-64-v3), while the x86-64-v2 baseline lowers __builtin_elementwise_fma to correctly-rounded
+// fmaf/fma libcalls (slower, same results).
 #pragma once
 #include <fenv.h>
 #include <math.h>

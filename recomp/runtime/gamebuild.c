@@ -13,6 +13,9 @@
 #include "paths.h"
 #include "platform.h"
 #include "rt.h"
+#if defined(__x86_64__) || defined(__i386__)
+#include "platform/x86_cpu.h"
+#endif
 
 // From the Makefile: the flags the game code is compiled and linked with (as `make` builds it in a source checkout)
 #ifndef GAMELIB_CFLAGS
@@ -272,10 +275,48 @@ static void add_unit(Units *us, const char *src, const char *work, const char *s
 
 // The flags the game code was built with (GAMELIB_CFLAGS, part of its id). zig cc reads -march=<cpu> with its own CPU
 // names (x86_64_v3) and takes "-<feature>" off the end, so x86-64-v3 would be CPU "x86": the same CPU as -mcpu there.
+//
+// x86-64 dispatch (method 1): GAMELIB_CFLAGS carries the v2 baseline (Makefile GENARCH), and the build upgrades to
+// v3 where this CPU has AVX2/FMA/BMI2, or downgrades an explicit v3 back to v2 where it doesn't. Modern machines lose
+// nothing; pre-Haswell machines (back to Nehalem, x86-64-v2) still run: without hardware FMA the lifted code's
+// __builtin_elementwise_fma lowers to correctly-rounded fmaf/fma libcalls (slower), with it to vfmadd.
+// LARECOMP_GENARCH=<flag> forces an arch flag verbatim (e.g. -march=x86-64-v2), for testing.
+static bool gamebuild_cpu_has_v3(void) {
+#if defined(__x86_64__)
+    return x86_cpu_has_v3();
+#else
+    return false;
+#endif
+}
+
+static void add_arch(Args *a, const Tools *t, bool want_v3) {
+    if (t->zig) add(a, want_v3 ? "-mcpu=x86_64_v3" : "-mcpu=x86_64_v2");
+    else add(a, want_v3 ? "-march=x86-64-v3" : "-march=x86-64-v2");
+}
+
 static void add_cflags(Args *a, const Tools *t) {
+    bool has_v3 = gamebuild_cpu_has_v3();
+    const char *forced = getenv("LARECOMP_GENARCH");
     char buf[1024];
     snprintf(buf, sizeof buf, "%s", GAMELIB_CFLAGS);
     for (char *f = strtok(buf, " "); f; f = strtok(NULL, " ")) {
+        bool is_arch = (!strncmp(f, "-march=", 7) || !strncmp(f, "-mcpu=", 6)) &&
+                       (strstr(f, "x86-64-v") || strstr(f, "x86_64_v"));
+        if (is_arch) {
+            if (forced && *forced) {
+                if (t->zig && !strncmp(forced, "-march=", 7)) {
+                    char cpu[128];
+                    snprintf(cpu, sizeof cpu, "-mcpu=%s", forced + 7);
+                    for (char *c = cpu + 6; *c; c++) if (*c == '-') *c = '_';
+                    add(a, cpu);
+                } else {
+                    add(a, forced);
+                }
+            } else {
+                add_arch(a, t, has_v3);
+            }
+            continue;
+        }
         if (t->zig && !strncmp(f, "-march=", 7)) {
             char cpu[128];
             snprintf(cpu, sizeof cpu, "-mcpu=%s", f + 7);
@@ -335,6 +376,11 @@ bool gamebuild_run(const char *game_dir, const GameBuildOpts *o, char *why, size
     }
     LOG("[gamebuild] generator %s%s%s, compiler %s%s, %d jobs\n", t.gen, t.gen_script[0] ? " " : "", t.gen_script,
         t.cc, t.zig ? " cc" : "", o->jobs);
+#if defined(__x86_64__)
+    { const char *forced_arch = getenv("LARECOMP_GENARCH");
+      LOG("[gamebuild] x86-64 game code: %s (%s)\n", gamebuild_cpu_has_v3() ? "x86-64-v3 (AVX2/FMA/BMI2)" : "x86-64-v2 baseline",
+          forced_arch && *forced_arch ? "LARECOMP_GENARCH override" : "detected"); }
+#endif
 
     // 1. the generator, both modules at once; their finished files are compiled while it goes on
     Gen gens[2] = {{.name = "main"}, {.name = "sdk"}};

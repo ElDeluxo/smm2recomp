@@ -140,11 +140,12 @@ static void log_to_file_without_console(void) {
     _putenv("LASRECOMP_LOG_APPEND=1");
 }
 
-// The recompiled game code is built for x86-64-v3 (Makefile GENARCH: AVX2, FMA, BMI2): say so instead of crashing
-// with an illegal instruction on an older CPU.
+// The recompiled game code is built for x86-64-v2 at least (Makefile GENARCH baseline; gamebuild.c upgrades to
+// x86-64-v3 where the CPU has AVX2/FMA/BMI2): say so instead of crashing with an illegal instruction on an older CPU.
 static void require_cpu(void) {
-    if (x86_cpu_has_v3()) return;
-    MessageBoxA(NULL, GAME_TITLE " needs a CPU with AVX2 (Intel Haswell / 2013 or newer, AMD Excavator / Zen or newer).",
+    if (x86_cpu_has_v2()) return;
+    MessageBoxA(NULL, GAME_TITLE " needs a CPU with x86-64-v2 (Intel Nehalem / 2008 or newer, AMD Bulldozer or newer). "
+                 "AVX2 (Haswell / Zen or newer) is used when available, but not required.",
                 GAME_TITLE, MB_ICONERROR | MB_OK);
     ExitProcess(1);
 }

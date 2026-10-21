@@ -306,8 +306,8 @@ def main():
     ap.add_argument('--no-validity', action='store_true', help='skip the full validity enumeration')
     ap.add_argument('--filter', help='only encodings with (w & MASK) == VAL, as VAL/MASK in hex')
     ap.add_argument('--show', type=int, default=40)
-    ap.add_argument('--cflags', default='-march=x86-64-v3' if platform.machine().lower() in ('amd64', 'x86_64') else '',
-                    help='extra compiler flags for the lifted tests')
+    ap.add_argument('--cflags', default='-march=x86-64-v2' if platform.machine().lower() in ('amd64', 'x86_64') else '',
+                    help='extra compiler flags for the lifted tests (baseline; pass -march=x86-64-v3 to test the AVX2 upgrade path)')
     args = ap.parse_args()
     r = random.Random(args.seed)
     t0 = time.time()

@@ -58,7 +58,7 @@ button-glyph font (a desktop font such as DejaVu Sans or Liberation Sans is no s
 
 ## Building (Linux)
 
-Linux runs on Vulkan: x86-64 (with AVX2: Intel Haswell / AMD Zen or newer) or arm64, a Vulkan 1.3 driver (Mesa
+Linux runs on Vulkan: x86-64 (x86-64-v2 baseline, x86-64-v3/AVX2 used when available: Intel Haswell / AMD Zen or newer) or arm64, a Vulkan 1.3 driver (Mesa
 RADV / ANV / NVK, NVIDIA's; Mesa's software lavapipe works, slowly), SDL3 3.2 or newer, the Vulkan loader and shaderc.
 The game code is portable C: on arm64 it is the same generated code as macOS (`generated/smm2`, FP/SIMD as inline
 asm), on x86-64 the portable-C lowering (`generated/smm2-c`, `--simd c`).
