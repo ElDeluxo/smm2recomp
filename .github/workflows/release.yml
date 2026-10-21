@@ -33,7 +33,13 @@ jobs:
           apt-get update
           apt-get install -y --no-install-recommends ca-certificates curl git make zip unzip zstd xz-utils python3 python3-pip \
             libsdl3-dev libvulkan-dev libshaderc-dev libvulkan-memory-allocator-dev \
-            libsdl3-dev:arm64 libvulkan-dev:arm64 libshaderc1:arm64
+            libsdl3-dev:arm64 libvulkan-dev:arm64 libshaderc1:arm64 gcc libc6-dev
+      # Rust, for the course server inside the packages (core/crates/embed: Course World, Endless and 100 Mario
+      # work without any setup); core/rust-toolchain.toml picks the version
+      - name: Rust
+        run: |
+          curl --proto '=https' -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - uses: actions/checkout@v4
       - name: zig and the cross-build dependencies
         working-directory: recomp
@@ -42,6 +48,12 @@ jobs:
           tools/fetch_deps.sh windows-x86_64
           tools/fetch_deps.sh linux-x86_64
           tools/fetch_deps.sh linux-aarch64
+      - name: The course server for each target (cargo, C parts with zig)
+        working-directory: recomp
+        run: |
+          make TARGET=windows-x86_64 GAME=smm2 embed-server
+          make TARGET=linux-x86_64 GAME=smm2 embed-server
+          make TARGET=linux-aarch64 GAME=smm2 embed-server
       - name: Windows x86-64
         working-directory: recomp
         run: make -j"$(nproc)" TARGET=windows-x86_64 GAME=smm2 DEPS="$PWD/build/deps-windows-x86_64" RECOMP_VERSION="${GITHUB_REF_NAME}" package
@@ -90,8 +102,11 @@ jobs:
         working-directory: recomp
         env:
           RECOMP_MACOS_IDENTITY: ${{ secrets.MACOS_IDENTITY }}
+          # (the course server inside the app: Course World, Endless and 100 Mario reach it without any setup)
+          MACOSX_DEPLOYMENT_TARGET: '15.0'
         run: |
           tools/fetch_zig.sh
+          make GAME=smm2 embed-server
           make GAME=smm2 RECOMP_VERSION="${GITHUB_REF_NAME}" app-macos
       - uses: actions/upload-artifact@v4
         with:

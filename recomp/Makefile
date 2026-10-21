@@ -237,13 +237,17 @@ MBEDTLS  := third_party/mbedtls
 MBEDTLS_FLAGS := -I$(MBEDTLS)/include -Iruntime/net -DMBEDTLS_USER_CONFIG_FILE='"mbedtls_user_config.h"'
 MBEDTLS_OBJ := $(patsubst $(MBEDTLS)/library/%.c,$(B)/mbedtls/%.o,$(wildcard $(MBEDTLS)/library/*.c))
 # The course server inside the app (core/crates/embed, runtime/net/embed_server.h): linked when its library is built
-# (`make embed-server`: cargo) or EMBED_SERVER=1, Apple builds for now; a build never needs Rust otherwise.
+# (`make embed-server`: cargo; Windows / Linux cross builds compile its C parts with zig, tools/zigcc.sh) or
+# EMBED_SERVER=1; a build never needs Rust otherwise.
 EMBED_TRIPLE := $(if $(filter ios,$(PLATFORM)),aarch64-apple-ios,$(if $(filter iossim,$(PLATFORM)),aarch64-apple-ios-sim,$(if $(filter macos,$(PLATFORM)),aarch64-apple-darwin)))
+EMBED_TRIPLE := $(or $(EMBED_TRIPLE),$(if $(filter windows,$(PLATFORM)),x86_64-pc-windows-gnu),$(if $(filter linux,$(PLATFORM)),$(ARCH)-unknown-linux-gnu))
 EMBED_LIB := $(if $(EMBED_TRIPLE),../core/target/$(EMBED_TRIPLE)/release/libmmk_embed.a)
 EMBED_SERVER ?= $(if $(wildcard $(EMBED_LIB)),1,0)
+# (what Rust's standard library needs from the system there)
+EMBED_SYSLIBS := $(if $(filter windows,$(PLATFORM)),-lws2_32 -luserenv -lbcrypt -lntdll -ladvapi32,$(if $(filter linux,$(PLATFORM)),-lpthread -ldl -lm))
 ifeq ($(EMBED_SERVER),1)
 OSFLAGS  += -DRECOMP_EMBED_SERVER
-LDFLAGS  += $(EMBED_LIB)
+LDFLAGS  += $(EMBED_LIB) $(EMBED_SYSLIBS)
 endif
 
 RTFLAGS  := -O2 -g -fno-strict-aliasing -Wall -Wno-unused-function -Iruntime -Iruntime/nvn $(DEPINC) $(OSFLAGS) $(GAMEDEFS)
@@ -400,10 +404,13 @@ app-macos:
 	    RECOMP_VERSION=$(RECOMP_VERSION) build/$(GAME)-app/$(GAME_ID)recomp
 	RECOMP_VERSION=$(RECOMP_VERSION) MACOS_MIN=$(APP_MACOS_MIN) tools/bundle_macos.sh build/$(GAME)-app/$(GAME_ID)recomp
 
-# The course server inside the app (core/crates/embed) for this target, with cargo
+# The course server inside the app (core/crates/embed) for this target, with cargo (no debug info: it would add ~80 MB
+# to each package)
+EMBED_ENV := $(if $(ZTARGET),ZIG="$(abspath $(ZIG))" ZIGCC_TARGET=$(ZTARGET) \
+             CC_$(subst -,_,$(EMBED_TRIPLE))="$(CURDIR)/tools/zigcc.sh" AR_$(subst -,_,$(EMBED_TRIPLE))="$(CURDIR)/tools/zigar.sh")
 embed-server:
-	$(if $(EMBED_TRIPLE),,$(error embed-server: macOS / iOS builds only for now))
-	cd ../core && cargo build -p mmk-embed --release --target $(EMBED_TRIPLE)
+	$(if $(EMBED_TRIPLE),,$(error embed-server: no Rust target for $(TARGET)))
+	cd ../core && rustup target add $(EMBED_TRIPLE) >/dev/null 2>&1; $(EMBED_ENV) CARGO_PROFILE_RELEASE_DEBUG=0 cargo build -p mmk-embed --release --target $(EMBED_TRIPLE)
 
 # Run from the data folder (saves, settings and shader caches go there); RUN_ARGS / env vars as the runtime reads them
 run: all
