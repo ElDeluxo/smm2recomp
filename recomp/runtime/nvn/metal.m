@@ -415,6 +415,34 @@ int renderer_texpatch_of(NvnTexture *t) {
     return b && b->tp > 0 ? b->tp - 1 : -1;
 }
 
+// (test, LARECOMP_ZERO_TEXTURES=1) a new colour texture cleared to zero, every level and slice: Metal leaves a new
+// texture's contents undefined (zeros on the Mac in practice, leftovers on iOS), where NVN's come from the game's
+// memory pool
+static void zero_texture(id<MTLTexture> tex, uint32_t nvn_format) {
+    MTLPixelFormat pf = tex.pixelFormat;
+    bool compressed = (pf >= 130 && pf <= 143) || (pf >= 160 && pf <= 240);
+    if (compressed || renderer_format_is_depth(nvn_format) || !queue) return;
+    id<MTLCommandBuffer> cb = [queue commandBuffer];
+    NSUInteger slices = tex.textureType == MTLTextureTypeCube ? 6 : tex.textureType == MTLTextureTypeCubeArray ?
+                        tex.arrayLength * 6 : tex.arrayLength;
+    for (NSUInteger l = 0; l < tex.mipmapLevelCount; l++) {
+        NSUInteger planes = tex.textureType == MTLTextureType3D ? MAX(tex.depth >> l, 1u) : 1;
+        for (NSUInteger sl = 0; sl < slices; sl++)
+            for (NSUInteger z = 0; z < planes; z++) {
+                MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
+                rp.colorAttachments[0].texture = tex;
+                rp.colorAttachments[0].level = l;
+                rp.colorAttachments[0].slice = sl;
+                rp.colorAttachments[0].depthPlane = z;
+                rp.colorAttachments[0].loadAction = MTLLoadActionClear;
+                rp.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0);
+                rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+                [[cb renderCommandEncoderWithDescriptor:rp] endEncoding];
+            }
+    }
+    [cb commit];
+}
+
 static void create_backend_texture(NvnTexture *t, TexBackend *b) {
     MtlFormat mf = mtl_format(t->format);
     MTLTextureDescriptor *d = [MTLTextureDescriptor new];
@@ -458,6 +486,9 @@ static void create_backend_texture(NvnTexture *t, TexBackend *b) {
         tex = [dev newTextureWithDescriptor:d];
     }
     tex.label = [NSString stringWithFormat:@"%s fmt%#x", t->label[0] ? t->label : "tex", t->format];
+    static int zero = -1;
+    if (zero < 0) zero = getenv("LARECOMP_ZERO_TEXTURES") && atoi(getenv("LARECOMP_ZERO_TEXTURES"));
+    if (zero) zero_texture(tex, t->format);
     b->tex = tex;
     CFBridgingRetain(tex);
     g_tex_live++;

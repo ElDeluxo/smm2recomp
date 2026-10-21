@@ -342,8 +342,14 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     Checked 2026-10-21: on the Mac, Mario on the 3D World title is smooth at render scale 1.0 and at 1.43 (the
     iPad's). The iPad uses the GPU's own BC textures (no software decode in its log). MetalFX ran there only on
     frame 0 (1920x1080 -> 2752x1548), before the 1.43 render scale applied. So the grain is not those, and it is
-    something about the iPad. Next: the same frame on the iPad (`recomp-test.env` in the app's Documents now sets
-    test variables there: `SMM2_SEED=4`, `LARECOMP_HOST_INPUT=2386:shot:...`), diffed against the Mac's.
+    something about the iPad. Reproduced 2026-10-21 on the iPad itself (v0.3.0, `recomp-test.env`: `SMM2_SEED=4`,
+    `LARECOMP_HOST_INPUT=2386:shot:...`; the app's Documents needs a `build/` folder): Mario on the 3D World title
+    is covered in cyan / blue speckle, and the same frame on the Mac is clean. The scenery and the Koopa match. The
+    speckle pattern changes from run to run. Ruled out on the iPad: BC decoding (`RECOMP_BC_SOFT=1`: same
+    speckle) and Maxwell's FMZ multiply (now translated as the hardware does it, 0 x anything = 0; same speckle).
+    Next test, built but not yet run (the iPad dropped the connection): `LARECOMP_ZERO_TEXTURES=1` clears every new
+    colour texture to zero, every mip level and slice. Metal leaves new textures undefined: zeros on the Mac, leftovers
+    on iOS. If the speckle goes, a texture the game expects zeroed (e.g. unrendered probe mips) is the cause.
   - ⬜ The water in the background looks a bit too shiny. The 3D World liquid surfaces already differ most from
     Ryujinx (castle lava 2.28 % px > 24), so check specular and reflection on liquids.
 
