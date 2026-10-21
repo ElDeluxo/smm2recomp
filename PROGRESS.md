@@ -336,8 +336,14 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
   (2026-10-21): a silent hactool failure now says "hactool stopped without a message", with the exit code
   decoded (access violation, missing DLL and so on), and no longer blames the keys; the exit code goes to the
   setup log. ⏳ Needs the owner to run hactool once by hand on Windows, or the new message from v0.2.1.
-- ⬜ **3D World rendering on the iPad (owner's screenshot, 2026-10-20; 3D World ground course, Metal):**
-  - ⬜ Mario's model has a grainy, speckled look across his face and overalls, like noise or broken dithering.
+- 🔄 **3D World rendering on the iPad (owner's screenshot, 2026-10-20; 3D World ground course, Metal):**
+  - 🔄 Mario's model has a grainy, speckled look across his face and overalls, like noise or broken dithering.
+    **Found and fixed 2026-10-22 (Mac; iPad still to see):** reproduced on the Mac in windows whose render scale
+    leaves the game's targets at fractional sizes: spots at 1.075, 1.43 and 1.45, none at 1.2, 1.25, 1.4, 1.5,
+    1.6, 1.8, 2 (the iPad renders at 1.43). The earlier "smooth at 1.43 on the Mac" check had the image scaled down
+    to a small window, which hid them. The automatic render scale now goes down to a multiple of 0.2 on each axis
+    (`runtime/nvn/output_scale.c`), so 1920x1080, 1600x900 and their halves and quarters all land on whole pixels;
+    the same windows are then clean. Explicit test scales (`LARECOMP_SCALE`) stay as given.
     It's not how he looks on the console. Compare the same frame with Ryujinx; suspects are his shading or AO
     pass and texture or sampler state on the iPad's GPU. The Vulkan NaN blur at his eyes (line 98) may be related.
     Checked 2026-10-21: on the Mac, Mario on the 3D World title is smooth at render scale 1.0 and at 1.43 (the

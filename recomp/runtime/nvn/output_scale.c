@@ -81,6 +81,15 @@ void output_scale(double dw, double dh, bool reshape_allowed, double now, double
     double sx = h * shape, sy = h;
     double cap = fmin(MAX_TEX / (1920.0 * sx), MAX_TEX / (1080.0 * sy));
     if (cap < 1.0) { sx *= cap; sy *= cap; }
+    // Chosen scales (not a forced test scale) go down to a multiple of 0.2 on each axis: then the game's render
+    // targets (1920x1080, 1600x900 and their halves and quarters) all scale to whole pixels. At scales like 1.075 or
+    // 1.43 they don't, the rounded allocations drift apart by a fraction of a pixel, and 3D World's characters, drawn
+    // in their own layer and laid over the course by depth, showed the course through them in spots (the iPad's
+    // 1.43 x 1.91, owner 2026-10-21; seen on the Mac at 1.075, 1.43 and 1.45; clean at 1.2, 1.4, 1.6, 1.8, 2)
+    if (forced <= 0) {
+        sx = fmax(0.2, floor(sx * 5.0 + 1e-6) / 5.0);
+        sy = fmax(0.2, floor(sy * 5.0 + 1e-6) / 5.0);
+    }
     o->sx = sx; o->sy = sy; o->shape = shape;
     // where the image goes in the window: fills it when reshaped, else a fitted 16:9 box
     if (reshape) { o->vw = dw; o->vh = dh; }
