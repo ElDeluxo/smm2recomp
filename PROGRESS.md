@@ -409,9 +409,18 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     with a scripted player 2 the count reads 2 in the course, but only Mario spawns: the second player needs more
     than the count (likely the per-player controller / character slots Play Together fills in, +0x330). Next:
     decompile where the play scene creates players from the set-up's list.
-  - Still the owner's to pick (pending): whose form the ending shows; whether the lives card shows each player.
-    Default until then: player 1's.
-- 🔄 **iPhone: on-screen L and ZL- 🔄 **iPhone: on-screen L and ZL sit behind the notch** (owner, 2026-10-20, iPhone 12 mini; built 2026-10-21: the
+  - Owner, 2026-10-22: the 100 Mario ending shows all the players in the rescue scene if that's reasonable, else
+    whoever cleared the last course; the lives card shows each player ("give that a shot").
+- ⬜ **OpenCourse World as a course source** (owner, 2026-10-22): https://opencourse.world/ selectable as one of the
+  course server options (next to our own server and TGRCode, in the Mods tab's course source setting). Looked at
+  2026-10-22: OCW is a replacement online service for SMM2 3.0.2 / 3.0.3 on Switch (Atmosphere) and Ryujinx. The
+  player signs in (Discord etc.), accepts its EULA, and downloads a mod package plus a personal auth token for the SD
+  card; the game's own online code then talks to OCW's server. Its web API (server.opencourse.world/api/...) is
+  public for course metadata (latest, uncleared, makers, Ninji leaderboards, one-screen thumbnails) but has no web
+  download of course data. So the way in is the game's own network stack (backend local-nex, the Nextendo groundwork)
+  pointed at OCW with the player's token, not a TGRCode-style HTTP source. Needs the owner's OCW account to build and
+  test; not for v0.4.0.
+- 🔄 **iPhone: on-screen L and ZL sit behind the notch** (owner, 2026-10-20, iPhone 12 mini; built 2026-10-21: the
   controls are offset by the window's left / right safe-area insets, `SDL_GetWindowSafeArea`, updated on safe-area
   and resize events and on touches; not yet seen on the iPhone): the touch
   controls (`recomp/runtime/ui/touchpad.mm`) don't keep clear of the safe area, so the L / ZL buttons are partly
