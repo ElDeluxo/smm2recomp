@@ -461,8 +461,9 @@ Setup failures first, since they block new players:
 - ⬜ **Thumbnails missing in some cases**: find which (server course, TGRCode, missing picture, format) and fix.
 
 ### Next features (owner's order, 2026-10-22)
-1. 🔄 Co-op in Endless / 100 Mario (see the entry under Future): Mods-tab switch built; spawn, controllers and the
-   shared-lives rule checked in game; left: a clear by either player, the ending with all players, a real second pad
+1. ✅ Co-op in Endless / 100 Mario (see the entry under Future): Mods-tab switch; spawn, own controllers, shared lives
+   and a clear by either player (then Next and the map) checked in game with a scripted player 2. The ending stays
+   Mario's (SMM1's scene has only Mario's models). Not yet tried with a real second controller (owner)
 2. ✅ Lanky Mario (SMM1's Weird Mushroom) as an SMM1 mod switch, off by default (2026-10-22, checked in game, `mods/lanky.c`; docs/mods.md,
    DECISIONS 2026-10-22): Slim Mario in the SMB1 row's slot 8 (models made from the SMM1 dump, Luigi recoloured,
    Toad / Toadette in Mario's), +0.5 on computed ground jumps, SMM1's three sounds by SLink key, a hit gives small,
@@ -473,9 +474,12 @@ Setup failures first, since they block new players:
      100 Mario / Endless runs. The costume trigger comes with item 4
 3. ✅ Mid-air shell jumps (finished 2026-10-22: the test course shows the SMM1 jump on, SMM2 off)
 4. ⬜ Mystery Mushroom costumes: a hit removes the costume, the taunt, the reward window, more than one per course
-5. 🔄 Edit any course: ✅ the d-pad onto Make, ✅ the upload credit, ✅ Edit on the course card (Download again);
+5. ✅ Edit any course: ✅ the d-pad onto Make, ✅ the upload credit, ✅ Edit on the course card (Download again);
    ⬜ the card's "Edit" text, ⬜ Endless / 100 Mario "save for later" (design in mods.md)
-6. ⬜ Course World thumbnails: check whether they already work; fix only if not
+6. ✅ Course World thumbnails (2026-10-22): they were blank when TGRCode was busy (it allows about one request per
+   5-7 s): the server fetched in reverse order, slept through waiting clients and dropped a busy picture for good.
+   Now the first pictures of Hot / New / Popular are fetched ahead, the page's and the next page's while browsing,
+   and a busy one is asked for again; Hot = Popular's latest uploads first; live lists from TGRCode (`lists.rs`)
 7. ⬜ Super Worlds
 8. ✅ Disable the buttons that don't work yet (2026-10-22, checked in game): every Course World entry works or answers
    the way SMM2 does when a service is off. Ninji Speedruns showed "A communication error occurred": its two
