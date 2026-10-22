@@ -57,11 +57,10 @@ HOOK_POINTS = {
     # Co-op (hooks.c, groundwork): the course set-up's player count when it isn't the Coursebot's Play Together (str w9 = 1,
     # [x19, #0x8]!); Endless and 100 Mario courses get one player there
     0x16dffb4: (0xB8008E69, 'co-op: the one-player store'),
-    # Co-op: the player spawn (0x7100e581d0, two copies: a course's start and another entrance) loads the play mode
-    # ([*0x2a6bcd0 + 0xe0]): 1 takes the course set-up's player count, 2 the online session's, anything else
-    # (Endless) one player
-    0xe59494: (0xB940E108, 'co-op: the player spawn\'s mode load (course start)'),
-    0xe59614: (0xB940E16B, 'co-op: the player spawn\'s mode load'),
+    # Co-op: the course scene's play mode ([*0x2a6bcd0 + 0xe0], stored by the player spawn 0x7100e581d0): 0 one player
+    # (Endless, the title course, ...), 1 local multiplayer (Play Together: the set-up's player count, each player on
+    # their own controller), 2 online
+    0xe58328: (0xB900E268, 'co-op: the play mode store'),
     # Co-op: the controllers' poll (sead's Npad device, 0x7100263d90) reads Npads 0 .. [x0 + 0x28] (and the handheld one);
     # Endless leaves it at player 1's
     0x263db0: (0xB9402808, 'co-op: the controller poll\'s count load'),

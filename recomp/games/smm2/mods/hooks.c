@@ -62,19 +62,14 @@ void smm2_mod_after(Cpu *c, uint64_t addr) {
         }
         return;
     }
-    if (addr == MAIN_ADDR(0xe59494) || addr == MAIN_ADDR(0xe59614)) {  // co-op: the player spawn's play mode
+    if (addr == MAIN_ADDR(0xe58328)) {  // co-op: the course's play mode, stored at [x19 + 0xe0] (w8)
         static const char *n = (const char *)1;
         if (n == (const char *)1) n = getenv("RECOMP_COOP_TEST");
-        if (n) {
-            int r = addr == MAIN_ADDR(0xe59494) ? 8 : 11;
-            uint64_t cnt = g64(MAIN_ADDR(0x2a66fb8)), ses = g64(MAIN_ADDR(0x2c01cf0));
-            LOG("[mod] co-op test: spawn (%s) mode %u, set-up count %u at %#llx, session %u\n",
-                r == 8 ? "course start" : "entrance", (uint32_t)c->x[r], cnt ? g32(cnt + 0x40) : 0,
-                (unsigned long long)(cnt ? cnt + 0x40 : 0), ses ? g32(ses + 0x98) : 0);
-            if ((uint32_t)c->x[r] != 1 && (uint32_t)c->x[r] != 2) {
-                c->x[r] = 1;
-                if (cnt) s32(cnt + 0x40, (uint32_t)atoi(n));
-            }
+        if (n && (uint32_t)c->x[8] == 0) {
+            uint64_t cnt = g64(MAIN_ADDR(0x2a66fb8));
+            LOG("[mod] co-op test: play mode 0 -> 1 (local multiplayer), %d players\n", atoi(n));
+            s32(c->x[19] + 0xe0, 1);
+            if (cnt) s32(cnt + 0x40, (uint32_t)atoi(n));
         }
         return;
     }
