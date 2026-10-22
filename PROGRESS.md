@@ -427,8 +427,10 @@ Setup failures first, since they block new players:
   World's music, so on the 16-dot maps (Normal, Expert) the run's Telop and MoveKuribo never started: no banner,
   no Goombas, Peach already in Bowser's castle. Now 160, with a log line if it ever fills. Checked in game for all
   four difficulties (select -> New Game, music bounce on): banner, Goombas carrying Peach, Peach on the castle.
-  Offline it had always played (no music there, so no bounce). Left: Super Expert's banner text runs past the
-  window's edges ("... (yet again)!" loses its "!"); check how SMM1 fits it. Not compared in Cemu this round.
+  Offline it had always played (no music there, so no bounce). Super Expert's banner text ran past the window
+  (680 wide in a 600 box): SMM1 draws message text in the system font (`FontInfo.byml`: MessageFont is CafeStd),
+  narrower than our bitmap stand-in, so a line wider than its box is now narrowed to fit (`lyt_player.c`). Not
+  compared in Cemu this round.
 - ✅ **100 Mario ending, each difficulty** (owner, 2026-10-22: "Normal didn't show the Peach animation; Easy did"):
   Peach's and Toad's looping wait pattern stopped on its last key after one loop (the rescue draws it on the
   scene's clock), so NSMBU / 3D World Peach froze after 39 frames, SMW's blink after its first, while Easy's Toad

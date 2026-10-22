@@ -747,6 +747,12 @@ static void text_emit(const LFont *font, const LTxt *t, const uint32_t *s, int n
             if (widths[ln] > block_w) block_w = widths[ln];
             ln++, st = i + 1;
         }
+    // SMM1 draws its message text in the system font (font/FontInfo.byml: MessageFont is CafeStd), which runs narrower
+    // than the bitmap font drawn here: a line wider than its box is narrowed to fit, as it fits there (the Super
+    // Expert map's "Princess Peach is in trouble (yet again)!": 680 in a 600 box) [inf]
+    float fit = block_w > w && w > 0 ? w / block_w : 1;
+    for (int ln = 0; ln < nlines; ln++) widths[ln] *= fit;
+    block_w *= fit;
     float block_h = nlines * line_h - t->lspace;
     float bx = l + (w - block_w) * factor(t->pos), by = top - (h - block_h) * factor(t->pos >> 2);
     float lf = t->lalign == 1 ? 0 : t->lalign == 2 ? 0.5f : t->lalign == 3 ? 1 : factor(t->pos);
@@ -769,12 +775,12 @@ static void text_emit(const LFont *font, const LTxt *t, const uint32_t *s, int n
                 uint32_t ch = s[i];
                 if (is_control(ch)) continue;
                 const LFont *gf = for_char(font, ch);
-                float sx = t->fsize[0] / (gf->width ? gf->width : 1), gsy = t->fsize[1] / (gf->height ? gf->height : 1);
+                float sx = t->fsize[0] * fit / (gf->width ? gf->width : 1), gsy = t->fsize[1] / (gf->height ? gf->height : 1);
                 uint16_t g = glyph_of(gf, ch);
                 LCharW cw = cw_of(gf, g);
                 float x0 = pen + cw.left * sx, x1 = x0 + cw.glyph_w * sx;
                 float y0 = line_top - ascent + gf->baseline * gsy, y1 = y0 - gf->cell_h * gsy;
-                pen += cw.char_w * sx + t->cspace;
+                pen += cw.char_w * sx + t->cspace * fit;
                 if (ch == ' ' || ch == 0x3000 || cw.glyph_w == 0) continue;
                 int per_row = gf->cells_row ? gf->cells_row : 1, per_sheet = per_row * (gf->cells_col ? gf->cells_col : 1);
                 int sheet = g / per_sheet, local = g % per_sheet;
