@@ -29,7 +29,11 @@ static uint32_t device_integer(uint32_t which) {
         [40] = 1, [41] = 1, [42] = 1,  // min/max filtering, stencil8, ASTC
         [43] = 0x40000, [44] = 15, [45] = 2048,
         [46] = 1, [47] = 5, [48] = 1, [49] = 15,
-        [50] = 256, [51] = 1, [52] = 0, [53] = 0, [54] = 0, [55] = 256, [56] = 1, [57] = 0x1000,
+        [50] = 256, [51] = 1, [52] = 0, [53] = 0, [54] = 0, [55] = 256, [56] = 1,
+        // 57: a linear texture's row alignment (nn::gfx asks before each nvnTextureBuilderSetStride, sdk+0x2e9be4).
+        // 32 as deko3d's DK_IMAGE_LINEAR_STRIDE_ALIGNMENT; it was 0x1000, which gave SMM2's comment drawing canvas
+        // (320x180 RGBA8) a 4096-byte stride while the game writes its rows 1280 bytes apart.
+        [57] = 32,
         [58] = 1, [59] = 1, [60] = 1, [61] = 1, [62] = 1, [63] = 1, [64] = 1,
     };
     return which < sizeof v / sizeof *v ? v[which] : 0;
@@ -359,7 +363,7 @@ static void builder_layout(uint64_t b, TexLayout *t) {
     }
 }
 
-static bool is_linear(uint64_t b) { return (G(uint32_t, b, 8) & 0x10) || G(uint32_t, b, 0xC) == 10; }
+static bool is_linear(uint64_t b) { return nvn_texture_pitch(G(uint32_t, b, 8)) || G(uint32_t, b, 0xC) == 10; }
 
 static uint64_t builder_storage_size(uint64_t b) {
     if (G(uint32_t, b, 0xC) == 10) {  // buffer texture
@@ -431,7 +435,7 @@ NVN(nvnTextureGetStride) { RET(TEX->stride); }
 NVN(nvnTextureGetTextureAddress) { RET(TEX->addr); }
 NVN(nvnTextureGetMemoryPool) { RET(0); }
 NVN(nvnTextureGetMemoryOffset) { RET(TEX->pool_offset); }
-NVN(nvnTextureGetStorageSize) { RET(tegra_total_size(&TEX->layout)); }
+NVN(nvnTextureGetStorageSize) { RET(nvn_texture_storage_size(TEX)); }
 NVN(nvnTextureGetDebugID) { RET(TEX->debug_id); }
 NVN(nvnTextureGetViewOffset) { RET(0); }
 NVN(nvnTextureGetStorageClass) { RET(0); }
@@ -468,7 +472,12 @@ NVN(nvnTextureWriteTexels) {
     NvnTexture *t = HOST(NvnTexture, A(0));
     const int32_t *r = AP(2);  // xoffset, yoffset, zoffset, width, height, depth
     LevelLayout l = tegra_level(&t->layout, 0);
-    if (r && r[0] == 0 && r[1] == 0 && (uint32_t)r[3] == t->width && (uint32_t)r[4] == t->height) {
+    if (r && r[0] == 0 && r[1] == 0 && (uint32_t)r[3] == t->width && (uint32_t)r[4] == t->height && nvn_texture_pitch(t->flags)) {
+        uint64_t row = (uint64_t)l.wb * t->layout.fmt->bpb;  // pitch-linear: rows at the texture's stride
+        for (uint32_t y = 0; y < l.hb && t->stride >= row; y++)
+            memcpy((uint8_t *)(uintptr_t)t->addr + y * t->stride, (const uint8_t *)AP(3) + y * row, row);
+        backend_pool_written(t->addr, nvn_texture_storage_size(t));
+    } else if (r && r[0] == 0 && r[1] == 0 && (uint32_t)r[3] == t->width && (uint32_t)r[4] == t->height) {
         tegra_swizzle(AP(3), (uint8_t *)(uintptr_t)t->addr + l.offset, l.wb, l.hb, r[5] > 0 ? (uint32_t)r[5] : 1,
                       t->layout.fmt->bpb, l.block_height_log2, l.block_depth_log2);
         backend_pool_written(t->addr, tegra_total_size(&t->layout));

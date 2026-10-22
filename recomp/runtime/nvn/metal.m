@@ -547,7 +547,7 @@ static void upload_texture(NvnTexture *t, TexBackend *b, id<MTLBlitCommandEncode
     if (b->uploaded && !b->dynamic && ((g_frame_counter + ((uintptr_t)b >> 6)) & 7)) return;
     const FormatInfo *fi = t->layout.fmt;
     MtlFormat mf = mtl_format(t->format);
-    uint64_t total = tegra_total_size(&t->layout);
+    uint64_t total = nvn_texture_storage_size(t);
     // CPU-written textures (e.g. font glyph caches) change sparsely, so a strided sample can miss
     // updates. Check at most once per frame; textures seen changing get a full hash every frame,
     // the rest a full hash on a rotating ~16 MB/frame budget plus a cheap sample otherwise.
@@ -559,7 +559,7 @@ static void upload_texture(NvnTexture *t, TexBackend *b, id<MTLBlitCommandEncode
     // linear textures are the CPU-written kind (the font glyph cache, 1024x2048 R8, video): checked in full every
     // frame from the start - a strided sample missed newly rasterized glyphs, so characters of new text popped in
     // seconds later (user 2026-10-08: file select "P ease se e t a i e.")
-    if (t->flags & 0x10) b->dynamic = true;
+    if (nvn_texture_pitch(t->flags)) b->dynamic = true;
     if (full_hash_budget_frame != g_frame_counter) { full_hash_budget_frame = g_frame_counter; full_hash_budget = 4 << 20; }
     const uint8_t *mem = (const uint8_t *)(uintptr_t)t->addr;
     static int always_full = -1;
@@ -585,7 +585,7 @@ static void upload_texture(NvnTexture *t, TexBackend *b, id<MTLBlitCommandEncode
     if (!blit) { own_cb = [queue commandBuffer]; blit = [own_cb blitCommandEncoder]; }
     uint32_t layers = t->layout.layers ? t->layout.layers : 1;
     uint64_t layer_size = tegra_layer_size(&t->layout);
-    bool linear = (t->flags & 0x10) != 0;
+    bool linear = nvn_texture_pitch(t->flags);
     for (uint32_t layer = 0; layer < layers; layer++) {
         for (uint32_t lv = 0; lv < t->layout.levels; lv++) {
             LevelLayout l = tegra_level(&t->layout, lv);
@@ -653,7 +653,7 @@ static void upload_texture(NvnTexture *t, TexBackend *b, id<MTLBlitCommandEncode
 static void first_render_use(NvnTexture *t, TexBackend *b, id<MTLBlitCommandEncoder> blit) {
     if (b->gpu_owned || b->uploaded || b->scalable || !t->addr || t->target == 10 || renderer_format_is_depth(t->format)) return;
     const uint64_t *m = (const uint64_t *)(uintptr_t)t->addr;
-    uint64_t n = tegra_total_size(&t->layout) / 8;
+    uint64_t n = nvn_texture_storage_size(t) / 8;
     bool data = false;
     for (uint64_t i = 0; i < n && !data; i++) data = m[i] != 0;
     if (data) upload_texture(t, b, blit);

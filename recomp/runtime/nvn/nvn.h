@@ -34,6 +34,21 @@ typedef struct NvnTexture {
     char label[64];
 } NvnTexture;
 
+// Pitch-linear storage (rows of `stride` bytes) instead of block-linear: NVN_TEXTURE_FLAGS_LINEAR (0x10), and
+// LINEAR_RENDER_TARGET (0x40), which SMM2's comment drawing canvas has (320x180 RGBA8, stride 4096, written by the
+// CPU: read as block-linear, a drawn line came out as a column of blocks or dashes, and lines that changed few bytes
+// were not noticed at all).
+#define NVN_TEXTURE_FLAGS_PITCH 0x50u
+static inline bool nvn_texture_pitch(uint32_t flags) { return (flags & NVN_TEXTURE_FLAGS_PITCH) != 0; }
+// The bytes a texture's storage spans (pitch-linear: stride x rows of blocks x layers).
+static inline uint64_t nvn_texture_storage_size(const NvnTexture *t) {
+    if (nvn_texture_pitch(t->flags) && t->stride && t->layout.fmt) {
+        uint64_t rows = (t->layout.height + t->layout.fmt->bh - 1) / t->layout.fmt->bh;
+        return t->stride * rows * (t->layout.layers ? t->layout.layers : 1);
+    }
+    return tegra_total_size(&t->layout);
+}
+
 typedef struct {
     uint32_t min_filter, mag_filter, wrap[3], compare_mode, compare_func, reduction;
     float lod_min, lod_max, lod_bias, max_aniso;

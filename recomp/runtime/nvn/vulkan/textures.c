@@ -563,10 +563,10 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
     const FormatInfo *fi = t->layout.fmt;
     if (!fi || !fi->bpb) return;
     VkFmt mf = fmt_of(t->format);
-    uint64_t total = tegra_total_size(&t->layout);
+    uint64_t total = nvn_texture_storage_size(t);
     b->checked_frame = frame;
     prof_tex_checks++;
-    if (t->flags & 0x10) b->dynamic = true;
+    if (nvn_texture_pitch(t->flags)) b->dynamic = true;
     if (full_hash_budget_frame != frame) { full_hash_budget_frame = frame; full_hash_budget = 4 << 20; }
     const uint8_t *mem = (const uint8_t *)(uintptr_t)t->addr;
     static int always_full = -1;
@@ -617,7 +617,7 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
     uint32_t layers = t->layout.layers ? t->layout.layers : 1;
     if (layers > b->layers && b->depth == 1) layers = b->layers;
     uint64_t layer_size = tegra_layer_size(&t->layout);
-    bool linear = (t->flags & 0x10) != 0;
+    bool linear = nvn_texture_pitch(t->flags);
     uint32_t levels = t->layout.levels < b->levels ? t->layout.levels : b->levels;
     for (uint32_t layer = 0; layer < layers; layer++) {
         for (uint32_t lv = 0; lv < levels; lv++) {
@@ -702,7 +702,7 @@ static void first_render_use(NvnTexture *t, TexBackend *b) {
     if (b->gpu_owned || b->uploaded || b->scalable || !t->addr || t->target == 10 || renderer_format_is_depth(t->format)) return;
     if (!t->layout.fmt || !t->layout.fmt->bpb) return;
     const uint64_t *m = (const uint64_t *)(uintptr_t)t->addr;
-    uint64_t n = tegra_total_size(&t->layout) / 8;
+    uint64_t n = nvn_texture_storage_size(t) / 8;
     bool data = false;
     for (uint64_t i = 0; i < n && !data; i++) data = m[i] != 0;
     if (data) upload_texture(t, b);
