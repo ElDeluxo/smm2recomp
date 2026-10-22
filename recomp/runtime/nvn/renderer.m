@@ -1782,6 +1782,10 @@ static void resolve_feedback(Prog *pr) {
                 d.sampleCount = src.sampleCount;
                 d.usage = MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView;
                 d.storageMode = MTLStorageModePrivate;
+                // (a snapshot of a depth buffer is sampled through an ordinary texture2d, as the guest's own depth
+                // textures are: uncompressed like them, metal.m. The compressed default gave 3D World's character
+                // composite slightly-off depths on the iPad M5, so its depth test flipped pixel by pixel: speckle)
+                if (renderer_format_is_depth(t->format)) d.allowGPUOptimizedContents = NO;
                 dst = [dev newTextureWithDescriptor:d];
                 copies[key] = dst;
             }
