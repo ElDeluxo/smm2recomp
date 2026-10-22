@@ -14,9 +14,6 @@
 #include <string.h>
 #include <pthread.h>
 #include <sys/stat.h>
-#if defined(__APPLE__)
-#include <TargetConditionals.h>
-#endif
 
 #include "mod.h"
 #include "../../../runtime/net/netcfg.h"
@@ -42,11 +39,12 @@ void mod_settings_load(void) {
     done = 1;
     snprintf(g_mod.server, sizeof g_mod.server, "http://127.0.0.1:8080");
     snprintf(g_mod.ruleset, sizeof g_mod.ruleset, "hundred");
-    snprintf(g_mod.courses, sizeof g_mod.courses, "server");
-#if defined(__APPLE__) && TARGET_OS_IOS
-    g_mod.hundred = true;  // (iOS: online with courses from TGRCode unless the ini says otherwise)
+    // Online (Course World, Challenge Modes) with courses from TGRCode through the built-in server unless the ini says
+    // otherwise, on every platform: without an smm2mods.ini (a new player's data folder) the desktop builds used to
+    // leave the mod off, and Course World then ran SMM2's own sign-in, asked for a Mii and fell back to the title
+    // (user reports, 2026-10-22; iOS had these defaults already)
+    g_mod.hundred = true;
     snprintf(g_mod.courses, sizeof g_mod.courses, "tgrcode");
-#endif
     g_mod.timeout_ms = 8000;
     FILE *f = fopen(getenv("RECOMP_MOD_INI") ? getenv("RECOMP_MOD_INI") : "smm2mods.ini", "r");
     if (f) {

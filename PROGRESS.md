@@ -427,8 +427,13 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     Homebrew's openjdk@21). Not in v0.4.0.
   - Owner, 2026-10-22: the 100 Mario ending shows all the players in the rescue scene if that's reasonable, else
     whoever cleared the last course; the lives card shows each player ("give that a shot").
-- ⬜ **User report (2026-10-22, platform not stated, maybe Windows): Course World says "make an ID" and goes back;
-  only Story mode is unlocked.** The owner doesn't see it on the iPad. Likely a fresh-save / first-run case rather
+- ✅ **User report (2026-10-22, platform not stated, maybe Windows): Course World says "make an ID" and goes back;
+  only Story mode is unlocked.** Fixed 2026-10-22: reproduced with an empty data folder on the Mac. Without an
+  `smm2mods.ini` the desktop builds left the online mod off (only iOS turned it on), so Course World ran SMM2's own
+  sign-in ("let's create a Mii and a name"), waited and fell back to the title. Every platform now defaults to the
+  online mod with TGRCode courses through the built-in server (`games/smm2/mods/settings.c`); the same empty folder
+  then enters Course World's first-visit pages with the default Mii "Player". A new save offers Story Mode, Course
+  World and Coursebot from the start, so "only Story" was this bounce. Report text: The owner doesn't see it on the iPad. Likely a fresh-save / first-run case rather
   than an OS one: a new player meets SMM2's first-time setup (maker profile / Mii / user creation, Course World's
   ID step), and the am / mii / acc answers may end it at once. Check by reproducing with an empty save / data folder
   first; also check what a new save unlocks. Not started (paused; the owner sets the order).
