@@ -7,6 +7,7 @@
 
 #include "../kernel.h"
 #include "nvn.h"
+#include "shader_ahead.h"
 
 void renderer_sync(void);
 
@@ -649,6 +650,13 @@ static void set_shaders(Cpu *c, int stride) {
         p->stages[stage].const_offset = *(const uint32_t *)(control + 0x700);
         p->stages[stage].const_size = *(const uint32_t *)(control + 0x6FC);
         p->stage_mask |= 1u << stage;
+    }
+    if ((p->stage_mask & 3) == 3) {  // (compile-ahead: a program set now is often drawn much later; shader_ahead.h)
+        const uint8_t *code[3] = {(const uint8_t *)(uintptr_t)p->stages[0].code_addr, (const uint8_t *)(uintptr_t)p->stages[1].code_addr,
+                                  (p->stage_mask & 4) ? (const uint8_t *)(uintptr_t)p->stages[2].code_addr : NULL};
+        size_t cmax[3];
+        for (int i = 0; i < 3; i++) cmax[i] = p->stages[i].const_offset ? p->stages[i].const_offset : 0x10000;
+        shader_ahead_program_set(code, cmax);
     }
     static int stats = -1;
     if (stats < 0) stats = getenv("LARECOMP_PROG_STATS") != NULL;

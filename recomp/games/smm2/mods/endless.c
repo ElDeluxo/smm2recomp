@@ -384,6 +384,8 @@ static void *prefetch_thread(void *arg) {
     if (m && code_to_data_id(json_str(json_get(m, "code"), ""), &id)) {
         const char *maker = json_str(json_get(m, "maker"), "");
         note_course(id, json_str(json_get(m, "name"), ""), maker, style_index(json_str(json_get(m, "style"), "")));
+        extern void smm2_shader_hint_course(const char *style, int theme_main, int theme_sub);  // (shader_rank.c)
+        smm2_shader_hint_course(json_str(json_get(m, "style"), ""), (int)json_num(json_get(m, "theme"), 0), -1);
         pthread_mutex_lock(&state_lock);
         if (!runs[d].started) runs[d].current = id;
         pthread_mutex_unlock(&state_lock);
@@ -816,6 +818,8 @@ WRAPPER(get_course_file, 0x14de010) {
     }
     memcpy(plain, data, COURSE_SIZE);
     free(data);
+    extern void smm2_shader_hint_course_data(const uint8_t *d, size_t n);  // (its shaders first: shader_rank.c)
+    smm2_shader_hint_course_data(plain, COURSE_SIZE);
     {  // (tests: RECOMP_MOD_TEST_BREAK=<n>:<code> hands the game course <code>'s data in place of the n-th course,
        // e.g. a course the game finds broken)
         static int downloads;

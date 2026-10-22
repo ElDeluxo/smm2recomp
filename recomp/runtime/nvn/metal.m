@@ -1517,6 +1517,14 @@ void backend_present(NvnTexture *t) {
     static double fps_iv = -1, prev_present, max_gap;  // LARECOMP_FPS_INTERVAL=<s>: fps line period (default 2)
     if (fps_iv < 0) fps_iv = getenv("LARECOMP_FPS_INTERVAL") ? atof(getenv("LARECOMP_FPS_INTERVAL")) : 2.0;
     if (prev_present > 0 && now - prev_present > max_gap) max_gap = now - prev_present;
+    {   // LARECOMP_LOG_GAPS=<ms>: each presented frame that came that long after the one before (hitches)
+        static double gap_ms = -1;
+        if (gap_ms < 0) gap_ms = getenv("LARECOMP_LOG_GAPS") ? atof(getenv("LARECOMP_LOG_GAPS")) : 0;
+        extern const char *game_level_name(void);
+        if (gap_ms > 0 && prev_present > 0 && (now - prev_present) * 1000 >= gap_ms)
+            LOG("[metal] long frame: %.0f ms before frame %llu (level %s)\n", (now - prev_present) * 1000,
+                (unsigned long long)total_frames, game_level_name());
+    }
     prev_present = now;
     if (now - last_fps_time >= fps_iv) {
         extern const char *game_level_name(void);

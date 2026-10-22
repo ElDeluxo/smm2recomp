@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <float.h>
+#include <limits.h>
 #include <math.h>
 #include <sys/stat.h>
 #include <SDL3/SDL_timer.h>
@@ -21,6 +22,7 @@
 #include "nvn.h"
 #include "renderer.h"
 #include "buildsync.h"
+#include "shader_ahead.h"
 
 static id<MTLDevice> dev;
 static id<MTLCommandBuffer> cmdbuf;
@@ -154,6 +156,7 @@ static void st_defaults(void) {
 
 void renderer_init(id<MTLDevice> d) {
     dev = d;
+    { const char *m = getenv("LARECOMP_AHEAD"); shader_ahead_set_enable(!m || strcmp(m, "0")); }  // (shader_ahead.h)
     cache = [NSMutableDictionary new];
     st_defaults();
 }
@@ -775,6 +778,7 @@ static int cbuf_base = 3, tex_base = 8;
     _Atomic int state;         // BUILD_PENDING / READY (vs, fs set) / FAILED (buildsync.h)
     NSMutableArray *waiting;   // pipelines the prefetch scan asked for before the program was ready (@synchronized)
     uint64_t vs_code;
+    uint8_t key_kind;          // (the compile-ahead's log) 0 the plain key, 1 integer inputs / targets, 2 mirror, 3 geometry
 }
 @end
 @implementation Prog
@@ -984,6 +988,7 @@ static struct { uint64_t key; void *prog; } prog_tab[PROG_TAB];
 // - cache/metallib/ (and metallib/ in an iOS app): those shaders precompiled (tools/precompile_shaders.sh), loaded
 //   instead of compiling the source.
 // - cache/pipelines/: the pipelines built, with their GPU code (Metal binary archives).
+// - cache/ahead.done: the shader compile-ahead's last finished pass (below, "Shader compile-ahead").
 static uint64_t fnv64(const char *t) {
     uint64_t h = 0xcbf29ce484222325ull;
     for (; *t; t++) { h ^= (uint8_t)*t; h *= 0x100000001B3ull; }
@@ -1362,16 +1367,8 @@ void shader_cache_warm(void) {
     });
 }
 
-// Programs and pipelines build off the game thread and draws wait for theirs (shader_mode(), buildsync.h): SMM2
-// renders some things exactly once (its colour-correction LUT, light probes), so a draw skipped while its program
-// compiled in the background was never redrawn and the scene stayed black. LARECOMP_NO_SHADER_PREFETCH=1: build on
-// first use, inline; LARECOMP_ASYNC_SHADERS=1: in the background, skipping the draws meanwhile (LAS's behaviour).
-// The shader caches above keep all of it short after the first run.
-static int compile_program(Prog *pr) {  // (BUILD_READY or BUILD_FAILED; the caller publishes it in pr->state)
-    static uint64_t fail_vs = 1;  // (test) LARECOMP_DEBUG_FAIL_VS=<code address, hex>: that program fails to compile
-    if (fail_vs == 1) { const char *e = getenv("LARECOMP_DEBUG_FAIL_VS"); fail_vs = e ? strtoull(e, NULL, 16) : 0; }
-    if (fail_vs && pr->vs_code == fail_vs) { LOG("[shader] VS %llx fails on purpose (LARECOMP_DEBUG_FAIL_VS)\n", fail_vs); return BUILD_FAILED; }
-    NSError *err = nil;
+// The options a program's stages compile with (the compile-ahead's are the same: Metal's cache is keyed by them too)
+static MTLCompileOptions *program_compile_options(char kind) {
     static MTLCompileOptions *vopts;
     static dispatch_once_t once;
     static MTLCompileOptions *fopts;  // (nil: the defaults)
@@ -1383,13 +1380,241 @@ static int compile_program(Prog *pr) {  // (BUILD_READY or BUILD_FAILED; the cal
             LOG("[shader] safe maths (LARECOMP_SAFE_MATH)\n");
         }
     });
+    return kind == 'v' ? vopts : fopts;
+}
+// LARECOMP_SHADER_SALT=<text>: tag sources so Metal's disk cache misses (measure cold first-use compiles)
+static NSString *shader_salt(void) {
+    static NSString *salt;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        const char *e = getenv("LARECOMP_SHADER_SALT");
+        salt = e ? [NSString stringWithFormat:@"\n// %s\n", e] : @"";
+    });
+    return salt;
+}
+
+// Shader compile-ahead (shader_ahead.h; recomp/docs/smm2-bringup.md "Shader compile-ahead"). A course of a style /
+// theme never seen on this machine started with 50-100 sources compiling at once (3-9 s of compiler time, draws
+// waiting 1-2 s in all). Now, from the game's first program on (its key's window origin and depth mode are then
+// known), a background thread translates what the game will draw - the programs it sets up (shader_ahead_program_set)
+// and every shader in its files in the RomFS (shader_ahead_scan), in the order ahead_scanned() gives - with that key
+// and compiles the sources Metal hasn't seen, 4 at a time (2 on iOS) at utility priority. It waits while the game is
+// building (build_idle_ms(): the game's own first uses go first) and while the device is hot or in low power mode.
+// What it compiles lands in Metal's own shader cache, where the game's first use then finds it (a hit costs well under
+// a millisecond). Nothing is kept but the sources' hashes. A whole pass is about 6900 sources, 7-11 minutes on an M4
+// Pro while the game runs; once it has finished, cache/ahead.done holds its stamp (this executable, the key, the salt)
+// and later starts skip the files; a new version reads them again (about 20 s when Metal still has the sources).
+// Programs with another key (integer vertex inputs or render targets, mirror mode) still compile at first use, as do
+// the pipelines (Metal's back end; the pipeline cache keeps those after the first time).
+// LARECOMP_AHEAD=0: off; =force: ignore the stamp; =map: translate only (with LARECOMP_AHEAD_LOG: which of the
+// game's sources it would have had). LARECOMP_AHEAD_JOBS=<n>: compiles at a time. LARECOMP_AHEAD_QUIET_MS=<ms>: how
+// long the game's builds must have been quiet (1500). LARECOMP_AHEAD_LOG=1: each source the game compiles says whether
+// it was compiled ahead, and where the compile-ahead read it.
+static struct {
+    _Atomic int started;
+    volatile int stop;
+    bool map_only, log;
+    ShaderKey vkey, fkey;
+    NSMutableSet *known, *done;    // sources translated / compiled ahead (kind ^ hash; under @synchronized(done))
+    NSMutableDictionary *where;    // source -> where it was read (LARECOMP_AHEAD_LOG; under @synchronized(done))
+    int items, set_progs, compiled, skipped, failed, untranslatable;
+    double t0, compile_ms, pause_ms, last_log;
+    _Atomic int game_hit, game_known, game_unknown;  // sources the game compiled after the start
+} ah;
+
+static NSString *ahead_stamp(void) {
+    char exe[1024] = "";
+    struct stat sb = {0};
+    if (plat_exe_path(exe, sizeof exe)) stat(exe, &sb);
+    const char *salt = getenv("LARECOMP_SHADER_SALT");
+    return [NSString stringWithFormat:@"ahead 2 exe %lld-%lld key %d%d%d salt %s\n", (long long)sb.st_size, (long long)sb.st_mtime,
+                                      ah.vkey.flip_y, ah.vkey.depth_minus_one, ah.fkey.flip_y, salt ? salt : ""];
+}
+
+static bool ahead_has_file(char kind, const char *msl) {  // (compiled anyway: precompiled, or the warm-up's)
+    unsigned long long h = (unsigned long long)fnv64(msl);
+    char path[96];
+    if (!getenv("LARECOMP_NO_PRECOMPILED")) {
+        snprintf(path, sizeof path, "cache/metallib/%c_%016llx.metallib", kind, h);
+        if (access(path, R_OK) == 0) return true;
+        snprintf(path, sizeof path, "metallib/%c_%016llx.metallib", kind, h);
+        if (access(path, R_OK) == 0) return true;
+    }
+    if (getenv("LARECOMP_NO_SHADER_WARM")) return false;
+    snprintf(path, sizeof path, "cache/shaders/%c_%016llx.metal", kind, h);
+    return access(path, R_OK) == 0;
+}
+
+typedef struct { dispatch_semaphore_t slots; dispatch_group_t group; dispatch_queue_t q; } AheadCtx;
+
+static void ahead_compile(char kind, const char *msl, const char *from, AheadCtx *cx) {
+    NSNumber *key = @(fnv64(msl) ^ (uint64_t)kind);
+    @synchronized(ah.done) {
+        if ([ah.known containsObject:key]) return;
+        [ah.known addObject:key];
+        if (ah.log) ah.where[key] = @(from);
+    }
+    if (ah.map_only) return;
+    if (ahead_has_file(kind, msl)) { ah.skipped++; return; }
+    double p0 = now_ms();
+    // (the game's own builds go first: it waits for them. They come in bursts, so a quiet moment must last a while)
+    static double quiet = -1;
+    if (quiet < 0) quiet = getenv("LARECOMP_AHEAD_QUIET_MS") ? atof(getenv("LARECOMP_AHEAD_QUIET_MS")) : 1500;
+    // (and while the device is hot or saving power: it's the game's to use first)
+    while ((build_idle_ms() < quiet || NSProcessInfo.processInfo.thermalState >= NSProcessInfoThermalStateSerious ||
+            NSProcessInfo.processInfo.lowPowerModeEnabled) && !ah.stop)
+        usleep(20000);
+    dispatch_semaphore_wait(cx->slots, DISPATCH_TIME_FOREVER);
+    ah.pause_ms += now_ms() - p0;
+    if (ah.stop) { dispatch_semaphore_signal(cx->slots); return; }
+    NSString *src = entry_source(kind, msl, shader_salt());
+    dispatch_semaphore_t slots = cx->slots;
+    dispatch_group_async(cx->group, cx->q, ^{
+        double t0 = now_ms();
+        bool ok;
+        @autoreleasepool { ok = [dev newLibraryWithSource:src options:program_compile_options(kind) error:nil] != nil; }
+        @synchronized(ah.done) {
+            ah.compile_ms += now_ms() - t0;
+            if (ok) { ah.compiled++; [ah.done addObject:key]; }
+            else ah.failed++;
+        }
+        dispatch_semaphore_signal(slots);
+    });
+}
+
+// One shader or program (shader_ahead.h): translated as the game's first use will translate it, then compiled
+static void ahead_item(const AheadShader *s, AheadCtx *cx) {
+    ShaderKey vkey = ah.vkey, fkey = ah.fkey;
+    ShaderInfo *vi = NULL, *fi = NULL, *gi = NULL;
+    bool ok;
+    if (s->stage == 2) ok = !maxwell_translate_program_msl(s->code, s->cmax, &vkey, &fkey, &vi, &fi, &gi);
+    else if (s->stage == 0) ok = (vi = maxwell_translate(s->code[0], s->cmax[0], STAGE_VERTEX, &vkey))->msl != NULL;
+    else {
+        fkey.vs_out_mask = 0xFFFFFFFFu;  // (as when its vertex shader writes all it reads: shader_ahead.h)
+        ok = (fi = maxwell_translate(s->code[1], s->cmax[1], STAGE_FRAGMENT, &fkey))->msl != NULL;
+    }
+    if (!ok) ah.untranslatable++;
+    if (vi && vi->msl) ahead_compile('v', vi->msl, s->archive, cx);
+    if (fi && fi->msl) ahead_compile('f', fi->msl, s->archive, cx);
+    if (vi) maxwell_free(vi);
+    if (fi) maxwell_free(fi);
+    if (gi) maxwell_free(gi);
+}
+
+// The programs the game has set (newest first) set at most max_age_ms ago (< 0: all)
+static void ahead_take_set(AheadCtx *cx, int wait_ms, double max_age_ms, int most) {
+    for (const AheadShader *g; most-- > 0 && !ah.stop && (g = shader_ahead_set_next(wait_ms, max_age_ms)); wait_ms = 0) {
+        ahead_item(g, cx);
+        shader_ahead_set_done(g);
+        ah.set_progs++;
+    }
+}
+
+// Order: what the game set in the last 10 s (it is about to draw it), the files it is reading or a game's hint names
+// (shader_ahead_prefer), then the RomFS's likeliest (rank 0: for SMM2 the models every course draws and the course
+// themes') side by side with the rest the game set (it sets up thousands at load and draws a few hundred, among them
+// agl's post effects every course uses), then the RomFS's rest
+static bool ahead_scanned(const AheadShader *s, void *ud) {
+    ahead_take_set(ud, 0, 10000, INT_MAX);
+    ahead_take_set(ud, 0, -1, s->rank >= 1 ? INT_MAX : 1);
+    if (ah.stop) return false;
+    ah.items++;
+    ahead_item(s, ud);
+    if (now_ms() - ah.last_log > 30000) {
+        ah.last_log = now_ms();
+        LOG("[shader] compile-ahead: %d shaders read, %d programs the game set, %d sources compiled (%.0f ms of compiles), "
+            "%.0f s in; now %s\n", ah.items, ah.set_progs, ah.compiled, ah.compile_ms, (ah.last_log - ah.t0) / 1000, s->archive);
+    }
+    return !ah.stop;
+}
+
+static void ahead_stop(void) { ah.stop = 1; }
+
+// (game thread: its first program, with the key the archives' programs will be compiled with)
+static void shader_ahead_start(const ShaderKey *vkey, const ShaderKey *fkey) {
+    const char *mode = getenv("LARECOMP_AHEAD");
+    if (atomic_exchange(&ah.started, 1) || (mode && !strcmp(mode, "0")) || !g_romfs_dir) return;
+    ShaderKey v = {0}, f = {0};
+    v.flip_y = vkey->flip_y, v.depth_minus_one = vkey->depth_minus_one;
+    f.flip_y = fkey->flip_y, f.depth_minus_one = fkey->depth_minus_one;
+    ah.vkey = v, ah.fkey = f;
+    ah.map_only = mode && !strcmp(mode, "map");
+    ah.log = getenv("LARECOMP_AHEAD_LOG") != NULL;
+    NSString *stamp = ahead_stamp();
+    NSString *old = [NSString stringWithContentsOfFile:@"cache/ahead.done" encoding:NSUTF8StringEncoding error:nil];
+    bool scan = !([old isEqualToString:stamp] && !(mode && (!strcmp(mode, "force") || ah.map_only)));
+    if (!scan) LOG("[shader] compile-ahead: the game's files were done before (cache/ahead.done); programs the game sets still are\n");
+    ah.known = [NSMutableSet new];
+    ah.done = [NSMutableSet new];
+    ah.where = [NSMutableDictionary new];
+    atexit(ahead_stop);
+    char *romfs = strdup(g_romfs_dir);
+    int jobs = getenv("LARECOMP_AHEAD_JOBS") ? atoi(getenv("LARECOMP_AHEAD_JOBS")) : TARGET_OS_IPHONE ? 2 : 4;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        ah.t0 = ah.last_log = now_ms();
+        maxwell_gmem_base = HEAP_BASE;  // (as the game's translations: the bounds appear in the sources)
+        maxwell_gmem_size = HEAP_MAX;
+        AheadCtx cx = {dispatch_semaphore_create(jobs > 0 ? jobs : 1), dispatch_group_create(),
+                       dispatch_queue_create_with_target("recomp.shader-ahead", DISPATCH_QUEUE_CONCURRENT,
+                                                         dispatch_get_global_queue(QOS_CLASS_UTILITY, 0))};
+        if (scan) {
+            AheadScanStats st;
+            bool full = shader_ahead_scan(romfs, ahead_scanned, &cx, &ah.stop, &st);
+            dispatch_group_wait(cx.group, DISPATCH_TIME_FOREVER);
+            LOG("[shader] compile-ahead %s: %d shaders + %d programs from %d files (%d archives; %d files read early "
+                "for the game), %d programs the game set; %lu sources, %d compiled (%.0f ms of compiles), %d cached already, "
+                "%d failed, %d not translatable; %.1f s in all, %.1f s waiting (the game's builds, compile slots); the game's "
+                "sources so far: %d compiled ahead, %d not yet, %d not found\n",
+                full ? "finished" : "stopped", st.shaders, st.programs, st.files, st.archives, st.preferred, ah.set_progs,
+                (unsigned long)ah.known.count, ah.compiled, ah.compile_ms, ah.skipped, ah.failed, ah.untranslatable,
+                (now_ms() - ah.t0) / 1000, ah.pause_ms / 1000, atomic_load(&ah.game_hit), atomic_load(&ah.game_known),
+                atomic_load(&ah.game_unknown));
+            if (full && !ah.stop && !ah.map_only) {
+                mkdir("cache", 0755);
+                [stamp writeToFile:@"cache/ahead.done" atomically:YES encoding:NSUTF8StringEncoding error:nil];
+            }
+        }
+        free(romfs);
+        while (!ah.stop) ahead_take_set(&cx, 1000, -1, INT_MAX);  // (then the programs the game sets, for as long as it runs)
+    });
+}
+
+// (a source the game compiles from MSL: was it compiled ahead?)
+static void shader_ahead_note(char kind, const char *msl, const Prog *pr) {
+    if (!atomic_load(&ah.started) || !ah.done) return;
+    int what;  // 2 compiled ahead, 1 translated (not compiled yet), 0 not found
+    NSString *from = nil;
+    NSNumber *key = @(fnv64(msl) ^ (uint64_t)kind);
+    @synchronized(ah.done) {
+        what = [ah.done containsObject:key] ? 2 : [ah.known containsObject:key] ? 1 : 0;
+        if (ah.log) from = ah.where[key];
+    }
+    atomic_fetch_add(what == 2 ? &ah.game_hit : what ? &ah.game_known : &ah.game_unknown, 1);
+    static const char *const keys[] = {"", ", integer inputs or targets", ", mirrored", ", geometry"};
+    if (ah.log)
+        LOG("[ahead] game %c_%016llx: %s (%s%s)\n", kind, (unsigned long long)fnv64(msl),
+            what == 2 ? "compiled ahead" : what ? "read, not compiled yet" : "not found", from ? from.UTF8String : "-",
+            keys[pr ? pr->key_kind & 3 : 0]);
+}
+
+// Programs and pipelines build off the game thread and draws wait for theirs (shader_mode(), buildsync.h): SMM2
+// renders some things exactly once (its colour-correction LUT, light probes), so a draw skipped while its program
+// compiled in the background was never redrawn and the scene stayed black. LARECOMP_NO_SHADER_PREFETCH=1: build on
+// first use, inline; LARECOMP_ASYNC_SHADERS=1: in the background, skipping the draws meanwhile (LAS's behaviour).
+// The shader caches above keep all of it short after the first run.
+static int compile_program(Prog *pr) {  // (BUILD_READY or BUILD_FAILED; the caller publishes it in pr->state)
+    static uint64_t fail_vs = 1;  // (test) LARECOMP_DEBUG_FAIL_VS=<code address, hex>: that program fails to compile
+    if (fail_vs == 1) { const char *e = getenv("LARECOMP_DEBUG_FAIL_VS"); fail_vs = e ? strtoull(e, NULL, 16) : 0; }
+    if (fail_vs && pr->vs_code == fail_vs) { LOG("[shader] VS %llx fails on purpose (LARECOMP_DEBUG_FAIL_VS)\n", fail_vs); return BUILD_FAILED; }
+    NSError *err = nil;
+    MTLCompileOptions *vopts = program_compile_options('v'), *fopts = program_compile_options('f');
     double t0 = now_ms();
-    // LARECOMP_SHADER_SALT=<text>: tag sources so Metal's disk cache misses (measure cold first-use compiles)
-    NSString *salt = getenv("LARECOMP_SHADER_SALT") ? [NSString stringWithFormat:@"\n// %s\n", getenv("LARECOMP_SHADER_SALT")] : @"";
+    NSString *salt = shader_salt();
     // (precompiled when tools/precompile_shaders.sh made them; else the two stages compile side by side: Metal's
     // compiler service runs them in parallel)
     __block id<MTLLibrary> vl = precompiled_library('v', pr->vi->msl);
     id<MTLLibrary> fl = precompiled_library('f', pr->fi->msl);
+    bool fpre = fl != nil;
     __block NSError *verr = nil;
     dispatch_semaphore_t vdone = vl ? nil : dispatch_semaphore_create(0);
     if (vdone)
@@ -1399,6 +1624,8 @@ static int compile_program(Prog *pr) {  // (BUILD_READY or BUILD_FAILED; the cal
     if (vdone) dispatch_semaphore_wait(vdone, DISPATCH_TIME_FOREVER);
     if (!vl) { LOG("[shader] VS compile failed: %s\n%s\n", verr.localizedDescription.UTF8String, pr->vi->msl); return BUILD_FAILED; }
     if (!fl) { LOG("[shader] FS compile failed: %s\n%s\n", err.localizedDescription.UTF8String, pr->fi->msl); return BUILD_FAILED; }
+    if (vdone) shader_ahead_note('v', pr->vi->msl, pr);
+    if (!fpre) shader_ahead_note('f', pr->fi->msl, pr);
     pr->vs = [vl newFunctionWithName:entry_name('v', pr->vi->msl)];
     pr->fs = [fl newFunctionWithName:entry_name('f', pr->fi->msl)];
     __atomic_fetch_add(&stat_compiles, 1, __ATOMIC_RELAXED);
@@ -1441,6 +1668,13 @@ static Prog *get_program(NvnProgram *p, ShaderKey *vkey, ShaderKey *fkey) {
     pr = [Prog new];
     pr->vs_code = p->stages[0].code_addr;
     g_prog_creates++;
+    {   // (the compile-ahead starts with the first plain key: the window origin and depth mode)
+        bool typed = false;
+        for (int i = 0; i < 32; i++) typed = typed || vkey->attr_kind[i];
+        for (int i = 0; i < 8; i++) typed = typed || fkey->rt_kind[i];
+        pr->key_kind = (p->stage_mask & 4) ? 3 : vkey->flip_x ? 2 : typed ? 1 : 0;
+        if (!pr->key_kind && !atomic_load(&ah.started)) shader_ahead_start(vkey, fkey);
+    }
     if (getenv("LARECOMP_PROG_STATS")) {  // (measurement: how far ahead its shaders were set, whether the key is plain)
         extern uint64_t nvn_program_set_ns(const void *p);
         uint64_t set = nvn_program_set_ns(p), now = clock_gettime_nsec_np(CLOCK_MONOTONIC);
@@ -1474,55 +1708,25 @@ static Prog *get_program(NvnProgram *p, ShaderKey *vkey, ShaderKey *fkey) {
     // the compiler constants follow the code, so they bound the instruction scan
     size_t vmax = p->stages[0].const_offset ? p->stages[0].const_offset : 0x10000;
     size_t fmax = p->stages[1].const_offset ? p->stages[1].const_offset : 0x10000;
-    ShaderKey gvkey;
-    if (p->stage_mask & 4) {  // geometry stage: translated first (the vertex function carries its varyings)
-        size_t gmax = p->stages[2].const_offset ? p->stages[2].const_offset : 0x10000;
-        pr->gi = maxwell_translate((const uint8_t *)(uintptr_t)p->stages[2].code_addr, gmax, STAGE_GEOMETRY, vkey);
-        if (!pr->gi->msl) {
-            LOG("[shader] GS translate failed: %s (code %llx)\n", pr->gi->error, p->stages[2].code_addr);
+    {
+        const uint8_t *code[3] = {(const uint8_t *)(uintptr_t)p->stages[0].code_addr, (const uint8_t *)(uintptr_t)p->stages[1].code_addr,
+                                  (p->stage_mask & 4) ? (const uint8_t *)(uintptr_t)p->stages[2].code_addr : NULL};
+        size_t cmax[3] = {vmax, fmax, p->stages[2].const_offset ? p->stages[2].const_offset : 0x10000};
+        ShaderInfo *vi, *fi, *gi;
+        const char *why = maxwell_translate_program_msl(code, cmax, vkey, fkey, &vi, &fi, &gi);
+        pr->vi = vi, pr->fi = fi, pr->gi = gi;
+        if (why) {
+            LOG("[shader] %s (code %llx %llx %llx)\n", why, p->stages[0].code_addr, p->stages[1].code_addr, p->stages[2].code_addr);
+            if (vi && !vi->msl) {
+                char path[128];
+                snprintf(path, sizeof path, "build/shaders/fail_%llx_s0_code.bin", p->stages[0].code_addr);
+                FILE *f = fopen(path, "wb");
+                if (f) { fwrite((void *)(uintptr_t)p->stages[0].code_addr, 1, 0x4000, f); fclose(f); }
+            }
             atomic_store(&pr->state, BUILD_FAILED);
             return nil;
         }
-        gvkey = *vkey;
-        gvkey.vs_fn = 1;
-        gvkey.gs_out_mask = pr->gi->out_mask;
-        vkey = &gvkey;
     }
-    pr->vi = maxwell_translate((const uint8_t *)(uintptr_t)p->stages[0].code_addr, vmax, STAGE_VERTEX, vkey);
-    if (pr->vi->msl && pr->gi) {  // the combined vertex function: vertex shader for the point, then the geometry stage
-        if ((pr->vi->cbuf_mask >> GS_CBUF_BASE) & pr->gi->cbuf_mask) {
-            LOG("[shader] GS cbufs clash with the vertex shader's (code %llx)\n", p->stages[2].code_addr);
-            atomic_store(&pr->state, BUILD_FAILED);
-            return nil;
-        }
-        NSMutableString *m = [NSMutableString stringWithUTF8String:pr->vi->msl];
-        [m appendFormat:@"vertex VOut main0(VIn in [[stage_in]], uint vid [[vertex_id]], uint iid [[instance_id]]%s%s) {\n",
-               pr->vi->vs_entry_params, pr->gi->gs_params];
-        [m appendFormat:@"  VOut vso = vs_main(in, iid, iid%s);\n", pr->vi->vs_call_args];
-        [m appendString:@"  uint tri = vid / 3u, corner = vid % 3u;  // triangle tri of the emitted strip\n"
-                   @"  uint want = (tri & 1u) ? (corner == 0u ? tri + 1u : corner == 1u ? tri : tri + 2u) : tri + corner;\n"
-                   @"  VOut out = vso;\n"];
-        [m appendString:@(pr->gi->msl)];
-        if (vkey->flip_y) [m appendString:@"  out.pos.y = -out.pos.y;\n"];
-        if (vkey->flip_x) [m appendString:@"  out.pos.x = -out.pos.x;\n"];
-        if (vkey->depth_minus_one) [m appendString:@"  out.pos.z = (out.pos.z + out.pos.w) * 0.5f;\n"];
-        [m appendString:@"  return out;\n}\n"];
-        free(pr->vi->msl);
-        pr->vi->msl = strdup(m.UTF8String);
-        pr->vi->out_mask = pr->gi->out_mask;  // (what the fragment stage gets)
-    }
-    if (!pr->vi->msl) {
-        LOG("[shader] VS translate failed: %s (code %llx)\n", pr->vi->error, p->stages[0].code_addr);
-        char path[128];
-        snprintf(path, sizeof path, "build/shaders/fail_%llx_s0_code.bin", p->stages[0].code_addr);
-        FILE *f = fopen(path, "wb");
-        if (f) { fwrite((void *)(uintptr_t)p->stages[0].code_addr, 1, 0x4000, f); fclose(f); }
-        atomic_store(&pr->state, BUILD_FAILED);
-        return nil;
-    }
-    fkey->vs_out_mask = pr->vi->out_mask;
-    pr->fi = maxwell_translate((const uint8_t *)(uintptr_t)p->stages[1].code_addr, fmax, STAGE_FRAGMENT, fkey);
-    if (!pr->fi->msl) { LOG("[shader] FS translate failed: %s\n", pr->fi->error); atomic_store(&pr->state, BUILD_FAILED); return nil; }
     if (getenv("LARECOMP_SAVE_MSL")) {
         mkdir("build/msl", 0755);
         char path[256];

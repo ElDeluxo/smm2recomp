@@ -17,6 +17,9 @@ void build_begin(void);                             // one more build in flight
 void build_finish(_Atomic int *state, int result);  // the build's result: one fewer in flight, waiters woken
 int build_wait(_Atomic int *state, const char *what);  // until it isn't PENDING (counted in g_prefetch when it waits)
 void build_drain(void);                             // until no build is in flight (before a reset drops them)
+int build_inflight(void);                           // builds in flight now
+double build_idle_ms(void);                         // since the last build started or finished (0 while any runs):
+                                                    // the compile-ahead waits for the game's bursts to end
 
 // Pipelines requested ahead, by pipeline hash (non-zero), until a draw takes them into its own table
 void *pend_get_or_put(uint64_t hash, void *fresh);  // the entry there, or fresh (now there)

@@ -33,16 +33,19 @@ static double now_ms(void) {
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t done = PTHREAD_COND_INITIALIZER;
 static int inflight;
+static double last_activity;  // (now_ms of the last build started or finished)
 
 void build_begin(void) {
     pthread_mutex_lock(&lock);
     inflight++;
+    last_activity = now_ms();
     pthread_mutex_unlock(&lock);
 }
 void build_finish(_Atomic int *state, int result) {
     pthread_mutex_lock(&lock);
     atomic_store(state, result);
     inflight--;
+    last_activity = now_ms();
     pthread_cond_broadcast(&done);
     pthread_mutex_unlock(&lock);
 }
@@ -51,6 +54,9 @@ static void count_wait(double ms, const void *what_addr, const char *what) {  //
     g_prefetch.waits++;
     g_prefetch.wait_ms += ms;
     if (ms > g_prefetch.worst_ms) g_prefetch.worst_ms = ms;
+    static double log_ms = -1;  // LARECOMP_LOG_WAITS=<ms>: every wait that long, and what it was for
+    if (log_ms < 0) log_ms = getenv("LARECOMP_LOG_WAITS") ? atof(getenv("LARECOMP_LOG_WAITS")) : 0;
+    if (log_ms > 0 && ms >= log_ms) LOG("[shader] a draw waited %.0f ms for its %s\n", ms, what);
     if (ms > 2000) {  // (once per object)
         static const void *logged[64];
         static int nlogged;
@@ -69,6 +75,18 @@ int build_wait(_Atomic int *state, const char *what) {
     count_wait(now_ms() - t0, state, what);
     pthread_mutex_unlock(&lock);
     return s;
+}
+int build_inflight(void) {
+    pthread_mutex_lock(&lock);
+    int n = inflight;
+    pthread_mutex_unlock(&lock);
+    return n;
+}
+double build_idle_ms(void) {
+    pthread_mutex_lock(&lock);
+    double t = inflight ? 0 : now_ms() - last_activity;
+    pthread_mutex_unlock(&lock);
+    return t;
 }
 void build_drain(void) {
     pthread_mutex_lock(&lock);

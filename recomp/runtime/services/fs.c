@@ -408,6 +408,7 @@ const char *romfs_file_at(uint64_t off) {
 }
 
 void romfs_file_read_hook(const char *path);
+void shader_ahead_prefer(const char *rel);
 
 // ------------------------------------------------------------------ IStorage (raw RomFS image)
 typedef struct { int fd; uint64_t size; } Storage;
@@ -429,6 +430,7 @@ static void storage(Service *s, IpcReq *req, IpcResp *resp) {
                 last = path;
                 if (getenv("LARECOMP_LOG_FILES")) LOG("[fs] read %s\n", path);
                 romfs_file_read_hook(path);
+                shader_ahead_prefer(path);  // (a model being loaded: its shaders compile ahead next, nvn/shader_ahead.h)
             }
         }
         static uint64_t reads, bytes;

@@ -117,5 +117,10 @@ extern const uint8_t *maxwell_dbg_vs;
 // code: shader binary (with the 0x50-byte SPH header for graphics stages)
 ShaderInfo *maxwell_translate(const uint8_t *code, size_t max_size, int stage, const ShaderKey *key);
 void maxwell_free(ShaderInfo *s);
+// A whole program's MSL as the Metal renderer draws it (program.c): vertex (a geometry stage combined into it, as
+// above) and fragment; fkey->vs_out_mask is set from the vertex side. NULL when it worked, else why not (the infos
+// made so far are in *vi / *fi / *gi either way: the caller frees them). Thread-safe (as maxwell_translate is).
+const char *maxwell_translate_program_msl(const uint8_t *const code[3], const size_t cmax[3], const ShaderKey *vkey,
+                                          ShaderKey *fkey, ShaderInfo **vi, ShaderInfo **fi, ShaderInfo **gi);
 // Disassemble for debugging (writes text to f).
 void maxwell_disassemble(const uint8_t *code, size_t max_size, int stage, void *file);

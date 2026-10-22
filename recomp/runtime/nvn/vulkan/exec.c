@@ -14,6 +14,7 @@
 #include "../../kernel.h"
 #include "shaders.h"
 #include "../buildsync.h"
+#include "../shader_ahead.h"
 #include "vk.h"
 #include "../renderer.h"
 #include "../../settings.h"
@@ -605,8 +606,8 @@ static VkSpan guest_copy(uint64_t addr, uint64_t size) {
 // (deterministic tests). Skip (LARECOMP_ASYNC_SHADERS=1, LAS's behaviour): on the queues, draws skipped meanwhile -
 // SMM2 renders some things exactly once (its colour-correction LUT, light probes), and such a skipped draw is never
 // redrawn. The SPIR-V and pipeline caches keep all of it short after the first run.
-// Translation: one dedicated thread (the translator isn't re-entrant - translate.c's RSC2 string ring - and
-// translating on the game thread cost up to ~90 ms per frame on entering an area). Compiles go on to the workers.
+// Translation: one dedicated thread (translating on the game thread cost up to ~90 ms per frame on entering an area).
+// Compiles go on to the workers.
 static pthread_mutex_t translate_lock = PTHREAD_MUTEX_INITIALIZER;  // (compute shaders translate on the game thread)
 static JobQueue *g_tq, *g_wq;
 static void queues_make(void) {
@@ -766,6 +767,7 @@ static void st_defaults(void) {
 }
 
 void vk_exec_init(void) {
+    { const char *m = getenv("LARECOMP_AHEAD"); shader_ahead_set_enable(!m || strcmp(m, "0")); }  // (shader_ahead.h)
     prof = getenv("LARECOMP_VK_PROF") != NULL;
     if (prof) {
         prof_up_ns = 0;
@@ -1457,6 +1459,13 @@ static Prog *get_program(NvnProgram *np, ShaderKey *vkey, ShaderKey *fkey) {
     if (prog_tab[slot].key) return prog_tab[slot].prog;
     Prog *p = calloc(1, sizeof *p);
     g_prog_creates++;
+    {   // (the compile-ahead, ahead.c, starts with the first plain key: the window origin and depth mode)
+        extern void vk_ahead_start(const ShaderKey *vkey, const ShaderKey *fkey);
+        bool plain = !vkey->flip_x && !(np->stage_mask & 4);
+        for (int i = 0; i < 32; i++) plain = plain && !vkey->attr_kind[i];
+        for (int i = 0; i < 8; i++) plain = plain && !fkey->rt_kind[i];
+        if (plain) vk_ahead_start(vkey, fkey);
+    }
     prog_tab[slot].key = h;
     prog_tab[slot].prog = p;
     for (int i = 0; i < (gs ? 3 : 2); i++) {

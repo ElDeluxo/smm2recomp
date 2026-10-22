@@ -478,6 +478,11 @@ build/test_system_font: tools/test_system_font.mm runtime/ui/system_font.mm runt
 test-ui: build/test_system_font
 	build/test_system_font
 
+# Shader compile-ahead alone: scan a RomFS folder, translate, compile (tools/test_shader_ahead.m)
+build/test_shader_ahead: tools/test_shader_ahead.m runtime/nvn/shader_ahead.c runtime/nvn/shader_ahead.h runtime/nvn/maxwell/translate.c runtime/nvn/maxwell/program.c runtime/nvn/maxwell/shader.h runtime/zstd_lib.c
+	clang -O2 -fobjc-arc -framework Metal -framework Foundation -o $@ tools/test_shader_ahead.m runtime/nvn/shader_ahead.c \
+	    runtime/nvn/maxwell/translate.c runtime/nvn/maxwell/program.c runtime/zstd_lib.c
+
 build/test_shaders: tools/test_shaders.m runtime/nvn/maxwell/translate.c runtime/nvn/maxwell/shader.h
 	clang -O1 -fobjc-arc -framework Metal -framework Foundation -o $@ tools/test_shaders.m runtime/nvn/maxwell/translate.c
 

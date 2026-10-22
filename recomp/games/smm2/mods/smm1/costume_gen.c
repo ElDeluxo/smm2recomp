@@ -28,8 +28,7 @@
 #include "smm1_data.h"
 #include "tegra.h"
 
-#define ZSTD_STATIC_LINKING_ONLY
-#include "../../../../third_party/zstd/zstd.c"
+#include "../../../../runtime/zstd_lib.h"  // (zstd itself: runtime/zstd_lib.c)
 
 #define LOGC "[costume] "
 

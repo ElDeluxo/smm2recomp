@@ -56,6 +56,13 @@ static void cache_store(uint64_t h, const uint32_t *spv, size_t nwords) {
     if (!ok || rename(tmp, path) != 0) remove(tmp);  // (another thread may have stored it first)
 }
 
+bool vk_spirv_cached(const char *src, int stage) {  // (the compile-ahead: already in cache/spirv)
+    char path[64];
+    snprintf(path, sizeof path, "cache/spirv/%016llx.spv", (unsigned long long)src_hash(src, stage));
+    struct stat sb;
+    return stat(path, &sb) == 0 && sb.st_size > 20;
+}
+
 // Vertex shaders: every float add/sub/mul/div/fma gets NoContraction, so no compiler fuses or splits them. Depth
 // pre-pass and colour pass are different shaders computing the same position, and the colour pass tests EQUAL:
 // any difference in fusing leaves holes (foliage flickered black). GLSL's `precise gl_Position` only covers what
