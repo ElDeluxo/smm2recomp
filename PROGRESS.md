@@ -316,7 +316,8 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     through the screen untested end to end: the owner's NSPs' metadata, tickets and versions read correctly with
     the bundled hactool, the extraction itself not run - ~6 GB); packages ~90 % (all four build and pass the check;
     none run on Windows / Linux); release workflow ~80 % (written, YAML checked, never run: needs a tag); docs ~95 %
-  - ⬜ Windows / Linux packages not run on their systems yet; Linux AppImage (bundled SDL3); notarized macOS app
+  - 🔄 Windows / Linux packages: run by testers since v0.2.0 (their reports: GitHub issues section below); ⬜ Linux
+    AppImage (bundled SDL3); ⬜ notarized macOS app
     (needs a Developer ID); Android / iOS stay build-it-yourself (iOS: a desktop build-sign-install helper)
 
 - ✅ **Bug (owner, 2026-10-19; closed 2026-10-22: the owner found the timing fine in play, Next features item 11):** sound effects when opening a course and during course loading are
