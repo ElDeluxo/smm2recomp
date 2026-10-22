@@ -421,6 +421,14 @@ Setup failures first, since they block new players:
 - ✅ **PR #8 merged** (2026-10-22, x86-64-v2 baseline, gamebuild.c builds v3 where the CPU has AVX2; in v0.4.1).
   Follow-up, minor: the game code's id comes from the v2 flags, so a data folder moved from an AVX2 machine to an
   older CPU keeps its v3 build (illegal instruction). Put the chosen level in the id when it matters.
+- ✅ **100 Mario run start: the Peach-carried-away demo** (owner, 2026-10-22: "on Normal the animation seems to be
+  missing; Easy showed it"): the SMM1 layout player kept at most 48 animations per layout and dropped any more
+  without a word. A world map on the select screen holds its dots, Mario, the castles and the beat bounce on Course
+  World's music, so on the 16-dot maps (Normal, Expert) the run's Telop and MoveKuribo never started: no banner,
+  no Goombas, Peach already in Bowser's castle. Now 160, with a log line if it ever fills. Checked in game for all
+  four difficulties (select -> New Game, music bounce on): banner, Goombas carrying Peach, Peach on the castle.
+  Offline it had always played (no music there, so no bounce). Left: Super Expert's banner text runs past the
+  window's edges ("... (yet again)!" loses its "!"); check how SMM1 fits it. Not compared in Cemu this round.
 - ✅ **100 Mario ending, each difficulty** (owner, 2026-10-22: "Normal didn't show the Peach animation; Easy did"):
   Peach's and Toad's looping wait pattern stopped on its last key after one loop (the rescue draws it on the
   scene's clock), so NSMBU / 3D World Peach froze after 39 frames, SMW's blink after its first, while Easy's Toad
@@ -433,6 +441,10 @@ Setup failures first, since they block new players:
 ### Next features (owner's order, 2026-10-22)
 1. 🔄 Co-op in Endless / 100 Mario (see the entry under Future)
 2. ⬜ Lanky Mario (SMM1's Weird Mushroom) as an SMM1 mod switch, off by default
+   - with it: **mod triggers** (owner, 2026-10-22): an overlay-menu section with a button per triggerable mod effect
+     (Lanky Mario now, a chosen costume now, later others), for the current player in a course, greyed out
+     elsewhere; a small registry in the mods code (name, available(), trigger()). A try-it-out helper kept apart from
+     the normal game: off in 100 Mario / Endless runs (no records). The costume trigger comes with item 4
 3. ⬜ Mid-air shell jumps (finish, with the test course)
 4. ⬜ Mystery Mushroom costumes: a hit removes the costume, the taunt, the reward window, more than one per course
 5. ⬜ Edit any course: the d-pad onto Make, the upload credit, Edit on the course card / Endless
@@ -496,6 +508,13 @@ Setup failures first, since they block new players:
     in 100 Mario, two in Play Together. Right after, main+0x16cd670 compares a count (`[main+0x2c01cf0] + 0x98`)
     with a 4-bit "players present" mask (`+0x54`): likely the multiplayer session. Next: where that list is filled
     (and whether the session's mask must hold the second player), then fill it for co-op.
+  - 2026-10-22, correction and the real spot: the list at `[*(main+0x2a6bcd0)] + 0x28 / +0x30` is the course's two
+    areas (main and sub-area: always two entries, 0x188 bytes each, made in the play scene set-up main+0x16aac20),
+    not players. Players are actors (profile "Player", main+0x2a56388) created by main+0xe581d0, which loops over a
+    player count (w22, player index in w23) chosen by the play mode `[*(main+0x2a6bcd0)] + 0xe0`: 1 takes the course
+    set-up's count (`[*(main+0x2a66fb8)] + 0x40`; 2 in one mode), 2 the online session's (`[*(main+0x2c01cf0)] +
+    0x98`), anything else exactly one player. A hook point on that mode load (main+0xe59614) forces 1 under
+    `RECOMP_COOP_TEST` to test spawning player 2 in Endless.
   - Owner, 2026-10-22: the 100 Mario ending shows all the players in the rescue scene if that's reasonable, else
     whoever cleared the last course; the lives card shows each player ("give that a shot").
 - ✅ **User report (2026-10-22, platform not stated, maybe Windows): Course World says "make an ID" and goes back;
