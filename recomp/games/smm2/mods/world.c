@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "mod.h"
 #include "../../../runtime/net/json.h"
@@ -224,6 +225,7 @@ static void fill_user(uint64_t e, uint64_t pid, const char *maker_id, const char
     put_utf16(g64(e + 0x08), g32(e + 0x10), code);  // (the converter: NEX maker code -> +0x08, name -> +0x30)
     put_utf16(g64(e + 0x30), g32(e + 0x38), name);
     s64(e + 0x58, pid);
+    s8(e + 0x98, 1);  // comments on (NEX UserInfo +0xf1; a course's record +0x830 -> course global +0x860, below)
     mii_default_charinfo((uint8_t *)(uintptr_t)(e + 0x9c), name);
     s32(e + 0x124, likes);
     s32(e + 0x128, points);
@@ -400,31 +402,34 @@ static void get_user_or_course(Cpu *c) {
 
 // ---- likes and boos, comments allowed
 
-// CanPostRatingAndComment (61, main+0x14ebc60): data id +0xe8578; two answers, rating +0xe8580 {u64 id, bool can,
-// u32, two counts, valid +0xe8592} and comment +0xe8530 {.., valid +0xe8542}. Both allowed.
+// CanPostRatingAndComment (61, main+0x14ebc60): data id +0xe8578; two answers, rating +0xe8580 and comment +0xe8530,
+// each {u64 id, u8 +8, u32 state +0xc, u8 map[0] +0x10, u8 map[1] +0x11, valid +0x12}, copied by main+0x1520d10 to
+// the course-play globals (*(main+0x2c115e0) +0x1b9c40 rating, +0x1b8950 comment). The clear screen's Boo / I like it
+// (main+0x1be73b0) take input when the rating's u8 is 0 and its state isn't 2, and the player's own relation to the
+// course (course record +0x188, mod_fill_course) is played or cleared [obs: u8 0, state 2 greyed them; u8 1, state 0
+// with relation 0 left them dead]; the readers that go on to the comment step with state 2 (main+0x1b6af70,
+// +0x1be6d30, +0x1be9860) are taken then as "already rated" [inf]. Answered: 0 / 0, so rating is open. The comment
+// button (main+0x1be7d30, +0x1b6bb48) also wants the comment answer's two allowances (map[0] / map[1]) above the
+// player's comment count on the course (course +0x7896c), and the course's "comments on" flag (course global
+// main+0x2c4b710 +0x860: the maker's profile setting, copied into the course list's entries +0x830, from the maker's
+// user record +0x98: fill_user sets it) [obs: 0 kept the button grey]. Our server takes likes and comments on every
+// course.
 static void can_rate(Cpu *c) {
     if (!mod_hundred()) { guest_call_orig(c, c->pc); return; }
     uint64_t no = c->x[0], id = g64(no + 0xe8578);
-    const char *cv = getenv("RECOMP_MOD_CANRATE");  // (test: the flag's value)
-    uint8_t flag = cv ? (uint8_t)atoi(cv) : 1;
-    // The comment button (main+0x1be7d30) also wants the comment answer's two allowances (+0x10 / +0x11, from a
-    // map in the NEX answer) above the player's comment count on the course (course +0x7896c), and the course's
-    // "comments on" flag (course global main+0x2c4b710 +0x860: the maker's profile setting, copied into the
-    // course list's entries +0x830) [inf, from the code]. Our server takes comments on every course.
     netobj_lock(c);
     for (int i = 0; i < 2; i++) {
         uint64_t r = no + (i ? 0xe8530 : 0xe8580);
-        s64(r, id), s8(r + 8, flag), s32(r + 0xc, 0), s16(r + 0x10, i ? 0x0a0a : 0), s8(r + 0x12, 1);
+        s64(r, id), s8(r + 8, 0), s32(r + 0xc, 0), s16(r + 0x10, i ? 0x0a0a : 0), s8(r + 0x12, 1);
     }
     netobj_unlock(c);
-    uint64_t course = g64(MAIN_ADDR(0x2c4b710));
-    if (course && g64(course + 0x5a8) == id) s8(course + 0x860, 1);
     MLOG("rating / comments allowed for %llu\n", (unsigned long long)id);
     finish(c, no, true, 0);
 }
 
-// PostRatingInfo (104, main+0x14e6b90): data id +0xe8548, u8 +0xe8550 (the rating [inf]: 1 like, 2 boo), u8
-// +0xe8554. -> POST /api/courses/<code>/like | boo.
+// PostRatingInfo (104, main+0x14e6b90): data id +0xe8548, u32 +0xe8550 the rating (1 like, 2 boo, 0 take back: its
+// answer, main+0x151fd00, sets the course's own-relation value to 3 / 4 / 2 and counts a like on the game's copies),
+// u32 +0xe8554. -> POST /api/courses/<code>/like | boo, DELETE /api/courses/<code>/vote.
 static void post_rating(Cpu *c) {
     if (!mod_hundred()) { guest_call_orig(c, c->pc); return; }
     uint64_t no = c->x[0], id = g64(no + 0xe8548);
@@ -435,8 +440,13 @@ static void post_rating(Cpu *c) {
     if (a == 1 || a == 2) {
         snprintf(path, sizeof path, "/api/courses/%s/%s", code, a == 1 ? "like" : "boo");
         ok = post_ok(path, "{}");
+    } else if (a == 0) {
+        snprintf(path, sizeof path, "/api/courses/%s/vote", code);
+        Json *j = srv_call("DELETE", path, NULL, NULL);
+        ok = j != NULL;
+        json_free(j);
     }
-    LOG("[mod] rating %s: %u / %u%s\n", code, a, b, a == 1 ? " (like)" : a == 2 ? " (boo)" : "");
+    LOG("[mod] rating %s: %u / %u%s\n", code, a, b, a == 1 ? " (like)" : a == 2 ? " (boo)" : a == 0 ? " (taken back)" : "");
     finish(c, no, ok, 2);
 }
 
@@ -464,7 +474,7 @@ static void post_play_result(Cpu *c) {
     finish(c, no, true, 0);
 }
 
-// ---- comments (text)
+// ---- comments
 
 static size_t utf16_to_utf8(uint64_t buf, uint32_t max, char *out, size_t cap) {
     size_t n = 0;
@@ -491,11 +501,25 @@ static void json_escape(const char *s, char *out, size_t cap) {
     out[n] = 0;
 }
 
-// SearchComments / InOrder (94 / 95, main+0x14e8ec0): data id +0x8e680; answer: the ring of comment records (0x390
-// bytes) at +0x8f410, then +0xe8528 the page, +0xe852c, +0xe852d answered. A record as the game's converter
-// (main+0x14b7720) fills it from a NEX CommentInfo [inf from the copies]: id (UTF-8) +0x08, two bytes +0x58 / +0x5c,
-// the commenter's player id +0x60, position x / y +0x68 / +0x6c, +0x70.., posted time +0x78, the text (UTF-16)
-// +0x88, +0x130 / +0x134 / +0x138 (a picture: none), the commenter's name (UTF-16) +0x2c8, Mii +0x2f0.
+// A comment as SMM2 keeps one: the 0x390-byte record its converter (main+0x14b7720) fills from a NEX CommentInfo,
+// and the game's own copy of a comment it just posted (main+0x14b8030, from the post's request) shows which request
+// field lands where: id (UTF-8) +0x08; +0x58 posted after a clear (request +0x8e690: the Post a Comment screen opened
+// from the clear screen [inf]); +0x5c type (0 drawing, 1 text, 2 stamp: the screen's three tabs, request +0x8e694,
+// main+0x17f88e0); the poster's player id +0x60; where the player was, x / y +0x68 / +0x6c (request +0x8e698 /
+// +0x8e69c); +0x70 in the sub area (+0x8e6a0); +0x71 the face picked for the Mii (+0x8e6a1); +0x72 "Require course
+// clear to view" (+0x8e6a2) [obs: ticked, 1]; posted time +0x78 (Unix seconds [obs: "5 minutes ago"]); the text
+// (UTF-16) +0x88; the stamp's number +0x130 (+0x8e758); a drawing's picture (a relation object, +0x140); the
+// poster's name (UTF-16) +0x2c8 and Mii +0x2f0; +0x388 valid. A comment with type 0 has its picture fetched
+// (main+0x14b8930 picks records with +0x5c == 0, main+0x14eaf30 downloads them).
+#define COMMENT_PICTURE 0x1c200  // a drawn comment's picture as the game keeps it
+static void comment_fields(uint64_t no, char *out, size_t cap) {
+    snprintf(out, cap, "\"x\":%d,\"y\":%d,\"sub_area\":%s,\"face\":%u,\"clear_required\":%s,\"cleared\":%s",
+             (int32_t)g32(no + 0x8e698), (int32_t)g32(no + 0x8e69c), g8(no + 0x8e6a0) ? "true" : "false",
+             g8(no + 0x8e6a1), g8(no + 0x8e6a2) ? "true" : "false", g32(no + 0x8e690) ? "true" : "false");
+}
+
+// SearchComments / InOrder (94 / 95, main+0x14e8ec0): data id +0x8e680; answer: the ring of comment records at
+// +0x8f410, then +0xe8528 the page, +0xe852c, +0xe852d answered.
 static void search_comments(Cpu *c) {
     if (!mod_hundred()) { guest_call_orig(c, c->pc); return; }
     uint64_t no = c->x[0], id = g64(no + 0x8e680);
@@ -517,18 +541,32 @@ static void search_comments(Cpu *c) {
     for (size_t i = 0; i < n && cnt < cap && entries; i++) {
         Json *m = json_at(list, i);
         uint64_t e = entries + 0x390ull * cnt++;
-        char cid[24];
-        snprintf(cid, sizeof cid, "%zu", i + 1);
+        const char *cid = json_str(json_get(m, "id"), "");
         if (g64(e + 0x08) && g32(e + 0x10) > strlen(cid)) memcpy((void *)(uintptr_t)g64(e + 0x08), cid, strlen(cid) + 1);
-        s32(e + 0x58, 0), s32(e + 0x5c, 0);
+        s32(e + 0x58, json_bool(json_get(m, "cleared"), false));
+        s32(e + 0x5c, (uint32_t)json_num(json_get(m, "type"), 1));
         s64(e + 0x60, pids[i]);
-        s32(e + 0x68, 0), s32(e + 0x6c, 0);
-        s8(e + 0x70, 0), s8(e + 0x71, 0), s8(e + 0x72, 0);
+        s32(e + 0x68, (uint32_t)(int32_t)json_num(json_get(m, "x"), 0));
+        s32(e + 0x6c, (uint32_t)(int32_t)json_num(json_get(m, "y"), 0));
+        s8(e + 0x70, json_bool(json_get(m, "sub_area"), false));
+        s8(e + 0x71, (uint8_t)json_num(json_get(m, "face"), 0));
+        s8(e + 0x72, json_bool(json_get(m, "clear_required"), false));
         s64(e + 0x78, (uint64_t)json_num(json_get(m, "posted"), 0));
         put_utf16(g64(e + 0x88), g32(e + 0x90), json_str(json_get(m, "text"), ""));
-        s16(e + 0x130, 0), s32(e + 0x134, 0), s8(e + 0x138, 0);
+        s16(e + 0x130, (uint16_t)json_num(json_get(m, "stamp"), 0)), s32(e + 0x134, 0), s8(e + 0x138, 0);
+        // a drawing's picture (relation object +0x140: the key +0x148, the name the game's cache keeps it under
+        // +0x268, its size +0x2b8): the comment's id for both; comment_pictures fetches it by that
+        bool drawn = json_num(json_get(m, "type"), 1) == 0;
+        for (int k = 0; k < 2; k++) {
+            uint64_t buf = g64(e + (k ? 0x268 : 0x148));
+            uint32_t bcap = g32(e + (k ? 0x270 : 0x150));
+            const char *v = drawn ? cid : "";
+            if (buf && bcap > strlen(v)) memcpy((void *)(uintptr_t)buf, v, strlen(v) + 1);
+        }
+        s32(e + 0x2b8, drawn ? COMMENT_PICTURE : 0);
         put_utf16(g64(e + 0x2c8), g32(e + 0x2d0), json_str(json_get(m, "name"), ""));
         mii_default_charinfo((uint8_t *)(uintptr_t)(e + 0x2f0), json_str(json_get(m, "name"), ""));
+        s8(e + 0x388, 1);
     }
     s32(ring + 0x10, cnt);
     s32(no + 0xe8528, g32(no + 0x737a8));
@@ -540,24 +578,121 @@ static void search_comments(Cpu *c) {
     finish(c, no, true, 0);
 }
 
-// PostCommentText (91, main+0x14e96b0): data id +0x8e688, u8 +0x8e690, position +0x8e698 / +0x8e69c, +0x8e6a0,
-// +0x8e6a2, the text (UTF-16, up to 75 characters) at *(+0x8e6b0); answer: the comment's id (UTF-8) at *(+0x8e768).
-static void post_comment(Cpu *c) {
-    if (!mod_hundred()) { guest_call_orig(c, c->pc); return; }
-    uint64_t no = c->x[0], id = g64(no + 0x8e688);
-    char code[12], path[64], text[256], esc[600], body[700];
-    course_code_of(id, code);
-    utf16_to_utf8(g64(no + 0x8e6b0), 75, text, sizeof text);
-    json_escape(text, esc, sizeof esc);
+// A comment posted: POST /api/courses/<code>/comments with SMM2's fields; the server's id for it goes back into
+// *(+0x8e768) (UTF-8, capacity +0x8e770), as the original's answer does.
+static void post_comment_as(Cpu *c, const char *what, const char *body_fields) {
+    uint64_t no = c->x[0];
+    char code[12], path[64], body[900], fields[200];
+    course_code_of(g64(no + 0x8e688), code);
+    comment_fields(no, fields, sizeof fields);
     snprintf(path, sizeof path, "/api/courses/%s/comments", code);
-    snprintf(body, sizeof body, "{\"text\":\"%s\"}", esc);
+    snprintf(body, sizeof body, "{%s,%s}", body_fields, fields);
     Json *j = srv_call("POST", path, body, NULL);
+    const char *cid = json_str(json_get(j, "id"), "");
     netobj_lock(c);
     uint64_t out = g64(no + 0x8e768);
-    if (out && g32(no + 0x8e770) > 2) memcpy((void *)(uintptr_t)out, "1", 2);
+    if (out && g32(no + 0x8e770) > strlen(cid)) memcpy((void *)(uintptr_t)out, cid, strlen(cid) + 1);
     netobj_unlock(c);
-    LOG("[mod] comment on %s: \"%s\" %s\n", code, text, j ? "posted" : "failed");
+    LOG("[mod] comment (%s) on %s: %s %s\n", what, code, j ? "posted" : "failed", body);
     finish(c, no, j != NULL, 2);
+    json_free(j);
+}
+
+// PostCommentText (91, main+0x14e96b0): the comment's fields (above), the text (UTF-16, up to 75 characters) at
+// *(+0x8e6b0).
+static void post_comment(Cpu *c) {
+    if (!mod_hundred()) { guest_call_orig(c, c->pc); return; }
+    char text[256], esc[600], fields[640];
+    utf16_to_utf8(g64(c->x[0] + 0x8e6b0), 75, text, sizeof text);
+    json_escape(text, esc, sizeof esc);
+    snprintf(fields, sizeof fields, "\"type\":1,\"text\":\"%s\"", esc);
+    post_comment_as(c, "text", fields);
+}
+
+// The stamp comment (main+0x14eaa20, the text post's request with the stamp's number at +0x8e758 in place of the
+// text; [obs: unanswered, "Unable to post comment."]).
+static void post_comment_stamp(Cpu *c) {
+    if (!mod_hundred()) { guest_call_orig(c, c->pc); return; }
+    char fields[64];
+    snprintf(fields, sizeof fields, "\"type\":2,\"stamp\":%u", g32(c->x[0] + 0x8e758) & 0xffff);
+    post_comment_as(c, "stamp", fields);
+}
+
+// The drawn comment (main+0x14e9c10): the text post's request, and the drawing in two buffers: *(+0x8f400) (its size
+// at +0x8e75c), which the game keeps as the comment's picture (its own copy after posting: main+0x14b8030 stores it
+// under the comment's id), and *(+0x8f408) (0x1c200 bytes) [? a second form the original uploads as well]. The first
+// goes to our server as the comment's picture: PUT /api/comments/<id>/picture.
+static void post_comment_picture(Cpu *c) {
+    if (!mod_hundred()) { guest_call_orig(c, c->pc); return; }
+    uint64_t no = c->x[0];
+    post_comment_as(c, "drawing", "\"type\":0");
+    if (g32(no + NO_STATUS) != 0) return;
+    char cid[64] = "", path[96];
+    uint64_t s = g64(no + 0x8e768);
+    for (size_t i = 0; s && i + 1 < sizeof cid && g8(s + i); i++) cid[i] = (char)g8(s + i), cid[i + 1] = 0;
+    uint32_t len = g32(no + 0x8e75c);
+    uint64_t pic = g64(no + 0x8f400);
+    if (len > COMMENT_PICTURE) len = COMMENT_PICTURE;
+    snprintf(path, sizeof path, "/api/comments/%s/picture", cid);
+    int st = 0;
+    Json *j = pic && len ? srv_send_bytes("PUT", path, (const void *)(uintptr_t)pic, len, &st) : NULL;
+    LOG("[mod] comment %s: its drawing (%u bytes) %s\n", cid, len, j ? "kept by the server" : "not taken");
+    if (!j) finish(c, no, false, 2);
+    json_free(j);
+}
+
+// Drawn comments' pictures (main+0x14eaf30): the comments whose picture isn't in the game's cache yet are queued at
+// +0x8ec58 (ring of 0x180-byte entries: +0x0c head, +0x08 capacity, count +0x8ec68; picked by main+0x14b8930, queued
+// by main+0x1527ed0 from the comment record's +0x140..: the comment's id at +0x128); the original asks NEX where each
+// is and downloads it into the buffers *(+0x8f3f8)[i] (0x1c200 bytes each, +0x8f3f0 of them), and its completion
+// (main+0x151fbb0) puts each buffer in the cache under that id. From GET /api/comments/<id>/picture.
+static void comment_pictures(Cpu *c) {
+    if (!mod_hundred()) { guest_call_orig(c, c->pc); return; }
+    uint64_t no = c->x[0];
+    char ids[8][64];
+    netobj_lock(c);
+    uint32_t n = g32(no + 0x8ec68), cap = g32(no + 0x8ec60), head = g32(no + 0x8ec64), nbuf = g32(no + 0x8f3f0);
+    if (n > nbuf) n = nbuf;
+    if (n > 8) n = 8;
+    for (uint32_t i = 0; i < n && cap; i++) {
+        uint64_t e = g64(no + 0x8ec58) + 0x180ull * ((head + i) % cap), s = g64(e + 0x128);
+        ids[i][0] = 0;
+        for (size_t k = 0; s && k + 1 < sizeof ids[i] && g8(s + k); k++) ids[i][k] = (char)g8(s + k), ids[i][k + 1] = 0;
+    }
+    netobj_unlock(c);
+    uint32_t got = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        char path[96];
+        snprintf(path, sizeof path, "/api/comments/%s/picture", ids[i]);
+        size_t len = 0;
+        uint8_t *b = ids[i][0] ? (uint8_t *)srv_get_bytes(path, &len) : NULL;
+        uint64_t buf = g64(g64(no + 0x8f3f8) + 8ull * i);
+        if (buf) {
+            memset((void *)(uintptr_t)buf, 0, COMMENT_PICTURE);
+            if (b) memcpy((void *)(uintptr_t)buf, b, len < COMMENT_PICTURE ? len : COMMENT_PICTURE), got++;
+        }
+        free(b);
+    }
+    LOG("[mod] drawn comments: %u of %u pictures from the server\n", got, n);
+    finish(c, no, n > 0, 1);
+}
+
+// Deleting one's own comment (the comment list's Delete, main+0x14eadb0): the comment's id (UTF-8) at *(+0x8e7c0);
+// answer: the status only (4 when the original's call fails with 0x8069000b [inf: no such comment], else 2).
+// -> DELETE /api/comments/<id> (the poster, the course's uploader or the admin).
+static void delete_comment(Cpu *c) {
+    if (!mod_hundred()) { guest_call_orig(c, c->pc); return; }
+    uint64_t no = c->x[0];
+    char cid[64] = "", path[96];
+    netobj_lock(c);
+    uint64_t s = g64(no + 0x8e7c0);
+    for (size_t i = 0; s && i + 1 < sizeof cid && g8(s + i); i++) cid[i] = (char)g8(s + i), cid[i + 1] = 0;
+    netobj_unlock(c);
+    snprintf(path, sizeof path, "/api/comments/%s", cid);
+    int st = 0;
+    Json *j = srv_call("DELETE", path, NULL, &st);
+    LOG("[mod] comment %s deleted: %s\n", cid, j ? "yes" : "no");
+    finish(c, no, j != NULL, st == 404 ? 4 : 2);
     json_free(j);
 }
 
@@ -657,10 +792,28 @@ static void deleted_courses(Cpu *c) {
     finish(c, no, true, 0);
 }
 
+// The server's time as the game keeps it: the NEX core object (*(main+0x2a17f08)) +0x110 known, +0x118 POSIX
+// seconds, set on each tick of the NEX core (main+0x21710) from the connection's synchronized clock, and unknown with
+// no connection. What counts from it stays as it is without it: a comment's "X minutes ago" (main+0x1a0b230, only for
+// a post at or before it) kept its layout's placeholder [obs: "5分前" on every comment]. With our server the tick
+// gives it this machine's clock.
+static void nex_tick(Cpu *c) {
+    uint64_t self = c->x[0];
+    guest_call_orig(c, c->pc);
+    if (!mod_hundred() || g8(self + 0x110)) return;
+    s64(self + 0x118, (uint64_t)time(NULL));
+    s8(self + 0x110, 1);
+}
+
 void world_register(void) {
+    hle_override(MAIN_ADDR(0x21710), nex_tick, "mod: the server's time");
     hle_override(MAIN_ADDR(0x14f0090), deleted_courses, "mod: the player's courses taken down (none)");
     hle_override(MAIN_ADDR(0x14e8ec0), search_comments, "mod: SearchComments");
     hle_override(MAIN_ADDR(0x14e96b0), post_comment, "mod: PostCommentText");
+    hle_override(MAIN_ADDR(0x14eaa20), post_comment_stamp, "mod: the stamp comment");
+    hle_override(MAIN_ADDR(0x14eadb0), delete_comment, "mod: delete a comment");
+    hle_override(MAIN_ADDR(0x14e9c10), post_comment_picture, "mod: the drawn comment");
+    hle_override(MAIN_ADDR(0x14eaf30), comment_pictures, "mod: drawn comments' pictures");
     hle_override(MAIN_ADDR(0x14e0d40), can_post_course, "mod: CanPostCourse");
     hle_override(MAIN_ADDR(0x14de3f0), post_course, "mod: course upload");
     hle_override(MAIN_ADDR(0x14e0c50), delete_course, "mod: DeleteObject (course)");

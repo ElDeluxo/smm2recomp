@@ -141,7 +141,8 @@ static ImGuiKey key_from_pad(Uint8 b) {
 // they last used a controller.
 static std::atomic<int> g_kbd{0};  // 1 open, 2 confirmed, 3 cancelled
 static std::atomic<bool> g_last_pad{false};
-static char g_kbd_text[96];
+static char g_kbd_text[400];  // (a comment: 75 characters of up to 4 bytes)
+static char g_kbd_title[200];  // the game's header or guide text, if it gives one
 static int g_kbd_max = 8;
 static bool capturing() { return g_open.load() || g_kbd.load() == 1; }
 // The on-screen controller's menu button (runtime/ui/touchpad.mm)
@@ -725,7 +726,10 @@ static void keyboard_draw(ImGuiIO &io, float scale) {
     ImGui::Begin("##kbd", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
                                     ImGuiWindowFlags_AlwaysAutoResize);
     ImGui::PushFont(g_font_big);
-    ImGui::TextColored(ImVec4(0.93f, 0.76f, 0.33f, 1), "Enter your name");
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.93f, 0.76f, 0.33f, 1));
+    // (no text from the game: a name entry - Link's, a course's - or a longer text, a Course World comment)
+    ImGui::TextWrapped("%s", g_kbd_title[0] ? g_kbd_title : g_kbd_max <= 32 ? "Enter your name" : "Enter text");
+    ImGui::PopStyleColor();
     ImGui::PopFont();
     static bool was_open, was_pad;
     bool pad = g_last_pad.load(), appearing = !was_open || pad != was_pad;  // (switching device: focus the new one)
@@ -757,6 +761,9 @@ extern "C" void menu_kbd_test_answer(const char *text) {
 
 // Game thread (runtime/hle/swkbd.c): show the dialog, re-present the last frame until it's answered.
 // Returns 1 confirmed (out = text, UTF-8), 0 cancelled.
+// The dialog's title for the next menu_keyboard_run (UTF-8; NULL or "": a name entry's or a text's own)
+extern "C" void menu_keyboard_title(const char *title) { snprintf(g_kbd_title, sizeof g_kbd_title, "%s", title ? title : ""); }
+
 extern "C" int menu_keyboard_run(const char *initial, int max_len, char *out, int cap) {
     extern void nvn_represent(void);  // runtime/nvn/objects.c
     snprintf(g_kbd_text, sizeof g_kbd_text, "%s", initial ? initial : "");
@@ -774,6 +781,7 @@ extern "C" int menu_keyboard_run(const char *initial, int max_len, char *out, in
     bool ok = g_kbd.load() == 2 && g_kbd_text[0];
     if (ok) snprintf(out, cap, "%s", g_kbd_text);
     g_kbd = 0;
+    g_kbd_title[0] = 0;
     input_reset();
     return ok;
 }

@@ -1451,8 +1451,13 @@ mod tests {
     fn courses(store: &Store, url: &str) -> Vec<Value> {
         let (st, body) = get(store, url);
         assert_eq!(st, 200, "{url}");
-        let v: Value = serde_json::from_slice(&body).unwrap();
-        v["courses"].as_array().unwrap().clone()
+        let mut v: Value = serde_json::from_slice(&body).unwrap();
+        // (each course also carries its comment count, `Store::annotate`: compared as stored)
+        let list = v["courses"].as_array_mut().unwrap();
+        for c in list.iter_mut() {
+            assert!(c.as_object_mut().unwrap().remove("comments").is_some());
+        }
+        list.clone()
     }
 
     fn codes(list: &[Value]) -> Vec<String> {

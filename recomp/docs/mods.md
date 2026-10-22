@@ -102,18 +102,58 @@ calls (read from the client vtable slot it uses):
 |---|---|---|
 | course lists: PickUp (84, "Hot"), PointRanking (71, "Popular", by difficulty), Latest (73, "New"), Advanced (72, detailed search: difficulty, style, sort), PostedBy (74, a maker's courses), BestTime / FirstClear (81 / 80) | 0x14d8550 (search type +0x746e8) | `GET /api/courses?sort=popular\|new&style=&offset=&limit=100`, filtered into the game's difficulty bands; a maker's courses from `GET /api/makers/<id>`; a player's Played Courses / Liked Courses (PlayedBy 76, PositiveRatedBy 75) from `GET /api/makers/<id>/played` / `liked`; followed makers and versus: empty |
 | GetUserOrCourse (131): the ID search | 0x14dc0d0 | `GET /api/courses/<code>`, else `GET /api/makers/<code>` |
-| GetUsers (48): the makers of listed courses, a maker's page | 0x14d02d0, 0x14d7780, 0x14d2f00 | `GET /api/makers/<id>`: name, maker code, likes received and maker points from their courses, the courses uploaded and the server's `upload_limit` (record +0x190 / +0x194: a maker page's "Courses uploaded" header); the default Mii |
+| GetUsers (48): the makers of listed courses, a maker's page | 0x14d02d0, 0x14d7780, 0x14d2f00 | `GET /api/makers/<id>`: name, maker code, likes received and maker points from their courses, the courses uploaded and the server's `upload_limit` (record +0x190 / +0x194: a maker page's "Courses uploaded" header); comments on (+0x98); the default Mii |
 | SearchUsers* (50, 51, 57, 58): leaderboards | 0x14d1820 (kind +0x73a14) | `GET /api/rankings/maker_points` (makers, also the period's board), `endless_<d>` (Endless), `clears` |
-| CanPostRatingAndComment (61) | 0x14ebc60 | allowed |
-| PostRatingInfo (104): like / boo | 0x14e6b90 | `POST /api/courses/<code>/like` or `/boo` |
+| CanPostRatingAndComment (61) | 0x14ebc60 | allowed (below) |
+| PostRatingInfo (104): like / boo | 0x14e6b90 | `POST /api/courses/<code>/like` or `/boo`; a rating taken back (0): `DELETE /api/courses/<code>/vote` |
 | PostPlayResult (96) | 0x14e30e0 | `POST /api/courses/<code>/play`, and `/clear {time_ms}` on a clear (not for Endless courses: those are counted by the Endless reports) |
-| SearchComments (94 / 95), PostCommentText (91) | 0x14e8ec0, 0x14e96b0 | `GET` / `POST /api/courses/<code>/comments` (text) |
+| SearchComments (94 / 95); the text, stamp and drawn comment; deleting one's own | 0x14e8ec0; 0x14e96b0, 0x14eaa20, 0x14e9c10; 0x14eadb0 | `GET` / `POST /api/courses/<code>/comments` (SMM2's whole comment, below), a drawing's picture `PUT` / `GET /api/comments/<id>/picture`, `DELETE /api/comments/<id>` |
+| a drawn comment's picture (the relation object, as for a course's picture) | 0x14eaf30 | `GET /api/comments/<id>/picture` |
 | CanPostCourse (60), the course upload (66 + upload + 67), DeleteObject | 0x14e0d40, 0x14de3f0, 0x14e0c50 | allowed; the game's own course (header "SCDL", not yet encrypted) to `POST /api/courses` as the signed-in maker (`?based_on=` for an edited copy, below), its code back as the upload's data id, then its picture to `PUT /api/courses/<code>/thumbnail`; `DELETE /api/courses/<code>` |
 | GetReqGetInfoHeadersInfo (134) + HTTP: a course's picture ("relation objects", 5 at a time) | 0x14e0e70 (`edit.c`) | `GET /api/courses/<code>/thumbnail?wait_ms=` (below) |
 | the same for a course's whole-course map (More info) | 0x14e2cf0 (`edit.c`) | `GET /api/courses/<code>/entire_thumbnail?wait_ms=` |
 
 Course World courses download and play exactly like the Endless ones (the same GetObject). Super Worlds: below. Not
 served: Ninji speedruns, notifications, follows, Network Play.
+
+**Likes and boos** (checked in game 2026-10-23, two accounts: one player's course liked / booed by the other). SMM2
+offers them on the clear screen (Boo! / I like it!) and nowhere else in Course World: a course's card has none. Two
+things decide whether the hearts take input (main+0x1be73b0): the player's own relation to the course, which the
+game keeps in the course record (+0x188 of a list entry, the course global main+0x2c4b710 +0x1b8: 0 none, 1 played,
+2 cleared, 3 liked, 4 booed [inf: PostRatingInfo's answer, main+0x151fd00, sets 3 / 4 / 2 for like / boo / take
+back]), and the CanPostRatingAndComment answer (rating +0xe8580: u8 +8 and u32 state +0xc). The hearts are live at
+relation 1 or 2 with state other than 2 [obs]; state 2 greys them [obs], relation 0 leaves them drawn but dead [obs:
+before this, the relation was always 0: "took no test input"], 3 / 4 show the choice made. The
+game asks for the course record again after PostPlayResult (GetCourses), so it learns it from the server: every
+course object carries the signed-in player's `you` = `{played, cleared, vote}` (`Store::annotate`), which
+`mod_fill_course` turns into +0x188; CanPostRatingAndComment answers state 0. A course already liked shows "I like
+it!" chosen on its next clear (and Boo! greyed), as on a console. The like counts on the course card, Liked Courses on
+the player's page and the maker page's Likes / Maker Points come from the server's votes. Evidence (private):
+`evidence/mods/world-social/` (clear_screen_*, course_card_*, my_info_liked_courses, maker_page_after_likes).
+
+**Comments** (checked in game 2026-10-23: text, stamp and drawn comments posted, listed with the poster's name, Mii
+and time, shown under the clear screen, a drawing fetched in a new session, one's own deleted; `comments_*`,
+`post_comment_*`). The comment button wants the maker's
+"comments on" (user record +0x98, the course's +0x830 / course global +0x860: `fill_user` sets it) and the comment
+answer's two allowances (+0xe8530 +0x10 / +0x11: 10) above the player's comment count on the course. Post a Comment's
+three tabs post through three requests (main+0x17f88e0; NetAppTask 0x20 / 0x21 / 0x22) with one request record:
+course +0x8e688, posted after a clear +0x8e690, type +0x8e694 (0 drawing, 1 text, 2 stamp), where the player was
++0x8e698 / +0x8e69c, in the sub area +0x8e6a0, the face picked for the Mii +0x8e6a1, "Require course clear to view"
++0x8e6a2, then the text (UTF-16, 75 characters) at *(+0x8e6b0), the stamp's number +0x8e758, or the drawing at
+*(+0x8f400) (its size +0x8e75c; the game's own compressed data [obs: 944 bytes], the picture it keeps; a second
+0x1c200-byte buffer at *(+0x8f408) is not kept). The server keeps all of it (`Comment`: `type`, `text`, `stamp`, `x`,
+`y`, `sub_area`, `face`, `clear_required`, `cleared`, and the drawing as `comments/<id>.bin`) and gives each comment
+an id, which goes back into the request's answer (*(+0x8e768)). A listed comment is the 0x390-byte record the game's
+converter fills (main+0x14b7720; the fields in `world.c`), with +0x388 set (unset, the list showed empty bubbles)
+and, for a drawing, the comment's id as its picture's key (+0x148, +0x268): the game asks main+0x14eaf30 for the
+pictures not in its cache (main+0x14b8930: type 0 only; before this every comment counted as a drawing, and the
+unanswered request gave "A communication error occurred."), and the mod fills its download buffers from the server.
+Delete (one's own comments: the list shows Delete instead of Report) is main+0x14eadb0 with the comment's id.
+"X minute(s) ago" counts from the game's server time (the NEX core object *(main+0x2a17f08) +0x110 / +0x118, set
+each NEX tick, main+0x21710, from the connection): with no connection it stays unknown and every comment showed its
+layout's placeholder, "5分前"; the mod's tick sets it from this machine's clock (`nex_tick`). The software keyboard
+now shows the game's own text as its title (ShowKeyboardArg header / sub / guide text: "Please input the Course ID
+or Maker ID you want to search for."), and takes up to the game's length (a comment's 75; the dialog stopped at 8).
 
 **Thumbnails** (a course's picture on its card and course page, its whole-course map under More info): the server
 keeps them as JPEGs (`thumbnails/<code>.jpg`, `<code>-entire.jpg` in its folder). For a course from TGRCode's archive
@@ -143,7 +183,14 @@ withheld picture, `RECOMP_MOD_TEST_NO_THUMB=<code>`, the stand-in).
 
 **Played Courses** (a maker page's tab): the server keeps each player's played courses, newest first (300): a play
 posted from Course World, and every course of a challenge run (Endless, 100 Mario) on its first report; a store from
-before this starts from the courses its runs passed. **Liked Courses**: the courses the player liked.
+before this starts from the courses its runs passed. **Liked Courses**: the courses the player liked (checked
+2026-10-23).
+
+**The ID search and maker pages** (checked 2026-10-23). The Course World ID button's search finds a course (its card:
+name, description, likes, plays, clear rate, world record, maker) or a maker (their page) by ID, and an unknown ID
+gives SMM2's "Course or Maker not found."; a maker page (from a card's Mii, or the search) shows the maker's Likes and
+Maker Points from their courses' votes, their Super World, Uploaded Courses and Liked Courses
+(`evidence/mods/world-social/id_search_*`, `maker_page_*`).
 
 ### Super Worlds (`games/smm2/mods/superworld.c`)
 

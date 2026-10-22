@@ -2013,3 +2013,26 @@ which carry exact pairs for agl's and the effects' programs the files alone don'
 in memory, or a pipeline-level warm-up); pipelines (Metal's back end, per state) becoming the bigger part of a course
 start's hitch (then guess the common pipeline states from the programs the game sets); iOS measurements showing heat
 or battery cost (then compile only while the player is in menus, or only ranks 0-1).
+
+## 2026-10-23 — Course World likes and comments: the server says where each player stands, and keeps SMM2's whole comment
+
+**Decision (agent):**
+1. **The player's own relation to a course travels with the course.** Every course object our server sends to a
+   signed-in player carries `you` = `{played, cleared, vote}` (`Store::annotate`), and the mod writes it into the
+   course record the way SMM2's converter writes the NEX field (+0x188: 1 played, 2 cleared, 3 liked, 4 booed). SMM2
+   reads it there to open the clear screen's hearts and to show a choice already made; it learns it from the course
+   record it asks for again after posting the play. A rating taken back (the game's rating 0) is `DELETE
+   /api/courses/<code>/vote`.
+2. **A comment is kept as SMM2 posts it**: type (text, stamp, drawing), text, stamp number, where the player was (x, y,
+   sub area), the Mii's face, "require course clear to view", posted after a clear; a drawing's picture is kept as the
+   game's own data (`comments/<id>.bin`), not turned into an image format. Comment ids are the server's, unique across
+   courses, so the game's picture cache and Delete need nothing else (`/api/comments/<id>`).
+3. **The game's server time is this machine's clock** when the mod is the server: the NEX core's tick (main+0x21710)
+   leaves it unknown without a connection, so the mod's override sets it after each tick.
+**Why:** (1) is how SMM2's own server answers (the field is per player in each CourseInfo); a separate request per
+course would cost a round trip per list. (2) Without the position, face and flags the comments would show in the
+wrong place or with the wrong face, and converting drawings would need the game's picture format worked out with
+nothing gained: only SMM2 shows them. (3) Every "X ago" label counts from it; a client with a wrong clock shows wrong
+ages but nothing breaks, and the server's time could be sent later if that matters.
+**Would change:** a web view of comments wanting drawings as images (then decode the game's format server side);
+the time coming from the server (a field in the answers) if clients' clocks prove unreliable.

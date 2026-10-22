@@ -7,7 +7,7 @@
 //! |---|---|---|
 //! | POST | `/api/courses` (body: course data; header `X-Maker`) | upload → `{code, …}` |
 //! | GET | `/api/courses?q=&style=&sort=new\|popular\|hot\|hard&limit=&offset=` | search (`hot`: as `popular`); with an upstream source, `popular`, `hot` (Popular's latest uploads first) and `new` (no `q`) are its live lists first (`lists`) |
-//! | GET | `/api/courses/<code>` | metadata (of a held or an upstream-listed course) |
+//! | GET | `/api/courses/<code>` | metadata (of a held or an upstream-listed course); here and in the course lists (search, a maker's, played / liked), its `comments` count and, signed in, the player's own `you` = `{played, cleared, vote}` |
 //! | GET | `/api/courses/<code>/data` (`?wait_ms=`, at most 20000) | course data (bytes); an upstream-listed course the server doesn't hold is fetched and imported, waited for up to `wait_ms` (default 7000; 404 meanwhile) |
 //! | GET | `/api/courses/<code>/thumbnail`, `/entire_thumbnail` (`?wait_ms=`, at most 20000) | the course's picture and its whole-course map (JPEG); one of an upstream course the server doesn't hold yet is fetched from the source, waited for up to `wait_ms` (404 meanwhile) |
 //! | PUT | `/api/courses/<code>/thumbnail`, `/entire_thumbnail` (body: a JPEG or the game's thumbnail block; signed in, the course's uploader) | an uploaded course's picture and whole-course map, as the game made them |
@@ -19,10 +19,13 @@
 //! | GET | `/api/makers/<maker id>` | a maker's profile, courses, `super_world_id` and `upload_limit` |
 //! | GET | `/api/makers/<maker id>/played`, `/liked` | the courses a player played (newest first: Course World and Endless) or liked |
 //! | POST | `/api/courses/<code>/like`, `/boo` | one vote per account (replaces its earlier vote) |
+//! | DELETE | `/api/courses/<code>/vote` | take the account's vote back |
 //! | POST | `/api/courses/<code>/clear` (body `{"time_ms"}`, optional) | clear; first clear / record |
 //! | POST | `/api/courses/<code>/replay` (body: replay, `mmk_modes::replay`) | clear proven by a replay: re-simulated, its time can set a verified record |
 //! | GET | `/api/courses/<code>/replay` | the verified record's replay (for ghosts) |
-//! | GET, POST | `/api/courses/<code>/comments` (POST body `{"text"}`) | comments |
+//! | GET, POST | `/api/courses/<code>/comments` (POST body `{"text"}`, or SMM2's whole comment: `{"type": 0 drawing \| 1 text \| 2 stamp, "text", "stamp", "x", "y", "sub_area", "face", "clear_required", "cleared"}`) | comments (each with its `id`) |
+//! | PUT, GET | `/api/comments/<id>/picture` (PUT: the poster) | a drawn comment's picture (the game's data) |
+//! | DELETE | `/api/comments/<id>` | remove a comment (its poster, the course's uploader or the admin) |
 //! | DELETE | `/api/courses/<code>` | remove (the uploader, or the admin) |
 //! | POST | `/api/admin/ban/<account id>`, `/api/admin/unban/<id>` | moderation (admin token) |
 //! | POST | `/api/endless/<easy\|normal\|expert\|super_expert>` (body `{"cleared"}`, or `{"ruleset": "hundred"}` for a completed 100 Mario run) | a run the client held itself; keeps the best (100 Mario: counts the completion) |
@@ -241,26 +244,75 @@ impl Inner {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+/// A comment on a course as SMM2 posts one: text, a stamp (one of the game's reaction pictures)
+/// or a drawing (the game's own picture data, kept as `comments/<id>.bin`), placed where the
+/// player was in the course.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Comment {
+    /// Unique on the server.
+    pub id: String,
     pub maker_id: String,
     pub name: String,
+    /// SMM2's comment type: 0 drawing, 1 text, 2 stamp (JSON `type`).
+    pub kind: u8,
     pub text: String,
+    /// The stamp's number (type 2).
+    pub stamp: u16,
     pub posted: u64,
+    /// Where the player was: position in the course, and whether in its sub area.
+    pub x: i32,
+    pub y: i32,
+    pub sub_area: bool,
+    /// The face the poster picked for their Mii.
+    pub face: u8,
+    /// Shown only to players who cleared the course ("Require course clear to view").
+    pub clear_required: bool,
+    /// Posted after clearing the course.
+    pub cleared: bool,
+    /// A drawing's picture is held (`comments/<id>.bin`).
+    pub picture: bool,
 }
+
+/// Comment types (SMM2's).
+pub const COMMENT_DRAWING: u8 = 0;
+pub const COMMENT_TEXT: u8 = 1;
+pub const COMMENT_STAMP: u8 = 2;
+/// The most a drawing's picture data may take (the game's two 0x1c200-byte buffers).
+pub const MAX_COMMENT_PICTURE: usize = 2 * 0x1c200;
 
 impl Comment {
     fn to_json(&self) -> Value {
-        json!({ "maker_id": self.maker_id, "name": self.name, "text": self.text,
-                "posted": self.posted })
+        json!({ "id": self.id, "maker_id": self.maker_id, "name": self.name, "type": self.kind,
+                "text": self.text, "stamp": self.stamp, "posted": self.posted, "x": self.x,
+                "y": self.y, "sub_area": self.sub_area, "face": self.face,
+                "clear_required": self.clear_required, "cleared": self.cleared,
+                "picture": self.picture })
     }
     fn from_json(v: &Value) -> Option<Self> {
         Some(Self {
+            id: v["id"].as_str().unwrap_or_default().to_string(),
             maker_id: v["maker_id"].as_str()?.to_string(),
             name: v["name"].as_str().unwrap_or_default().to_string(),
-            text: v["text"].as_str()?.to_string(),
             posted: v["posted"].as_u64().unwrap_or(0),
+            picture: v["picture"].as_bool().unwrap_or(false),
+            ..Self::from_post(v)
         })
+    }
+    /// What a player posts (the server sets the id, the poster, the time and the picture).
+    fn from_post(v: &Value) -> Self {
+        let b = |k: &str| v[k].as_bool().unwrap_or(false);
+        Self {
+            kind: v["type"].as_u64().unwrap_or(COMMENT_TEXT as u64) as u8,
+            text: v["text"].as_str().unwrap_or_default().to_string(),
+            stamp: v["stamp"].as_u64().unwrap_or(0) as u16,
+            x: v["x"].as_i64().unwrap_or(0) as i32,
+            y: v["y"].as_i64().unwrap_or(0) as i32,
+            sub_area: b("sub_area"),
+            face: v["face"].as_u64().unwrap_or(0) as u8,
+            clear_required: b("clear_required"),
+            cleared: b("cleared"),
+            ..Self::default()
+        }
     }
 }
 
@@ -337,10 +389,16 @@ impl Store {
             .map(|o| {
                 o.iter()
                     .map(|(code, v)| {
-                        let list = v
+                        let mut list: Vec<Comment> = v
                             .as_array()
                             .map(|a| a.iter().filter_map(Comment::from_json).collect())
                             .unwrap_or_default();
+                        // (comments from before ids: one from their place)
+                        for (i, c) in list.iter_mut().enumerate() {
+                            if c.id.is_empty() {
+                                c.id = format!("{code}-{}", i + 1);
+                            }
+                        }
                         (code.clone(), list)
                     })
                     .collect()
@@ -712,6 +770,57 @@ impl Store {
         Ok(out)
     }
 
+    /// Take back `account`'s like or boo on `code` (none: nothing changes).
+    pub fn unvote(&self, code: &str, account: u32) -> Result<Meta, StoreError> {
+        let mut g = self.inner.lock().unwrap();
+        let i = *g.by_code.get(code).ok_or(StoreError::NotFound)?;
+        let old = g.votes.get_mut(code).and_then(|m| m.remove(&account));
+        let m = &mut g.courses[i];
+        match old {
+            Some(1) => m.likes -= 1,
+            Some(-1) => m.boos -= 1,
+            _ => {}
+        }
+        let out = m.clone();
+        if old.is_some() {
+            self.save_index(&g)?;
+            self.save_social(&g)?;
+        }
+        Ok(out)
+    }
+
+    /// Course objects as the game's course records carry them: `comments` (how many), and for a
+    /// signed-in player their own relation to the course, `you` = `{"played", "cleared", "vote"}`
+    /// (vote 1 like, −1 boo, 0 none). `v`: one course object or an array of them; objects
+    /// without a `code` are left alone.
+    pub fn annotate(&self, a: Option<&accounts::Account>, v: &mut Value) {
+        let g = self.inner.lock().unwrap();
+        let has = |m: &HashMap<String, Vec<String>>, who: &str, code: &str| {
+            m.get(who).is_some_and(|l| l.iter().any(|c| c == code))
+        };
+        let mut one = |c: &mut Value| {
+            let Some(code) = c["code"].as_str().map(str::to_string) else {
+                return;
+            };
+            c["comments"] = json!(g.comments.get(&code).map_or(0, Vec::len));
+            let Some(a) = a else { return };
+            let vote = g
+                .votes
+                .get(&code)
+                .and_then(|m| m.get(&a.id))
+                .copied()
+                .unwrap_or(0);
+            let cleared = has(&g.cleared, &a.maker_id, &code);
+            let played = cleared || vote != 0 || has(&g.played, &a.maker_id, &code);
+            c["you"] = json!({ "played": played, "cleared": cleared, "vote": vote });
+        };
+        match v {
+            Value::Array(list) => list.iter_mut().for_each(&mut one),
+            Value::Object(_) => one(v),
+            _ => {}
+        }
+    }
+
     /// A clear by `who` (maker ID, if signed in) in `time_ms` (0 unknown). The time can set the
     /// record unless the server takes records only from replays.
     pub fn clear(&self, code: &str, who: Option<&str>, time_ms: u64) -> Result<Meta, StoreError> {
@@ -793,32 +902,107 @@ impl Store {
         g.comments.get(code).cloned().unwrap_or_default()
     }
 
+    /// A new comment on `code` by `a` (`c`: what the game posted; its id, poster, time and
+    /// picture are set here). Text is required for a text comment, a stamp for a stamp.
     pub fn comment(
         &self,
         code: &str,
         a: &accounts::Account,
-        text: &str,
+        mut c: Comment,
     ) -> Result<Comment, StoreError> {
-        let text: String = text.trim().chars().take(MAX_COMMENT).collect();
-        if text.is_empty() || text.chars().any(|c| c.is_control() && c != '\n') {
+        c.text = c.text.trim().chars().take(MAX_COMMENT).collect();
+        let bad = match c.kind {
+            COMMENT_TEXT => c.text.is_empty(),
+            COMMENT_STAMP | COMMENT_DRAWING => false,
+            _ => true,
+        };
+        if bad || c.text.chars().any(|ch| ch.is_control() && ch != '\n') {
             return Err(StoreError::Bad("bad comment".into()));
+        }
+        if c.kind != COMMENT_TEXT {
+            c.text.clear();
         }
         let mut g = self.inner.lock().unwrap();
         if !g.by_code.contains_key(code) {
             return Err(StoreError::NotFound);
         }
-        let c = Comment {
-            maker_id: a.maker_id.clone(),
-            name: a.name.clone(),
-            text,
-            posted: now(),
-        };
+        g.rng ^= g.rng << 13;
+        g.rng ^= g.rng >> 7;
+        g.rng ^= g.rng << 17;
+        let posted = now();
+        c.id = format!("{posted:x}{:06x}", g.rng & 0xff_ffff);
+        c.maker_id = a.maker_id.clone();
+        c.name = a.name.clone();
+        c.posted = posted;
+        c.picture = false;
         g.comments
             .entry(code.to_string())
             .or_default()
             .push(c.clone());
         self.save_social(&g)?;
         Ok(c)
+    }
+
+    fn comment_picture_path(&self, id: &str) -> Option<PathBuf> {
+        id.chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
+            .then(|| self.dir.join(format!("comments/{id}.bin")))
+    }
+
+    /// A drawing's picture (the game's data, as it posted it), from the comment's poster.
+    pub fn put_comment_picture(&self, id: &str, by: &str, data: &[u8]) -> Result<(), StoreError> {
+        if data.is_empty() || data.len() > MAX_COMMENT_PICTURE {
+            return Err(StoreError::TooLarge);
+        }
+        let path = self.comment_picture_path(id).ok_or(StoreError::NotFound)?;
+        let mut g = self.inner.lock().unwrap();
+        let c = g
+            .comments
+            .values_mut()
+            .flat_map(|l| l.iter_mut())
+            .find(|c| c.id == id)
+            .ok_or(StoreError::NotFound)?;
+        if c.maker_id != by || c.kind != COMMENT_DRAWING {
+            return Err(StoreError::Forbidden);
+        }
+        fs::create_dir_all(self.dir.join("comments"))
+            .and_then(|_| fs::write(&path, data))
+            .map_err(|e| StoreError::Io(e.to_string()))?;
+        c.picture = true;
+        self.save_social(&g)
+    }
+
+    /// A drawing's picture data.
+    pub fn comment_picture(&self, id: &str) -> Option<Vec<u8>> {
+        fs::read(self.comment_picture_path(id)?).ok()
+    }
+
+    /// Remove a comment (its poster, the course's uploader or the admin).
+    pub fn delete_comment(
+        &self,
+        id: &str,
+        by: Option<&accounts::Account>,
+        admin: bool,
+    ) -> Result<(), StoreError> {
+        let mut g = self.inner.lock().unwrap();
+        let (code, i) = g
+            .comments
+            .iter()
+            .find_map(|(code, l)| Some((code.clone(), l.iter().position(|c| c.id == id)?)))
+            .ok_or(StoreError::NotFound)?;
+        let owner = g.by_code.get(&code).map(|&i| g.courses[i].owner);
+        let list = g.comments.get_mut(&code).ok_or(StoreError::NotFound)?;
+        let mine = by.is_some_and(|a| {
+            a.maker_id == list[i].maker_id || owner.is_some_and(|o| o != 0 && o == a.id)
+        });
+        if !(admin || mine) {
+            return Err(StoreError::Forbidden);
+        }
+        list.remove(i);
+        if let Some(p) = self.comment_picture_path(id) {
+            let _ = fs::remove_file(p);
+        }
+        self.save_social(&g)
     }
 
     /// Remove a course (its uploader or the admin).
@@ -837,7 +1021,11 @@ impl Store {
             .map(|(i, m)| (m.code.clone(), i))
             .collect();
         g.votes.remove(code);
-        g.comments.remove(code);
+        for c in g.comments.remove(code).unwrap_or_default() {
+            if let Some(p) = self.comment_picture_path(&c.id) {
+                let _ = fs::remove_file(p);
+            }
+        }
         let _ = fs::remove_file(self.dir.join(format!("courses/{code}.bin")));
         self.save_index(&g)?;
         self.save_social(&g)
@@ -1246,6 +1434,8 @@ pub fn handle(
     // signed-in actions need an account that isn't banned
     let signed_in = || account.as_ref().filter(|a| !a.banned);
     let who = signed_in().map(|a| a.maker_id.as_str());
+    // course objects carry their comment count and the signed-in player's own relation to them
+    let mark = |v: &mut Value| store.annotate(signed_in(), v);
     if let Some(r) = endless::route(store, method, &parts, &q, who, body) {
         return r;
     }
@@ -1270,17 +1460,26 @@ pub fn handle(
         },
         ("GET", ["api", "makers", id, list @ ("played" | "liked")]) => {
             let courses = store.courses_of_player(id, *list == "liked");
-            json(
-                200,
-                json!({ "courses": courses.iter().map(Meta::to_json).collect::<Vec<_>>() }),
-            )
+            let mut v = json!({ "courses": courses.iter().map(Meta::to_json).collect::<Vec<_>>() });
+            mark(&mut v["courses"]);
+            json(200, v)
         }
         ("GET", ["api", "makers", id]) => match store.maker(id) {
-            Some(v) => json(200, v),
+            Some(mut v) => {
+                mark(&mut v["courses"]);
+                json(200, v)
+            }
             None => err(404, "no such maker"),
         },
         ("POST", ["api", "courses", code, vote @ ("like" | "boo")]) => match signed_in() {
             Some(a) => match store.vote(code, a.id, if *vote == "like" { 1 } else { -1 }) {
+                Ok(m) => json(200, m.to_json()),
+                Err(e) => store_err(e),
+            },
+            None => err(401, "sign in"),
+        },
+        ("DELETE", ["api", "courses", code, "vote"]) => match signed_in() {
+            Some(a) => match store.unvote(code, a.id) {
                 Ok(m) => json(200, m.to_json()),
                 Err(e) => store_err(e),
             },
@@ -1311,14 +1510,26 @@ pub fn handle(
                 .collect::<Vec<_>>() }),
         ),
         ("POST", ["api", "courses", code, "comments"]) => match signed_in() {
-            Some(a) => {
-                let text = body_json()["text"].as_str().unwrap_or("").to_string();
-                match store.comment(code, a, &text) {
-                    Ok(c) => json(201, c.to_json()),
-                    Err(e) => store_err(e),
-                }
-            }
+            Some(a) => match store.comment(code, a, Comment::from_post(&body_json())) {
+                Ok(c) => json(201, c.to_json()),
+                Err(e) => store_err(e),
+            },
             None => err(401, "sign in"),
+        },
+        ("PUT", ["api", "comments", id, "picture"]) => match signed_in() {
+            Some(a) => match store.put_comment_picture(id, &a.maker_id, body) {
+                Ok(()) => json(200, json!({ "ok": true })),
+                Err(e) => store_err(e),
+            },
+            None => err(401, "sign in"),
+        },
+        ("GET", ["api", "comments", id, "picture"]) => match store.comment_picture(id) {
+            Some(b) => (200, "application/octet-stream", b),
+            None => err(404, "no picture"),
+        },
+        ("DELETE", ["api", "comments", id]) => match store.delete_comment(id, signed_in(), admin) {
+            Ok(()) => json(200, json!({ "deleted": id })),
+            Err(e) => store_err(e),
         },
         (
             "PUT",
@@ -1432,10 +1643,15 @@ pub fn handle(
                     .map(Meta::to_json)
                     .collect()
             });
-            json(200, json!({ "courses": courses }))
+            let mut v = json!({ "courses": courses });
+            mark(&mut v["courses"]);
+            json(200, v)
         }
         ("GET", ["api", "courses", code]) => match store.course_json(code) {
-            Some(v) => json(200, v),
+            Some(mut v) => {
+                mark(&mut v);
+                json(200, v)
+            }
             None => err(404, "no such course"),
         },
         ("GET", ["api", "courses", code, "data"]) => {
@@ -1980,6 +2196,53 @@ mod tests {
             "newest first, once each"
         );
         assert_eq!(list("liked"), vec![codes[1].clone()]);
+        // each course object tells the signed-in player their own relation to it
+        let you = |c: &str, t: Option<&str>| {
+            call("GET", &format!("/api/courses/{c}"), t).1["you"].clone()
+        };
+        assert_eq!(
+            you(&codes[0], Some(&token)),
+            json!({"played": true, "cleared": false, "vote": 0})
+        );
+        assert_eq!(
+            you(&codes[1], Some(&token)),
+            json!({"played": true, "cleared": false, "vote": 1})
+        );
+        assert_eq!(
+            you(&codes[2], Some(&token)),
+            json!({"played": false, "cleared": false, "vote": 0})
+        );
+        assert_eq!(you(&codes[1], None), Value::Null, "only signed in");
+        call(
+            "POST",
+            &format!("/api/courses/{}/clear", codes[2]),
+            Some(&token),
+        );
+        assert_eq!(you(&codes[2], Some(&token))["cleared"], true);
+        let (_, all) = call("GET", "/api/courses?limit=10", Some(&token));
+        assert!(
+            all["courses"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|c| c["you"].is_object())
+        );
+        let (_, mine) = call("GET", &format!("/api/makers/{me}/liked"), Some(&token));
+        assert_eq!(mine["courses"][0]["you"]["vote"], 1);
+        // a vote taken back
+        let (st, m) = call(
+            "DELETE",
+            &format!("/api/courses/{}/vote", codes[1]),
+            Some(&token),
+        );
+        assert_eq!((st, m["likes"].as_u64()), (200, Some(0)));
+        assert_eq!(you(&codes[1], Some(&token))["vote"], 0);
+        assert_eq!(list("liked"), Vec::<String>::new());
+        call(
+            "POST",
+            &format!("/api/courses/{}/like", codes[1]),
+            Some(&token),
+        );
         drop(store);
         let store = Store::open(&dir).unwrap();
         assert_eq!(
@@ -2224,6 +2487,52 @@ mod tests {
         );
         let (_, c) = call("GET", &format!("/api/courses/{code}/comments"), None, b"");
         assert_eq!(c["comments"][0]["text"], "nice jumps");
+        assert_eq!(c["comments"][0]["type"], COMMENT_TEXT);
+        // SMM2's whole comment: a stamp and a drawing with its picture; counted on the course
+        let (st, stamp) = call(
+            "POST",
+            &format!("/api/courses/{code}/comments"),
+            Some(&token),
+            br#"{"type":2,"stamp":5,"x":432,"y":48,"sub_area":true,"face":3,"clear_required":true,"cleared":true}"#,
+        );
+        assert_eq!(st, 201);
+        assert_eq!(
+            (
+                &stamp["stamp"],
+                &stamp["x"],
+                &stamp["face"],
+                &stamp["sub_area"],
+                &stamp["clear_required"]
+            ),
+            (
+                &json!(5),
+                &json!(432),
+                &json!(3),
+                &json!(true),
+                &json!(true)
+            )
+        );
+        let (_, drawn) = call(
+            "POST",
+            &format!("/api/courses/{code}/comments"),
+            Some(&token),
+            br#"{"type":0}"#,
+        );
+        let drawn_id = drawn["id"].as_str().unwrap().to_string();
+        let pic = format!("/api/comments/{drawn_id}/picture");
+        assert_eq!(call("PUT", &pic, None, b"pixels").0, 401);
+        assert_eq!(call("PUT", &pic, Some(&token), b"pixels").0, 200);
+        let (st, _, b) = handle(&store, "GET", &pic, &[], b"");
+        assert_eq!((st, b.as_slice()), (200, b"pixels".as_slice()));
+        let (_, m) = call("GET", &format!("/api/courses/{code}"), None, b"");
+        assert_eq!(m["comments"], 3);
+        // removed by its poster only
+        let del = format!("/api/comments/{drawn_id}");
+        assert_eq!(call("DELETE", &del, None, b"").0, 403);
+        assert_eq!(call("DELETE", &del, Some(&token), b"").0, 200);
+        assert_eq!(handle(&store, "GET", &pic, &[], b"").0, 404);
+        let (_, c) = call("GET", &format!("/api/courses/{code}/comments"), None, b"");
+        assert_eq!(c["comments"].as_array().unwrap().len(), 2);
         // profile
         let (_, p) = call("GET", &format!("/api/makers/{maker_id}"), None, b"");
         assert_eq!(p["courses"][0]["code"].as_str(), Some(code.as_str()));
@@ -2267,7 +2576,7 @@ mod tests {
             "{:?}",
             fs::read_to_string(dir.join("accounts.json"))
         );
-        assert_eq!(store2.comments(&code).len(), 1);
+        assert_eq!(store2.comments(&code).len(), 2);
         assert_eq!(store2.rankings("clears", 10).unwrap().len(), 1);
         // moderation: a ban blocks votes; the admin can delete
         let id = me["id"].as_u64().unwrap();

@@ -263,9 +263,16 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     name and Mii), download and play in SMM2's own play, the play / clear posted with its time
     (`evidence/mods/world/`); ✅ leaderboards list the server's makers with their maker points
     (`leaderboard_makers.png`); ✅ SMM2's own Endless under the `smm2` ruleset (5 lives, endless, its
-    own screens and HUD; an Easy run against the server: `evidence/mods/smm2_endless/`); 🔄 built, not
-    yet seen working: likes / boos (the clear screen's hearts took no test input), comments (text),
-    the ID search, maker pages; ✅ uploads from the Course Maker (2026-10-22: the course, its credit and its picture;
+    own screens and HUD; an Easy run against the server: `evidence/mods/smm2_endless/`); ✅ likes / boos
+    (2026-10-23, in game with two accounts: the clear screen's hearts take input once the course record carries the
+    player's own relation to the course, which the server now gives with every course; a liked course shows its
+    heart chosen on the next clear; the card's counts, Liked Courses, the maker page's Likes / Maker Points follow;
+    SMM2 has no like on the card), ✅ comments (2026-10-23: text, stamp and drawn comments posted with SMM2's whole
+    comment - place, face, "require clear" - listed with name, Mii and "X minute(s) ago" (the game's server time,
+    from this machine's clock), shown under the clear screen, a drawing fetched in a new session, one's own deleted;
+    the keyboard takes 75 characters and shows the game's own prompt), ✅ the ID search (a course, a maker, "not
+    found") and maker pages (`recomp/docs/mods.md` "Likes and boos", "Comments"; `evidence/mods/world-social/`);
+    ✅ uploads from the Course Maker (2026-10-22: the course, its credit and its picture;
     New Courses lists it with the picture), ✅ a player's Played Courses (the run's courses too); ✅ Super Worlds
     (list, map, courses, title, progress and Continue, world clear; below); ✅ thumbnails (item 6 below); ⬜ Ninji;
     ✅ courses=tgrcode setting (built-in server, awaiting core/crates/embed);
