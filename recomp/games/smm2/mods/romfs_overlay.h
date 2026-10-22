@@ -44,6 +44,8 @@ bool rov_sarc_store(RovSarc *s, const char *rel);
 // ---- MSBT
 // the text of an existing label replaced (UTF-8 in, UTF-16LE out); false: no such label / damaged
 bool rov_msbt_set(RovBuf *msbt, const char *label, const char *text);
+// the text of a label as UTF-16 (tags left out), NUL-terminated in out[cap]; its length, or -1: no such label / damaged
+int rov_msbt_get(const RovBuf *msbt, const char *label, uint16_t *out, int cap);
 
 // ---- BFLYT: walk the sections (the edit-any-course helpers build on this: copy / move panes, set texts)
 typedef struct { const char *magic; size_t off, size; } RovSection;  // magic "pan1", "prt1", "txt1", ...; off into b

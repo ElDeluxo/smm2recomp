@@ -31,14 +31,18 @@ static int request(const char *method, const char *path, const char *body, size_
     return request_typed(method, path, body, blen, "application/json", r);
 }
 
-Json *srv_post_bytes(const char *path, const void *data, size_t len, int *status) {
+Json *srv_send_bytes(const char *method, const char *path, const void *data, size_t len, int *status) {
     HttpResponse r;
-    int st = request_typed("POST", path, data, len, "application/octet-stream", &r);
+    int st = request_typed(method, path, data, len, "application/octet-stream", &r);
     if (status) *status = st;
     Json *j = st >= 200 && st < 300 ? json_parse(r.body, r.len) : NULL;
-    if (st && !j) LOG("[mod] POST %s: HTTP %d %.200s\n", path, st, r.body ? r.body : "");
+    if (st && !j) LOG("[mod] %s %s: HTTP %d %.200s\n", method, path, st, r.body ? r.body : "");
     http_free(&r);
     return j;
+}
+
+Json *srv_post_bytes(const char *path, const void *data, size_t len, int *status) {
+    return srv_send_bytes("POST", path, data, len, status);
 }
 
 Json *srv_call(const char *method, const char *path, const char *body, int *status) {

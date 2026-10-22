@@ -10,6 +10,7 @@
 //! | GET | `/api/courses/<code>` | metadata (of a held or an upstream-listed course) |
 //! | GET | `/api/courses/<code>/data` (`?wait_ms=`, at most 20000) | course data (bytes); an upstream-listed course the server doesn't hold is fetched and imported, waited for up to `wait_ms` (default 7000; 404 meanwhile) |
 //! | GET | `/api/courses/<code>/thumbnail`, `/entire_thumbnail` (`?wait_ms=`, at most 20000) | the course's picture and its whole-course map (JPEG); one of an upstream course the server doesn't hold yet is fetched from the source, waited for up to `wait_ms` (404 meanwhile) |
+//! | PUT | `/api/courses/<code>/thumbnail`, `/entire_thumbnail` (body: a JPEG or the game's thumbnail block; signed in, the course's uploader) | an uploaded course's picture and whole-course map, as the game made them |
 //! | POST | `/api/courses/<code>/play`, `/clear` | statistics |
 //! | GET | `/api/health` | liveness: counts and the replay engine version |
 //! | GET | `/api/pool?min=&max=&count=` | random courses by difficulty value (fail rate 0–100) |
@@ -488,6 +489,30 @@ impl Store {
             .and_then(|_| fs::write(&tmp, jpeg))
             .and_then(|_| fs::rename(&tmp, &path))
             .map_err(|e| StoreError::Io(e.to_string()))
+    }
+
+    /// An uploaded course's thumbnail from its uploader (or the admin): the picture the game makes in the
+    /// Course Maker, sent after the course (`entire`: its whole-course map).
+    pub fn put_own_thumbnail(
+        &self,
+        code: &str,
+        entire: bool,
+        by: Option<u32>,
+        admin: bool,
+        data: &[u8],
+    ) -> Result<(), StoreError> {
+        {
+            let g = self.inner.lock().unwrap();
+            let i = *g.by_code.get(code).ok_or(StoreError::NotFound)?;
+            let owner = g.courses[i].owner;
+            if !(admin || (owner != 0 && Some(owner) == by)) {
+                return Err(StoreError::Forbidden);
+            }
+        }
+        if data.len() > 0x1c000 {
+            return Err(StoreError::TooLarge);
+        }
+        self.put_thumbnail(code, entire, data)
     }
 
     /// Upstream courses whose thumbnails aren't held yet, (code, entire), newest courses first.
@@ -1289,6 +1314,21 @@ pub fn handle(
             }
             None => err(401, "sign in"),
         },
+        (
+            "PUT",
+            [
+                "api",
+                "courses",
+                code,
+                kind @ ("thumbnail" | "entire_thumbnail"),
+            ],
+        ) => {
+            let by = signed_in().map(|a| a.id);
+            match store.put_own_thumbnail(code, *kind == "entire_thumbnail", by, admin, body) {
+                Ok(()) => json(200, json!({ "ok": true })),
+                Err(e) => store_err(e),
+            }
+        }
         ("DELETE", ["api", "courses", code]) => {
             match store.delete(code, account.as_ref().map(|a| a.id), admin) {
                 Ok(()) => json(200, json!({ "deleted": code })),
@@ -2012,6 +2052,84 @@ mod tests {
         assert_eq!(
             store.missing_thumbnails(10),
             vec![("ABC-DEF-GHJ".into(), true)]
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_uploaded_course_gets_its_pictures_from_its_uploader() {
+        let dir = tmp("own-thumbs");
+        let store = Store::open(&dir).unwrap();
+        let call = |method: &str, url: &str, token: Option<&str>, body: &[u8]| {
+            let headers: Vec<(String, String)> = token
+                .map(|t| vec![("Authorization".into(), format!("Bearer {t}"))])
+                .unwrap_or_default();
+            let (st, _, b) = handle(&store, method, url, &headers, body);
+            (st, b)
+        };
+        let token = |name: &str| {
+            let (_, b) = call(
+                "POST",
+                "/api/accounts",
+                None,
+                format!(r#"{{"name":"{name}"}}"#).as_bytes(),
+            );
+            serde_json::from_slice::<Value>(&b).unwrap()["token"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+        let (ada, bob) = (token("Ada"), token("Bob"));
+        let (_, m) = call(
+            "POST",
+            "/api/courses",
+            Some(&ada),
+            &Course::blank("M1").to_bytes().unwrap(),
+        );
+        let code = serde_json::from_slice::<Value>(&m).unwrap()["code"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let jpeg = [0xFF, 0xD8, 9, 8, 7, 0xFF, 0xD9];
+        let url = |kind: &str| format!("/api/courses/{code}/{kind}");
+        assert_eq!(call("GET", &url("thumbnail"), None, b"").0, 404, "none yet");
+        assert_eq!(
+            call("PUT", &url("thumbnail"), None, &jpeg).0,
+            403,
+            "signed in only"
+        );
+        assert_eq!(
+            call("PUT", &url("thumbnail"), Some(&bob), &jpeg).0,
+            403,
+            "the uploader only"
+        );
+        assert_eq!(
+            call("PUT", &url("thumbnail"), Some(&ada), b"<html>").0,
+            400,
+            "a JPEG only"
+        );
+        assert_eq!(call("PUT", &url("thumbnail"), Some(&ada), &jpeg).0, 200);
+        assert_eq!(
+            call("PUT", &url("entire_thumbnail"), Some(&ada), &jpeg).0,
+            200
+        );
+        assert_eq!(
+            call("GET", &url("thumbnail"), None, b""),
+            (200, jpeg.to_vec())
+        );
+        assert_eq!(
+            call("GET", &url("entire_thumbnail"), None, b""),
+            (200, jpeg.to_vec())
+        );
+        assert_eq!(
+            call(
+                "PUT",
+                "/api/courses/ABC-DEF-GHJ/thumbnail",
+                Some(&ada),
+                &jpeg
+            )
+            .0,
+            404
         );
         let _ = fs::remove_dir_all(&dir);
     }

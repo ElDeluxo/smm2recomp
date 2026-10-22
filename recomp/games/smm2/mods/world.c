@@ -555,6 +555,26 @@ static void can_post_course(Cpu *c) {
     finish(c, no, true, 0);
 }
 
+// The course's picture goes up after it: the game's thumbnail block follows the course in the upload buffer (+0x5c000,
+// 0x1c000 bytes: the JPEG the Course Maker made, its size at +0x1bf9c) [obs: one JPEG there, none after it up to
+// +0xb0000, so no whole-course map]. PUT /api/courses/<code>/thumbnail (the uploader's own course); the server keeps
+// the JPEG and Course World shows it like any other course's picture.
+#define UPLOAD_THUMB 0x5c000
+static void post_pictures(const char *code, uint64_t src) {
+    uint64_t block = src + UPLOAD_THUMB;
+    uint32_t len = g32(block + 0x1bf9c);
+    if (g8(block) != 0xff || g8(block + 1) != 0xd8 || !len || len > 0x1bf9c) {
+        LOG("[mod] course upload %s: no picture with it\n", code);
+        return;
+    }
+    char path[64];
+    int st = 0;
+    snprintf(path, sizeof path, "/api/courses/%s/thumbnail", code);
+    Json *j = srv_send_bytes("PUT", path, (const void *)(uintptr_t)block, len, &st);
+    LOG("[mod] course upload %s: its picture (%u bytes) %s\n", code, len, j ? "kept by the server" : "not taken");
+    json_free(j);
+}
+
 // The course upload (main+0x14de3f0: PreparePostObjectCourse, the course and thumbnail upload, CompletePostObject):
 // the game's own course file is at *(+0x8e5e0) (header 0x10 with "SCDL" and the CRC32, then the course, 0x5bfc0
 // bytes, not encrypted yet; the two thumbnails follow at +0x5c000). Our server takes the course itself (POST
@@ -584,6 +604,7 @@ static void post_course(Cpu *c) {
         json_free(j);
     }
     LOG("[mod] course upload: %s\n", ok ? code : "failed");
+    if (ok) post_pictures(code, src);
     finish(c, no, ok, 2);
 }
 

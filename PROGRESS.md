@@ -239,7 +239,7 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     back and bounces onto the wall top; off, it passes under him (16-frame window) and he can't climb; traces equal
     to update 259, reruns byte-identical; `research/evidence/smm1-shell-jump/`; ⬜ an off-case Ryujinx replay with
     shell contacts); ⬜ more from research/specs/smm1-extras*
-  - 🔄 **Edit any course** (`games/smm2/mods/edit.c`, `recomp/docs/mods.md` "Edit any course"):
+  - ✅ **Edit any course** (`games/smm2/mods/edit.c`, `recomp/docs/mods.md` "Edit any course"):
     ✅ Course World's Download into the Coursebot against our server (stand-in thumbnail); ✅ SMM2's Make in the
     Coursebot window of a downloaded course (SMM1's Edit placement), the Course Maker opens with the course, an edit
     saved to My Courses and played (screens private); ✅ typed names intact on Save As (re-tested 2026-10-21);
@@ -250,8 +250,13 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     in game 2026-10-21), ✅ upload credit in game (2026-10-22: download → Make → edit → Save As → clear check →
     Upload → Course World shows "Based on 9TC-5PV-7CG by <maker>"; fixed CanPostCourse's answer and the maker name),
     ✅ Edit from Course World's card (2026-10-22: Download on a course already in the Coursebot opens the Course
-    Maker instead of SMM2's "You cannot save the same course."), ⬜ the card's button text "Edit",
-    ⬜ Endless / 100 Mario "save for later" (designed in mods.md, not built), ⬜ an uploaded course's picture
+    Maker instead of SMM2's "You cannot save the same course."), ✅ the card's button text (2026-10-22: a course in
+    the Coursebot reads the Coursebot window's own "Make", looked up in the player's message archive at run time;
+    other cards keep Download; reused cards follow their course), ✅ Endless / 100 Mario "save for later" (2026-10-22,
+    DECISIONS "Edit any course, the leftovers": the run's courses on the player's Played Courses → Download keeps one
+    in the Coursebot → Make edits it; checked with a 100 Mario run), ✅ an uploaded course's picture (2026-10-22: `PUT
+    /api/courses/<code>/thumbnail` after the upload, the uploader only; New Courses shows it); screens private
+    (`evidence/mods/edit-leftovers/`); ⬜ an own upload's whole-course map (the game uploads none)
   - 🔄 **Our open-source server everywhere the game would reach Nintendo** (`recomp/docs/mods.md`,
     `games/smm2/mods/world.c`): ✅ Course World's course lists (Hot, Popular, New, detailed search, a
     maker's courses) from `/api/courses`, the course page (likes, plays, clear rate, world record, maker
@@ -260,8 +265,9 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     (`leaderboard_makers.png`); ✅ SMM2's own Endless under the `smm2` ruleset (5 lives, endless, its
     own screens and HUD; an Easy run against the server: `evidence/mods/smm2_endless/`); 🔄 built, not
     yet seen working: likes / boos (the clear screen's hearts took no test input), comments (text),
-    uploads from the Course Maker, the ID search, maker pages; ✅ Super Worlds (list, map, courses play; below);
-    ⬜ thumbnails, Ninji;
+    the ID search, maker pages; ✅ uploads from the Course Maker (2026-10-22: the course, its credit and its picture;
+    New Courses lists it with the picture), ✅ a player's Played Courses (the run's courses too); ✅ Super Worlds
+    (list, map, courses play; below); ✅ thumbnails (item 6 below); ⬜ Ninji;
     ✅ courses=tgrcode setting (built-in server, awaiting core/crates/embed);
     ⬜ online multiplayer: plan in `DECISIONS.md` (local play over our relay first, Network Play at
     the enl layer second)
@@ -507,7 +513,8 @@ Setup failures first, since they block new players:
    Mystery Mushroom looks like SMM1's ("?" mushroom). The SMM1 sound loader holds every costume's banks (it kept 32
    banks / 512 sounds: costumes past about 16 in a session went silent). Open: its 2 x 2 size and palette icon (the Big Mushroom's)
 5. ✅ Edit any course: ✅ the d-pad onto Make, ✅ the upload credit, ✅ Edit on the course card (Download again);
-   ⬜ the card's "Edit" text, ⬜ Endless / 100 Mario "save for later" (design in mods.md)
+   ✅ the card's text (Make, the game's own word, 2026-10-22), ✅ Endless / 100 Mario "save for later" (Played
+   Courses → Download → Make), ✅ an uploaded course's picture
 6. ✅ Course World thumbnails (2026-10-22): they were blank when TGRCode was busy (it allows about one request per
    5-7 s): the server fetched in reverse order, slept through waiting clients and dropped a busy picture for good.
    Now the first pictures of Hot / New / Popular are fetched ahead, the page's and the next page's while browsing,

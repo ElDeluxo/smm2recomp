@@ -5,7 +5,8 @@
 // cRoboToEdit) with the slot's course number. The Course Maker loads a Coursebot slot the same way whichever list it
 // is in (the loader copies the slot the Coursebot prepared), and its Save goes to My Courses as for any course, so
 // the downloaded copy stays as it was. The d-pad reaches the Make button as in My Courses (make_reachable), and
-// Course World's card opens the Course Maker the same way for a course already in the Coursebot (card_edit).
+// Course World's card opens the Course Maker the same way for a course already in the Coursebot (card_edit), its
+// button then reading the Coursebot window's Make (card_update).
 //
 // Addresses are SMM2 v3.0.3, offsets in main.
 #include <stdio.h>
@@ -17,6 +18,7 @@
 #include <unistd.h>
 
 #include "mod.h"
+#include "romfs_overlay.h"
 #include "../../../runtime/net/json.h"
 
 // Coursebot scene, the Downloaded Courses list's machine (registered in main+0x16f2d70): state 5 cCourseInfoWindow
@@ -794,7 +796,156 @@ static void info_window(Cpu *c) {
     if (win && getenv("RECOMP_EDIT_TRACE") && (dumps++ % 600) == 30) LOG("[mod] edit nav: slot %d\n", slot), dump_nav(win);
 }
 
+// ---- the card's button reads as an edit for a course already in the Coursebot
+//
+// The card's Download is the Edit for a course already in the Coursebot (card_edit above), so for such a course its
+// text is SMM2's own word for opening a stored course in the Course Maker: the Coursebot window's Make
+// (Lcl_CourseInfoWindow_00.msbt, L_Edit_00-T_Btn_00), read at run time from the player's own message archive in the
+// game's language (Message/LayoutMsg_<language>.szs: main+0x8a16b0 builds that name from the language index,
+// main+0x281120, and the code table, main+0xd8b5b0). No game text is in this file.
+//
+// The cards (L_CourseData_00 .. 04 in Course World's lists) are card objects whose update (main+0x1a2cec0, each frame)
+// sets their 12 text panes (+0x540 count, +0x548 text parts; a part's +0x48 -> +0x08 its text box; part 11 is
+// T_CourseID_00, the course's code). A ui2d text box's string is at +0xd8 (UTF-16) [obs: the card's code, and the
+// layout's "WWW-WWW-WWW" before a course is in it]; main+0x718fd0 (text box, UTF-16 string) sets it (its length,
+// then the text box's SetString). The button's text box is L_DownloadPlayBtn_00/N_Cursor_00/N_Load_00/T_Btn_00 under
+// the card's L_CourseData_0N pane, the top of the text panes' parent chain. Each frame after the card's own update:
+// the code shown -> its data id -> in a Downloaded slot or not -> Make, or the button's own text back.
+#define CARD_UPDATE MAIN_ADDR(0x1a2cec0)
+#define TEXT_SET MAIN_ADDR(0x718fd0)
+#define LANG_INDEX MAIN_ADDR(0x281120)  // () -> the game's language (an index into the code table)
+#define LANG_CODES MAIN_ADDR(0xd8b5b0)  // () -> the code table ("USen", ...)
+#define TEXT_BOX_STRING 0xd8
+#define CARD_TEXT_ID 11                 // T_CourseID_00
+#define TEXT_MAX 32
+
+static struct { uint64_t card, pane, text; int shown; uint16_t orig[TEXT_MAX]; } g_cards[8];
+
+static uint64_t find_pane(uint64_t pane, const char *name, int depth) {  // a pane by name under pane (depth first)
+    if (!pane || depth > 8) return 0;
+    uint64_t head = pane + 0x20;
+    int k = 0;
+    for (uint64_t n = g64(head + 8); n && n != head && k < 128; n = g64(n + 8), k++) {
+        if (!strncmp((const char *)(uintptr_t)(n - 8 + 0xb0), name, 24)) return n - 8;
+        uint64_t f = find_pane(n - 8, name, depth + 1);
+        if (f) return f;
+    }
+    return 0;
+}
+
+static int text_len(const uint16_t *s) { int n = 0; while (n < TEXT_MAX - 1 && s[n]) n++; return n; }
+static bool text_is(uint64_t text_box, const uint16_t *s) {  // the text box shows s
+    uint64_t p = g64(text_box + TEXT_BOX_STRING);
+    int n = text_len(s);
+    if (!p) return false;
+    for (int i = 0; i <= n; i++)
+        if (*(volatile uint16_t *)(uintptr_t)(p + 2ull * (uint64_t)i) != (i < n ? s[i] : 0)) return false;
+    return true;
+}
+
+// The Make text in the game's language (UTF-16, NUL-terminated); NULL: not found (the button keeps its text)
+static const uint16_t *make_text(Cpu *c) {
+    static uint16_t text[TEXT_MAX];
+    static int state;  // 0 not looked up, 1 found, -1 none
+    if (state) return state > 0 ? text : NULL;
+    state = -1;
+    uint64_t lr = c->x[30], x0 = c->x[0], x1 = c->x[1];
+    c->x[0] = 0, guest_call(c, LANG_INDEX);
+    uint32_t lang = (uint32_t)c->x[0];
+    c->x[0] = 0, guest_call(c, LANG_CODES);
+    uint64_t table = c->x[0];
+    c->x[0] = x0, c->x[1] = x1, c->x[30] = lr;
+    char code[8] = "";
+    uint64_t s = lang < 16 && table ? g64(table + 8ull * lang) : 0;
+    for (int i = 0; s && i < 7 && g8(s + (uint64_t)i); i++) code[i] = (char)g8(s + (uint64_t)i), code[i + 1] = 0;
+    char rel[64];
+    snprintf(rel, sizeof rel, "Message/LayoutMsg_%s.szs", code);
+    RovBuf b = {0};
+    RovSarc *arc = strlen(code) == 4 && rov_read_game(rel, &b) ? rov_sarc_parse(&b) : NULL;
+    rov_free(&b);
+    int n = arc ? rov_msbt_get(rov_sarc_member(arc, "Lcl_CourseInfoWindow_00.msbt"), "L_Edit_00-T_Btn_00", text, TEXT_MAX)
+                : -1;
+    rov_sarc_store(arc, NULL);
+    if (n > 0) state = 1;
+    LOG("[mod] edit: the card's text for a course in the Coursebot: %s (%s)\n",
+        n > 0 ? "the Coursebot window's Make" : "not found, the card keeps Download", rel);
+    return state > 0 ? text : NULL;
+}
+
+static void set_text(Cpu *c, uint64_t text_box, const uint16_t *s) {  // (the string on the guest stack)
+    uint64_t sp = c->sp, lr = c->x[30], x0 = c->x[0], x1 = c->x[1];
+    int n = text_len(s);
+    c->sp -= 0x80;
+    memcpy((void *)(uintptr_t)c->sp, s, 2 * (size_t)n), s16(c->sp + 2 * (uint64_t)n, 0);
+    c->x[0] = text_box, c->x[1] = c->sp;
+    guest_call(c, TEXT_SET);
+    c->sp = sp, c->x[30] = lr, c->x[0] = x0, c->x[1] = x1;
+}
+
+static uint32_t card_course(uint64_t card) {  // the data id of the course the card shows; 0: none
+    uint64_t parts = g64(card + 0x548);
+    if (!parts || g32(card + 0x540) <= CARD_TEXT_ID) return 0;
+    uint64_t tp = g64(parts + 8 * CARD_TEXT_ID), h = tp ? g64(tp + 0x48) : 0, tb = h ? g64(h + 8) : 0;
+    uint64_t p = tb ? g64(tb + TEXT_BOX_STRING) : 0;
+    if (!p || strncmp((const char *)(uintptr_t)(tb + 0xb0), "T_CourseID_00", 24)) return 0;
+    char code[16];
+    int n = 0;
+    for (; n < 15; n++) {
+        uint16_t ch = *(volatile uint16_t *)(uintptr_t)(p + 2ull * (uint64_t)n);
+        if (!ch || ch > 0x7f) break;
+        code[n] = (char)ch;
+    }
+    code[n] = 0;
+    uint32_t id = 0;
+    return n == 11 && code_to_data_id(code, &id) ? id : 0;
+}
+
+static void card_update(Cpu *c) {
+    uint64_t card = c->x[0];
+    guest_call_orig(c, c->pc);
+    if (!edit_on()) return;
+    int i = 0, free_i = -1;
+    for (; i < 8 && g_cards[i].card != card; i++)
+        if (!g_cards[i].card && free_i < 0) free_i = i;
+    if (i == 8) {  // (a card not seen yet; more than eight: one is taken over)
+        i = free_i >= 0 ? free_i : (int)(card >> 4) & 7;
+        memset(&g_cards[i], 0, sizeof g_cards[i]);
+        g_cards[i].card = card;
+    }
+    typeof(g_cards[0]) *k = &g_cards[i];
+    {  // (found again each frame from the card's own panes: a card left over from an earlier Course World visit may
+       // sit at the same address with other panes; a few hundred panes a card)
+        uint64_t parts = g64(card + 0x548), tp = parts && g32(card + 0x540) ? g64(parts) : 0;
+        uint64_t h = tp ? g64(tp + 0x48) : 0, p = h ? g64(h + 8) : 0;
+        for (int d = 0; p && d < 12 && strncmp((const char *)(uintptr_t)(p + 0xb0), "L_CourseData_", 13); d++)
+            p = g64(p + 0x18);
+        uint64_t btn = p ? find_pane(p, "L_DownloadPlayBtn_00", 0) : 0;
+        k->pane = p, k->text = btn ? find_pane(btn, "T_Btn_00", 0) : 0;
+        if (!k->text) return;
+    }
+    uint32_t id = card_course(card);
+    int want = id && downloaded_slot(id) >= 0;
+    const uint16_t *make = want || k->shown ? make_text(c) : NULL;
+    if (!make) return;
+    if (want) {
+        if (text_is(k->text, make)) { k->shown = 1; return; }
+        uint64_t p = g64(k->text + TEXT_BOX_STRING);  // (the button's own text, to put back)
+        for (int n = 0; p && n < TEXT_MAX; n++)
+            k->orig[n] = n < TEXT_MAX - 1 ? *(volatile uint16_t *)(uintptr_t)(p + 2ull * (uint64_t)n) : 0;
+        set_text(c, k->text, make);
+    } else {
+        if (!text_is(k->text, make)) { k->shown = 0; return; }
+        if (k->orig[0]) set_text(c, k->text, k->orig);
+    }
+    k->shown = want;
+    char code[12];
+    data_id_to_code(id, code);
+    MLOG("edit: %.15s %s: its button reads %s\n", (const char *)(uintptr_t)(k->pane + 0xb0), code,
+         want ? "Make (in the Coursebot)" : "its own text again");
+}
+
 __attribute__((constructor)) static void edit_register(void) {
+    hle_override(CARD_UPDATE, card_update, "mod: Course World course card update (its Edit text)");
     hle_override(INFO_APPEAR_EXEC, info_window, "mod: Coursebot info window Appear (edit)");
     hle_override(INFO_DISP_EXEC, info_window, "mod: Coursebot info window Disp (edit)");
     hle_override(MAIN_ADDR(0x14e0e70), relation_get, "mod: relation object (thumbnail) download");

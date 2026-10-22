@@ -1917,3 +1917,27 @@ SMM1's rule (smm1-extras-costume.md §7). (3) Changing the item's size or hit bo
 16 x 16 Mystery Mushroom); the texture alone needs no game code and shows SMM1's art at SMM1's size.
 **Would change:** a 16 x 16 Mystery Mushroom object (its own actor and course id), or another place SMM2 plays the
 player's jump sound found playing under a costume (the audio log shows SMB1's jump wave, 0x341a bytes).
+
+## 2026-10-22 — Edit any course, the leftovers: the card says Make, "save for later" is Played Courses, uploads send their picture
+
+**Decision (agent, from the owner's 2026-10-19 "Edit any course" and the design in recomp/docs/mods.md):**
+1. **The card's text.** On a Course World card whose course is already in the Coursebot, the Download button (which
+   then opens the Course Maker) reads the Coursebot window's own **Make**, taken at run time from the player's
+   message archive in the game's language; other cards keep Download. SMM2's messages have no "Edit" for a course
+   (the pause menu's "Edit Course" is the in-course action), and Make is the word of the button this one mirrors.
+2. **Endless / 100 Mario "save for later"** (the design's open question: how to keep a course without leaving the
+   run): the run's courses are kept on the player's **Played Courses** in their Course World page, which our server
+   already fills from every run (newest first, the last 300). From there the card's Download keeps the course in the
+   Coursebot for good, and the same card then reads Make and opens it in the Course Maker. Nothing is added to the
+   result screen and the run scene is never left.
+3. **An uploaded course's picture**: after the upload the mod sends the picture the Course Maker made (the thumbnail
+   block that follows the course in the game's upload buffer) to `PUT /api/courses/<code>/thumbnail`; only the
+   course's uploader (or the admin) may set it. The game's upload carries no whole-course map, so none is sent.
+**Why:** each is the smallest change that stays inside SMM2's own screens. The text comes from the player's dump, so
+it is right in every language and no game text is committed. For save for later, the design's "Save to Coursebot"
+on the result screen would need a button SMM2's result screen doesn't have and a round trip from the run scene to
+the Coursebot and back, which the 100 Mario flow would have to survive; Played Courses is SMM2's own list of exactly
+these courses, and its card already has Download and (now) Make.
+**Would change:** the owner wanting an explicit keep inside the run (the result screen route, or a pause item), or a
+course to be kept past the 300 played (then Liked Courses, which the result screen's "I like it!" fills, or a
+server-side keep list); a whole-course map for own uploads (the server could draw it from the course).

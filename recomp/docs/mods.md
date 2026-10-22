@@ -108,7 +108,7 @@ calls (read from the client vtable slot it uses):
 | PostRatingInfo (104): like / boo | 0x14e6b90 | `POST /api/courses/<code>/like` or `/boo` |
 | PostPlayResult (96) | 0x14e30e0 | `POST /api/courses/<code>/play`, and `/clear {time_ms}` on a clear (not for Endless courses: those are counted by the Endless reports) |
 | SearchComments (94 / 95), PostCommentText (91) | 0x14e8ec0, 0x14e96b0 | `GET` / `POST /api/courses/<code>/comments` (text) |
-| CanPostCourse (60), the course upload (66 + upload + 67), DeleteObject | 0x14e0d40, 0x14de3f0, 0x14e0c50 | allowed; the game's own course (header "SCDL", not yet encrypted) to `POST /api/courses` as the signed-in maker (`?based_on=` for an edited copy, below), its code back as the upload's data id; `DELETE /api/courses/<code>` |
+| CanPostCourse (60), the course upload (66 + upload + 67), DeleteObject | 0x14e0d40, 0x14de3f0, 0x14e0c50 | allowed; the game's own course (header "SCDL", not yet encrypted) to `POST /api/courses` as the signed-in maker (`?based_on=` for an edited copy, below), its code back as the upload's data id, then its picture to `PUT /api/courses/<code>/thumbnail`; `DELETE /api/courses/<code>` |
 | GetReqGetInfoHeadersInfo (134) + HTTP: a course's picture ("relation objects", 5 at a time) | 0x14e0e70 (`edit.c`) | `GET /api/courses/<code>/thumbnail?wait_ms=` (below) |
 | the same for a course's whole-course map (More info) | 0x14e2cf0 (`edit.c`) | `GET /api/courses/<code>/entire_thumbnail?wait_ms=` |
 
@@ -124,7 +124,11 @@ mod asks with `wait_ms` (a few seconds in all for a list's five, 6 s for a map):
 game's placeholder this time and is there next time. The mod signs each JPEG into the block the game checks (the
 JPEG, then in the last 0x64 bytes its size, HMAC-SHA256 under a key from four seed words, the seeds; main+0x1698a80)
 with the game's own functions; the map's 0x19000-byte block takes the same tail [obs: the map shows]. Our own
-uploads have no thumbnails yet (the game uploads them with the course; not kept).
+uploads: the picture the Course Maker made goes up after the course (`world.c` post_pictures: the thumbnail block
+that follows the course in the upload buffer, +0x5c000, its JPEG's size at +0x1bf9c) as `PUT
+/api/courses/<code>/thumbnail` (signed in, the course's uploader only; the server keeps the JPEG). The upload buffer
+holds no whole-course map [obs: one JPEG from +0x5c000 to +0xb0000], so an own upload's More info has no map.
+Checked 2026-10-22: an upload's card in New Courses shows its picture (earlier uploads the placeholder).
 
 **Download** (the course page's Download, into the Coursebot's Downloaded Courses) works: SMM2 waits for the
 course's thumbnail before it hands the download to the Coursebot (cDownload, main+0x17661f0, needs a valid entry in
@@ -238,15 +242,35 @@ SMM2's window of a downloaded course has only Play, Play Together and Delete, so
   replay block where the Course Maker's loader takes a slot's data (save buffer +0x6C000 / +0xC8000 / +0xE4000;
   main+0x100e3ba90 copies them for any slot that isn't the current course), makes it the player's own (as above)
   and requests the Course Maker with that slot (reason 3). Without that preparation the Course Maker opened a blank
-  course [obs]. So: Download, then Download again = Edit. The button still reads "Download" (its text pane is
-  `L_DownloadPlayBtn_00` / `T_Btn_00`; changing it per card needs the card object and ui2d's text setter, not found
-  yet).
-- **Endless / 100 Mario** (designed, not built): SMM1 offers no edit there. SMM2's result screen after a clear
-  (the course-end machine, main+0x1bed050; choices at +0x2a0: Next, the ratings, Quit, comment, tags) could keep the
-  course for later through the same path as the card's Download (cLaterPlay → the Coursebot's "Select Download
-  Location", reason 0x0D, then back to the run): a "Save to Coursebot" there means leaving and re-entering the run
-  scene, which the 100 Mario flow (bridge.c) would have to survive, so it is left for later. Meanwhile a course from a
-  run can be found by its ID in Course World, downloaded and edited.
+  course [obs]. So: Download, then Download again = Edit.
+- **The card's button text.** For a course already in the Coursebot the card's Download reads SMM2's own word for
+  opening a stored course in the Course Maker: the Coursebot window's **Make** (`Lcl_CourseInfoWindow_00.msbt`,
+  `L_Edit_00-T_Btn_00`), looked up once at run time in the player's own `Message/LayoutMsg_<language>.szs` (the
+  language as the game picks it: main+0x8a16b0 formats that path from the language index main+0x281120 and the code
+  table main+0xd8b5b0; `rov_msbt_get`), so every language gets the game's own word and none is in the repository.
+  The SMM2 messages have no "Edit" for a course; the pause menu's "Edit Course" (`Cmn_PauseMenu_00`,
+  `L_MakeBtn_00`) is the same action from inside a course, and Make is the word of the button the card's Edit
+  mirrors. The cards (`L_CourseData_00` .. `04` of Course World's lists, the profile's lists too) are card objects
+  whose update (main+0x1a2cec0, each frame) sets their 12 text panes (+0x540 count, +0x548 text parts; part +0x48
+  → +0x08 the ui2d text box; part 11 is `T_CourseID_00`). A ui2d text box keeps its string at +0xd8 (UTF-16) [obs: the
+  card's code; the layout's `WWW-WWW-WWW` before a course is in it]; main+0x718fd0 (text box, string) sets it (the
+  length, then the text box's SetString, vtable +0x110). After the card's own update the mod reads the code the card
+  shows, looks for it in the Downloaded slots (as cSavedAlready's Edit does) and sets the button's text box
+  (`L_DownloadPlayBtn_00/N_Cursor_00/N_Load_00/T_Btn_00` under the card's pane, looked up each frame) to Make, or back
+  to its own text; the cards are reused as the list scrolls, so this follows the course each card shows. Checked
+  2026-10-22: Hot Courses' card of a course in the Coursebot reads Make, the next card Download; a course downloaded
+  from the card reads Make as soon as the list is back; Make opens the Course Maker.
+- **Endless / 100 Mario: save for later** (built 2026-10-22, DECISIONS.md "Save for later"): SMM1 offers no edit
+  there, and SMM2's result screen has no room for one. A course met in a run is kept on the player's **Played
+  Courses** (Course World → the player's own page → Played Courses: SMM2's own list), which our server keeps for
+  every course a run starts (`note_played`, newest first, the last 300; the Endless and 100 Mario runs alike, any
+  ruleset). Its card there is an ordinary course card: **Download** keeps it in the Coursebot (playable offline,
+  and there for good), and on a course in the Coursebot the same button reads **Make** and opens it in the Course
+  Maker (the card's Edit above). No scene change from inside the run, so the 100 Mario flow is untouched. Checked
+  2026-10-22: an unattended 100 Mario run (Easy) → Played Courses lists its courses newest first → Download into
+  the Coursebot → the card reads Make → the run's course open in the Course Maker. The design's other route (a "Save
+  to Coursebot" from the result screen via cLaterPlay, main+0x1766830, reason 0x0D, and back into the run) is not
+  built: it needs a button SMM2's result screen doesn't have and a round trip out of the run scene.
 - `RECOMP_MOD_EDIT=0` turns it off (the Make button, the card's Edit).
 
 **Where this stands (history, latest last):**
@@ -297,9 +321,11 @@ SMM2's window of a downloaded course has only Play, Play Together and Delete, so
   - The card's Edit: Download on 9TC-5PV-7CG (already in the Coursebot) opened the Course Maker with it, the
     Save / Load menu offering Save As / Load (a new course), Save As into My Courses carried the origin
     (`f9a44964 -> cfa34afd`).
-- Left: the card's button text ("Edit" for a course in the Coursebot); Endless / 100 Mario "save for later" (design
-  above); an uploaded course's picture (the upload sends only the course; the server has no route for an uploaded
-  course's thumbnail, so Course World shows the stand-in).
+- 2026-10-22, the leftovers, checked in game (screens private, `evidence/mods/edit-leftovers/`): the card's text
+  (Make for a course in the Coursebot, above), save for later from Endless / 100 Mario (Played Courses, above), an
+  uploaded course's picture (the Course World section above: `PUT /api/courses/<code>/thumbnail` after the upload).
+- Left: an own upload's whole-course map (the game's upload buffer has none; the server could draw one from the
+  course [?]).
 
 Tests: `RECOMP_EDIT_CTL=<file>` (`edit_ctl.c`) reads commands appended to the file while the game runs (`tap x y
 [frames]`, `btn A+B [frames]`, `shot <name>`, `wait <frames>`, `peek <addr> [len]`, `poke <addr> <byte>`, `find <addr>

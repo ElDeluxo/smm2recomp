@@ -329,7 +329,8 @@ static void put_utf16(Buf *b, const char *s) {  // UTF-8 -> UTF-16LE (BMP), NUL-
     put(b, NULL, 2);
 }
 
-bool rov_msbt_set(RovBuf *m, const char *label, const char *text) {
+// The label's message: its TXT2 section (body offset, size) and index; false: not an MSBT / no such label / damaged
+static bool msbt_find(const RovBuf *m, const char *label, size_t *txt_at, size_t *txt_size, uint32_t *index) {
     if (!m || m->n < 0x20 || memcmp(m->d, "MsgStdBn", 8) || u16(m->d + 8) != 0xfeff) return false;
     int nsec = u16(m->d + 0xe);
     size_t o = 0x20, lbl = 0, lbl_n = 0, txt = 0, txt_n = 0;
@@ -356,6 +357,34 @@ bool rov_msbt_set(RovBuf *m, const char *label, const char *text) {
     }
     uint32_t n = u32(m->d + txt);
     if (idx >= n || 4 + 4 * (size_t)n > txt_n) return false;
+    *txt_at = txt, *txt_size = txt_n, *index = idx;
+    return true;
+}
+
+int rov_msbt_get(const RovBuf *m, const char *label, uint16_t *out, int cap) {
+    size_t txt, txt_n;
+    uint32_t idx;
+    if (cap < 1 || !msbt_find(m, label, &txt, &txt_n, &idx)) return -1;
+    uint32_t n = u32(m->d + txt), a = u32(m->d + txt + 4 + 4 * idx);
+    uint32_t e = idx + 1 < n ? u32(m->d + txt + 8 + 4 * idx) : (uint32_t)txt_n;
+    if (a > e || e > txt_n) return -1;
+    int len = 0;
+    for (size_t p = txt + a; p + 2 <= txt + e && len < cap - 1;) {
+        uint16_t ch = u16(m->d + p);
+        if (!ch) break;
+        if (ch == 0x0e && p + 8 <= txt + e) { p += 8 + u16(m->d + p + 6); continue; }  // (a tag: left out)
+        if (ch == 0x0f && p + 6 <= txt + e) { p += 6; continue; }                      // (a tag's end)
+        out[len++] = ch, p += 2;
+    }
+    out[len] = 0;
+    return len;
+}
+
+bool rov_msbt_set(RovBuf *m, const char *label, const char *text) {
+    size_t txt, txt_n;
+    uint32_t idx;
+    if (!msbt_find(m, label, &txt, &txt_n, &idx)) return false;
+    uint32_t n = u32(m->d + txt);
     Buf t = {0}, body = {0};  // TXT2 again with that string replaced
     put32(&t, n);
     size_t base = 4 + 4 * (size_t)n;

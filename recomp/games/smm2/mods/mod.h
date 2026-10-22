@@ -48,6 +48,7 @@ Json *srv_call(const char *method, const char *path, const char *body, int *stat
 Json *srv_call_slow(const char *method, const char *path, const char *body, int *status, int timeout_ms);
 void *srv_get_bytes(const char *path, size_t *len);  // raw body (course data); malloc'd
 Json *srv_post_bytes(const char *path, const void *data, size_t len, int *status);  // raw body up (a course)
+Json *srv_send_bytes(const char *method, const char *path, const void *data, size_t len, int *status);  // ... PUT
 
 // ---- game state the overrides share
 uint64_t netobj(void);          // the network-session object (requests and answers of the wrappers)
