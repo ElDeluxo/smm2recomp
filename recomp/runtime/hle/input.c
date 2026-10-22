@@ -323,7 +323,7 @@ static void test_push(uint64_t frame, unsigned long start, unsigned long len, co
     SDL_Event e;
     memset(&e, 0, sizeof e);
     if (!strcmp(dev, "kbd")) {
-        static char initial[64];
+        static char initial[400];
         pthread_t th;
         if (frame != start) return;
         snprintf(initial, sizeof initial, "%s", arg);

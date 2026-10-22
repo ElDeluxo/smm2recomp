@@ -95,9 +95,15 @@ int osk_keys(char *text, size_t cap, int max_chars, bool appearing, float scale,
     ImGuiID own = ImGui::GetID("##oskkeys");
     ImGui::SetKeyOwner(ImGuiKey_GamepadFaceRight, own);
     if (max_chars <= 0 || max_chars > (int)cap - 1) max_chars = (int)cap - 1;
+    // (len: bytes; the limit and the count are characters: a name being edited may hold UTF-8 the keys don't type)
     int len = (int)strlen(text), r = 0;
-    auto add = [&](char ch) { if (len < max_chars) text[len++] = ch, text[len] = 0; };
-    auto del = [&]() { if (len > 0) text[--len] = 0; };
+    auto chars = [&]() { int n = 0; for (int i = 0; i < len; i++) n += ((unsigned char)text[i] & 0xc0) != 0x80; return n; };
+    auto add = [&](char ch) { if (chars() < max_chars && len + 1 < (int)cap) text[len++] = ch, text[len] = 0; };
+    auto del = [&]() {  // (a whole character)
+        while (len > 0 && ((unsigned char)text[len - 1] & 0xc0) == 0x80) len--;
+        if (len > 0) len--;
+        text[len] = 0;
+    };
 
     // typed on a keyboard while it's up: straight into the text
     for (ImWchar c : io.InputQueueCharacters) if (c >= 0x20 && c < 0x7f) add((char)c);
@@ -135,7 +141,7 @@ int osk_keys(char *text, size_t cap, int max_chars, bool appearing, float scale,
     if (ImGui::Button("Cancel", ImVec2(k * 2, k))) r = -1;
     ImGui::SameLine();
     if (ImGui::Button("OK", ImVec2(k * 2, k))) r = 1;
-    ImGui::TextDisabled("A  type      B  delete      Start / +  OK      (%d / %d)", len, max_chars);
+    ImGui::TextDisabled("A  type      B  delete      Start / +  OK      (%d / %d)", chars(), max_chars);
     return r;
 }
 

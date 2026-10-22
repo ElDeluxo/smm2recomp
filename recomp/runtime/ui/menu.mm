@@ -742,8 +742,13 @@ static void keyboard_draw(ImGuiIO &io, float scale) {
                          ImGuiInputTextFlags_CallbackCharFilter,
                          [](ImGuiInputTextCallbackData *d) -> int { return d->EventChar < 0x20 ? 1 : 0; });
         ImGui::PopFont();
-        if ((int)strlen(g_kbd_text) > g_kbd_max) g_kbd_text[g_kbd_max] = 0;
-        ImGui::TextDisabled("Enter  confirm      Esc  cancel      (%d / %d)", (int)strlen(g_kbd_text), g_kbd_max);
+        // (the game's limit is in characters: cut at the character boundary after the last one, never inside one)
+        int chars = 0;
+        for (char *p = g_kbd_text; *p; p++) {
+            if (((unsigned char)*p & 0xc0) == 0x80) continue;
+            if (chars++ == g_kbd_max) { *p = 0; chars--; break; }
+        }
+        ImGui::TextDisabled("Enter  confirm      Esc  cancel      (%d / %d)", chars, g_kbd_max);
     } else {  // controller: on-screen keyboard (osk.mm, shared with our menus' text fields)
         int r = osk_keys(g_kbd_text, sizeof g_kbd_text, g_kbd_max, appearing, scale, g_font_big);
         if (r) g_kbd = r > 0 ? 2 : 3;  // (Start / + confirms in menu_handle_event too)
