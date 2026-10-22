@@ -2211,6 +2211,7 @@ driver aborted in `MTLTextureDescriptor` validation with "invalid pixelFormat (4
 (41, `0x3b`/`0x95`-`0x97`) and `ABGR4Unorm` (42, `0x39`) are rejected the same way (`RGBA8Unorm_sRGB` /
 `RG8Unorm_sRGB` 11/31 too, but no NVN format maps to them). `BGR5A1Unorm` (43) is supported, but its bit layout
 (`A` in the low bit) is not NVN's `0x3b`, so it can't substitute. There is no per-format support query, as with ASTC;
-on a device where the formats exist the decoded path is still correct, just slower at upload.
+on a device where the formats exist the decoded path is still correct, just slower at upload. The first level
+then completed on the GT 755M with fireballs and no abort (2026-10-22).
 **Would change:** a per-pixel-format support query in Metal, or proof that some non-Apple families support the
 formats (all of them are gated on `Apple2` today, so Intel Macs with native RGB565 pay a one-time CPU expansion).
