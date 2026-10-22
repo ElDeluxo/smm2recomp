@@ -4,6 +4,8 @@
 /private
 /generated
 /build
+# (what the SMM1 mods generate from the dump: test tools run from here write it here too)
+/mods-generated
 *.spv
 # Python environment for the recompiler (machine-specific)
 /tools/venv
