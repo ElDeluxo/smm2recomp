@@ -128,10 +128,31 @@ const char *loader_symbol_at(uint64_t addr, uint64_t *offset) {
     return best;
 }
 
+// A global (or weak) definition of a symbol in a module loaded before `before` (load order: main, then the SDK); 0:
+// none.
+static uint64_t find_global_before(const Module *before, const char *name) {
+    for (Module *m = g_modules; m < before; m++) {
+        for (uint64_t i = 1; i < m->nsyms; i++) {
+            Elf64Sym *s = sym(m, i);
+            if (s->shndx && (s->info >> 4) != 0 && !strcmp(symname(m, s), name)) return m->base + s->value;
+        }
+    }
+    return 0;
+}
+
+// As the console's loader (rtld) does, a default-visibility symbol is looked up in load order even when the module
+// defines it itself: main's strong definitions win over the SDK's weak ones. Those are operator new / delete (and a
+// few identical template copies): the SDK's allocate from its own malloc heap, the game's from its sead heaps, and an
+// SDK destructor deleting an object the game allocated (nn::ngc::ProfanityFilter's, from the World Maker / Worldbot's
+// map objects) has to free it there; bound to the SDK's own, CentralHeap::Free got a pointer it doesn't own.
 static uint64_t resolve(Module *m, uint32_t symidx) {
     Elf64Sym *s = sym(m, symidx);
     const char *name = symname(m, s);
-    if (s->shndx) return m->base + s->value;
+    if (s->shndx) {
+        uint64_t a = (s->info >> 4) != 0 && (s->other & 3) == 0 ? find_global_before(m, name) : 0;
+        if (a && a != m->base + s->value) LOG("[loader] %s: %s bound to an earlier module's\n", m->name, name);
+        return a ? a : m->base + s->value;
+    }
     HostFn impl = hle_lookup_impl(name);
     if (impl) return hle_register(name, impl);  // host implementation wins over the guest SDK's
     uint64_t a = loader_find_symbol(name);

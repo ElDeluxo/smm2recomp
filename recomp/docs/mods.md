@@ -159,8 +159,9 @@ TGRCode (spec: `research/specs/super-worlds-v303.md`). Application config value 
 | GetWorldMap (159) into the list ring | 0x14f6100 | `GET /api/super_worlds/<id>` |
 | play info get / reset / save (162 / 164 / 165), id at +0x1b1748 | 0x14f7d10, 0x14f8260, 0x14f84d0 | `GET` / `POST /api/super_worlds/<id>/progress` (the record's `status`: 2 progress to continue, 1 none; `clear`: the save's kind, 1 a course, 2 the world), `POST …/progress/reset` (always ok: the game keeps its own copy) |
 | world thumbnails (87 + HTTP) | 0x14f8850 | failed (status 2): the game's placeholder planets |
-| RegisterWorldMap (158): upload | 0x14f5940 | the map encrypted with the game's own function and the world key table, then `POST /api/super_worlds?data_ids=&worlds=&version=` (map + thumbnail block); the server takes only the player's own courses on it [not tried in game] |
-| DeleteWorldMap (163) | 0x14f7c30 | `DELETE /api/super_worlds/mine` [not tried in game] |
+| RegisterWorldMap (158): upload | 0x14f5940 | the map encrypted with the game's own function and the world key table, then `POST /api/super_worlds?data_ids=&worlds=&planet_type=&version=` (map + thumbnail block; `planet_type` the slot's byte +0xcd25 [inf]); the server takes only the player's own courses on it |
+| DeleteWorldMap (163) | 0x14f7c30 | `DELETE /api/super_worlds/mine` |
+| the player's courses taken down (128), asked by My Info's Uploaded Courses | 0x14f0090 (world.c) | none, ok |
 | a maker's page / own user record with a world (user record +0x1b0) | 0x14d2f00, 0x14d5cd0 | `super_world_id` of `/api/makers/<id>`, `/api/me` (our players' uploads), then the detail as above |
 
 **How the answers are written:** through the game's own converters, as a NEX answer would be. The mod fills a guest
@@ -197,15 +198,32 @@ while there is progress and to 1 when the world is cleared, and the save's kind 
 (main+0x1493950); the mod sends both, the server keeps the record as sent and `clear` at its highest. New Game resets
 the record (status 1). +0x1b1790 is the data id of the course just cleared, +0x1b1798 the clear bits.
 
+**Upload and delete** (the game's own flow): a world is uploaded from its Worldbot slot (World Maker's Save As puts it
+there); every course on it must be one of the player's courses uploaded through the Coursebot after its clear check.
+Before the upload the game checks the player's posted courses (SearchCourses type 6 with the console's account id,
+answered as the player's own maker) and then sends RegisterWorldMap; afterwards it re-reads the own user record, whose
+`super_world_id` (`/api/me`) names the new world. A second upload asks "will be overwritten" and the server replaces
+the first. **Delete** is My Info's (the own maker page's Super World panel): the game shows it only when the user
+record's player id is the account id it holds itself (GetNetworkServiceAccountId; main+0x1aa46a0 sets the panel's
+"own" flag), so the mod gives the player's own maker that id (endless.c `pid_of_maker_id`); then DeleteWorldMap. The
+Worldbot slot's trash deletes the local slot only.
+
+**The map objects' heap check** (fixed in the runtime): the World Maker's / Worldbot's map object (destructor
+main+0x1465f40) owns an nn::ngc::ProfanityFilter that the game allocates with its own operator new; the SDK's
+destructor deletes it with operator delete. On the console both modules' references to operator new / delete bind
+to main's (main defines them strong, the SDK weak); our loader bound the SDK's to its own copy, whose CentralHeap
+then trapped on a pointer it didn't own (World Maker's Save As, the Worldbot's exit). runtime/loader.c now binds
+default-visibility definitions to the first module's, as rtld does (DECISIONS 2026-10-23).
+
 **Seen in game** (`evidence/mods/superworlds/`): 2026-10-22 the list with TGRCode's worlds, a world's map, its
 first course playing; 2026-10-23 (a local test server with a second test maker's 1-world 2-course world) the title
 with the owner's name and Mii, a course cleared and its progress saved, Continue after Play again, the castle course
 clearing the world (WORLD CLEAR, the ending, the list's planets flagged), My Info's Played Worlds (the entry opens the
-owner's page with their world), a player's own uploaded world in My Info and the Worldbot.
-**Open:** upload and delete not tried in game (both start from a Worldbot slot, which needs courses uploaded through
-Coursebot's clear check; a world put on the server through the API shows as uploaded but has no delete); thumbnails
-of our own uploads (the server keeps them; the request still fails); one Worldbot stop on a heap check seen once
-(PROGRESS item 7).
+owner's page with their world), a player's own uploaded world in My Info and the Worldbot; 2026-10-23
+(`2026-10-23-upload-delete/`) two courses made, clear-checked and uploaded, a world built in World Maker with them,
+uploaded from the Worldbot, listed in Course World and played there and in the Worldbot, overwritten by a second
+upload, deleted from My Info; World Maker's Save As twice and ten Worldbot visits after the loader fix without a stop.
+**Open:** thumbnails of our own uploads (the server keeps them; the request still fails).
 
 ### Edit any course (`games/smm2/mods/edit.c`)
 
@@ -347,8 +365,11 @@ SMM2's window of a downloaded course has only Play, Play Together and Delete, so
   course [?]).
 
 Tests: `RECOMP_EDIT_CTL=<file>` (`edit_ctl.c`) reads commands appended to the file while the game runs (`tap x y
-[frames]`, `btn A+B [frames]`, `shot <name>`, `wait <frames>`, `peek <addr> [len]`, `poke <addr> <byte>`, `find <addr>
-<name> [depth]`); test input must be on (`LARECOMP_INPUT=999999:A:1`). `LARECOMP_KBD_AUTO=<name>` answers the
+[frames]`, `drag x0 y0 x1 y1 [frames]`, `btn A+B [frames]`, `stick x y [frames]` (the left stick, -32767..32767),
+`kbd <text>` (answers the open keyboard dialog), `shot <name>`, `wait <frames>`, `peek <addr> [len]`, `poke <addr>
+<byte>`, `find <addr> <name> [depth]`); test input must be on (`LARECOMP_INPUT=999999:A:1`). In the Course Maker the
+stick scrolls and drags of the goal's handle shorten the course (a one-screen course for
+a quick clear check). `LARECOMP_KBD_AUTO=<name>` answers the
 course-name keyboard of Save As. `RECOMP_EDIT_TRACE=1` logs the window's UI events.
 
 ### The bridge (100 Mario)

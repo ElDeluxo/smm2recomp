@@ -120,18 +120,23 @@ static bool online_manager(IpcReq *req, IpcResp *resp) {
     }
 }
 
+// The network service account id GetAccountId answers (the game's own player id in Course World: it compares a user
+// record's player id with it for "this is me", e.g. My Info's Super World Delete). Nextendo: the PID once known, else 0.
+uint64_t acc_account_id(void) {
+    if (net_backend() == NET_BACKEND_NEXTENDO) return nextendo_pid();
+    return net_real_sockets() ? net_nsa_id() : 0x1234567890abcdefull;
+}
+
 static void manager(Service *s, IpcReq *req, IpcResp *resp) {
     (void)s;
     if (net_online() && online_manager(req, resp)) return;
     switch (req->cmd) {
     case 0: break;  // CheckAvailability
     case 1: {  // GetAccountId (the network service account; nextendo: the PID, known once a game token is)
-        uint64_t id = 0x1234567890abcdefull;
+        uint64_t id = acc_account_id();
         if (net_backend() == NET_BACKEND_NEXTENDO) {
             static bool asked;  // (asked before the ID token: one fetch, not one per call when offline)
-            if (!(id = nextendo_pid()) && !asked) asked = true, prepare_nextendo(), id = nextendo_pid();
-        } else if (net_real_sockets()) {
-            id = net_nsa_id();
+            if (!id && !asked) asked = true, prepare_nextendo(), id = nextendo_pid();
         }
         OUT(uint64_t, 0) = id;
         resp_size(resp, 8);

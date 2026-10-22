@@ -2,7 +2,11 @@
 // them while the game runs, so a test (or a person at a shell) can drive menus step by step and look at each step:
 //
 //   tap <x> <y> [frames]      a finger on the touch screen at game pixel x, y (1280x720), held for frames (default 6)
+//   drag <x0> <y0> <x1> <y1> [frames]   a finger held 10 frames at x0, y0, moved to x1, y1 over frames (default 60),
+//                             held 10 frames there, lifted
 //   btn <A|B|X|Y|L|R|ZL|ZR|PLUS|MINUS|UP|DOWN|LEFT|RIGHT>[+...] [frames]   controller buttons (test input, default 6)
+//   stick <x> <y> [frames]    the left stick held there (-32767..32767, y up) for frames (default 6)
+//   kbd <text>                answer the open keyboard dialog (runtime/ui/menu.mm) with text
 //   shot <name>               the window to build/<name>.png (in the data folder)
 //   peek <addr> [len]         guest memory as hex in the log (addr: 0x... or main+0x...)
 //   wait <frames>             the next command that many frames later
@@ -17,6 +21,9 @@
 #include "mod.h"
 
 extern uint64_t g_test_buttons, g_test_buttons_until;  // runtime/game_hooks.c (weak), read by runtime/hle/input.c
+extern int32_t g_test_lx, g_test_ly;
+void menu_kbd_test_answer(const char *text) __attribute__((weak));  // runtime/ui/menu.mm
+extern uint64_t g_test_stick_until;
 extern char g_window_shot_request[256];
 extern uint64_t renderer_present_count(void);
 extern void touch_test(int32_t x, int32_t y, bool down);  // runtime/hle/touch.c
@@ -47,6 +54,29 @@ static void run_line(char *line) {
         touch_test(atoi(a), atoi(b), true);
         wait_frames((uint64_t)frames);
         touch_test(atoi(a), atoi(b), false);
+    } else if (!strcmp(cmd, "drag")) {
+        int x0, y0, x1, y1, frames = 60;
+        if (sscanf(line, "%*s %d %d %d %d %d", &x0, &y0, &x1, &y1, &frames) < 4) return;
+        if (frames < 1) frames = 1;
+        touch_test(x0, y0, true);
+        wait_frames(10);
+        for (int k = 1; k <= frames; k++) {
+            touch_test(x0 + (x1 - x0) * k / frames, y0 + (y1 - y0) * k / frames, true);
+            wait_frames(1);
+        }
+        wait_frames(10);
+        touch_test(x1, y1, false);
+    } else if (!strcmp(cmd, "kbd") && n >= 2) {
+        const char *t = line + strspn(line, " \t") + 3;  // (the rest of the line after "kbd")
+        char text[96];
+        snprintf(text, sizeof text, "%s", t + strspn(t, " \t"));
+        text[strcspn(text, "\r\n")] = 0;
+        if (menu_kbd_test_answer) menu_kbd_test_answer(text);
+    } else if (!strcmp(cmd, "stick") && n >= 3) {
+        uint64_t frames = n >= 4 ? strtoull(d, NULL, 0) : 6;
+        g_test_lx = atoi(a), g_test_ly = atoi(b);
+        g_test_stick_until = renderer_present_count() + frames;
+        wait_frames(frames + 2);
     } else if (!strcmp(cmd, "btn") && n >= 2) {
         uint64_t bits = 0;
         for (char *t = strtok(a, "+"); t; t = strtok(NULL, "+"))

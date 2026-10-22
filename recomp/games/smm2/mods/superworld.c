@@ -379,8 +379,10 @@ SW_WRAPPER(sw_upload, 0x14f5940) {
     netobj_lock(c);
     uint64_t ring = no + NO_SW_UP_IDS;
     uint32_t cap = g32(ring + 8), head = g32(ring + 0xc), count = g32(ring + 0x10);
-    int n = snprintf(query, sizeof query, "/api/super_worlds?worlds=%u&version=%u&data_ids=", g8(slot + 0x76),
-                     g8(slot + 0x75));
+    // (the game's RegisterWorldMap sends the world count (map byte 0x76), the slot's byte +0xcd25 and the map format
+    // (0x75), in the order of a WorldMapInfo's worlds / planet type / unk5 [inf: +0xcd25 the planet type])
+    int n = snprintf(query, sizeof query, "/api/super_worlds?worlds=%u&planet_type=%u&version=%u&data_ids=",
+                     g8(slot + 0x76), g8(slot + 0xcd25), g8(slot + 0x75));
     for (uint32_t k = 0; k < count && k < MAX_LEVELS && cap; k++)
         n += snprintf(query + n, sizeof query - n, "%s%llu", k ? "," : "",
                       (unsigned long long)g64(g64(ring) + 8ull * ((head + k) % cap)));

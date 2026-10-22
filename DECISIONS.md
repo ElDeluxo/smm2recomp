@@ -1956,3 +1956,29 @@ player's name and Mii (save +0x10 / +0x60), which is outside this change; holdin
 nothing else. Writing the owner's name into the world record instead does nothing: the game rebuilds that block.
 **Would change:** a Mii database with the player's Mii (the save's name and Mii then set the way a console sets
 them), after which the wrapper has nothing to do.
+
+## 2026-10-23 — The loader binds a symbol both modules define to main's, as the console's loader does
+
+**Decision:** `runtime/loader.c` resolves a relocation against a symbol the module defines itself to the first
+global / weak, default-visibility definition in load order (main, then the SDK), not to the module's own copy. For
+SMM2 that moves the SDK's references to operator new / new[] / delete / delete[] (strong in main, weak in the SDK)
+and a handful of identical template copies (std `__tree` helpers, `complex` operators, `nn::os::Mutex::~Mutex`, a
+crypto callback) to main's definitions; the loader logs each one (`[loader] sdk: <name> bound to an earlier
+module's`).
+**Why:** the World Maker's Save As and the Worldbot's exit stopped on the SDK heap's check (PROGRESS item 7): the map
+object's nn::ngc::ProfanityFilter is allocated by the game's operator new (its sead heaps) and deleted by the SDK's
+destructor through operator delete, which was bound to the SDK's own malloc-based copy. The console's rtld looks
+every default-visibility symbol up in load order, so on hardware the SDK uses main's operators throughout; matching
+that removes the whole class of cross-module new / delete mismatches rather than patching this one destructor.
+**Would change:** a module whose own definition must win (protected / hidden visibility already does: those are left
+alone), or another game whose SDK must keep its own allocator (none in this repo).
+
+## 2026-10-23 — The player's own maker has the account id the game holds as its player id
+
+**Decision:** the mod's player id for the signed-in account's own maker (endless.c `pid_of_maker_id`) is the network
+service account id the runtime gives the game (`acc_account_id()`, the GetAccountId answer), not a hash of the maker
+ID like every other maker's. Hybrid mode keeps the backend's id; without an `/api/me` answer the token hash stays.
+**Why:** besides comparing course owners with the player's own record (which a hash satisfied), the game compares a
+user record's player id with the account id directly in places: My Info's Super World panel shows Delete only then
+(main+0x1aa46a0), so the player could not delete their uploaded world. On a console the two are the same number.
+**Would change:** a backend whose player ids must be the server's own (Nextendo: its PID is the account id already).

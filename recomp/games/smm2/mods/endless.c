@@ -102,8 +102,9 @@ void mod_set_backend_pid(uint64_t pid) {
 }
 
 uint64_t mod_player_pid(void) {
-    // The signed-in account's player id: the same hash of its maker ID as every maker's (Course World compares
-    // course owners with it: own courses). Asked from the server once. Hybrid: the backend's id, once known.
+    // The signed-in account's player id: the account id the game holds (acc_account_id; Course World compares course
+    // owners and user records with it: own courses, "me"), once /api/me named the own maker. Hybrid: the backend's id,
+    // once known.
     static volatile int known;
     if (!known) {
         Json *me = srv_call("GET", "/api/me", NULL, NULL);
@@ -121,14 +122,23 @@ uint64_t mod_player_pid(void) {
 }
 
 // Makers of the courses served (fake player ids -> names), for the user records the game asks for next.
-// A maker's player id is a hash of their maker ID on our server (the player's own too, once /api/me answered), so the
-// game's "is this my course / me" comparisons work; the table maps ids back to maker IDs and names.
+// A maker's player id is a hash of their maker ID on our server (the player's own: the game's account id, once /api/me
+// answered), so the game's "is this my course / me" comparisons work; the table maps ids back to maker IDs and names.
 #define NMAKERS 512
 static struct { uint64_t pid; char name[48]; char maker_id[16]; } makers[NMAKERS];
 static int nmakers;
 
+uint64_t acc_account_id(void);  // runtime/services/acc.c: the network service account id the game is given
+
 static uint64_t pid_of_maker_id(const char *maker_id) {
-    if (backend_pid && own_maker_id[0] && maker_id && !strcmp(maker_id, own_maker_id)) return backend_pid;  // (hybrid)
+    if (own_maker_id[0] && maker_id && !strcmp(maker_id, own_maker_id)) {
+        if (backend_pid) return backend_pid;  // (hybrid)
+        // The player's own maker: the account id the game itself holds (GetNetworkServiceAccountId). Besides the
+        // owner comparisons above, some own-checks compare a user record's player id with that account id directly
+        // (My Info's Super World panel shows Delete only for it, main+0x1aa46a0), as on a console where they agree.
+        uint64_t a = acc_account_id();
+        if (a) return a;
+    }
     uint64_t h = 1469598103934665603ull;
     for (const char *p = maker_id ? maker_id : ""; *p; p++) h = (h ^ (uint8_t)*p) * 1099511628211ull;
     return 0x5000000000000000ull | (h & 0x0000ffffffffffffull) | 1;

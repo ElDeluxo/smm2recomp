@@ -621,7 +621,22 @@ static void delete_course(Cpu *c) {
     finish(c, no, true, 0);
 }
 
+// DataStore method 128 (main+0x14f0090): the player's courses the server took down, one 0xd8-byte entry each (data
+// id, a reason byte, the course's name) into the ring at NetObj +0x136c08 (+0x136c10 capacity, +0x136c14 head, +0x136c18
+// count); asked when My Info's Uploaded Courses opens [obs]. Our server takes no one's course down: none, ok (left
+// unanswered it failed, and the tab gave "A communication error occurred").
+static void deleted_courses(Cpu *c) {
+    if (!mod_hundred()) { guest_call_orig(c, c->pc); return; }
+    uint64_t no = c->x[0];
+    netobj_lock(c);
+    s32(no + 0x136c14, 0);
+    s32(no + 0x136c18, 0);
+    netobj_unlock(c);
+    finish(c, no, true, 0);
+}
+
 void world_register(void) {
+    hle_override(MAIN_ADDR(0x14f0090), deleted_courses, "mod: the player's courses taken down (none)");
     hle_override(MAIN_ADDR(0x14e8ec0), search_comments, "mod: SearchComments");
     hle_override(MAIN_ADDR(0x14e96b0), post_comment, "mod: PostCommentText");
     hle_override(MAIN_ADDR(0x14e0d40), can_post_course, "mod: CanPostCourse");

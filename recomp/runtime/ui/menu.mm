@@ -748,6 +748,13 @@ static void keyboard_draw(ImGuiIO &io, float scale) {
     if (g_kbd.load() != 1) was_open = false;
 }
 
+// (tests: games/smm2/mods/edit_ctl.c "kbd <text>") answer the open keyboard dialog with text
+extern "C" void menu_kbd_test_answer(const char *text) {
+    if (g_kbd.load() != 1) return;
+    snprintf(g_kbd_text, sizeof g_kbd_text, "%s", text);
+    g_kbd = 2;
+}
+
 // Game thread (runtime/hle/swkbd.c): show the dialog, re-present the last frame until it's answered.
 // Returns 1 confirmed (out = text, UTF-8), 0 cancelled.
 extern "C" int menu_keyboard_run(const char *initial, int max_len, char *out, int cap) {

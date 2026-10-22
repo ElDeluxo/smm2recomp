@@ -552,12 +552,29 @@ Setup failures first, since they block new players:
      own status is 2 (main+0x148eae0); the mod sent the save's kind (+0x1b17e8: 1 a course, 2 the world) as the
      status. It now sends both (`status`, `clear`; the server keeps `clear` at its highest). Checked: Play again
      after a course gives New Game / Continue, and Continue puts Mario back on the cleared course point
-   - ⬜ upload and delete in game not tried: both start from a Worldbot slot (World Maker), which needs courses in
-     Coursebot uploaded through the game's clear check; the test save has none (a world uploaded through the API
-     shows as uploaded, but the game offers no delete for a world that isn't in a slot)
-   - ⬜ seen once: the Worldbot stopped on a heap check (sdk trap from a map object's destructor, main+0x1465f40 /
-     +0x1465810, called from main+0x171a360) after its first pigeon message, with the API-made world uploaded; not
-     seen again in three more visits (with and without it)
+   - ✅ upload and delete in game (2026-10-23, local test server, evidence `superworlds/2026-10-23-upload-delete/`):
+     two 1-screen courses made in the Course Maker, cleared in the clear check and uploaded through the Coursebot;
+     World Maker set them on a world (castle + a course point), Save As into a Worldbot slot; the slot's Upload
+     ("Super World uploaded. Maker ID: …"), the server holds it (map, thumbnail block, the two data ids), Course
+     World > Super Worlds lists "SUPER Tester WORLD", it plays from there and from the Worldbot; a second upload
+     overwrites the first ("only one at a time"); My Info's Delete takes it off the server ("No uploaded Super
+     World."). The Worldbot slot's own trash deletes the local slot only (no request, as on a console)
+   - ✅ fixed: the **World Maker / Worldbot heap-check stop** (sdk trap in CentralHeap::Free from the map object's
+     destructor main+0x1465f40, reached from main+0x1465810 by the World Maker's Save As (main+0x170f230) and the
+     Worldbot's exit (main+0x171a360)): reproduced every time at World Maker's Save As. The object holds an
+     nn::ngc::ProfanityFilter the game allocates with its own operator new (sead heaps); the SDK's
+     ~ProfanityFilter deletes it with operator delete, which our loader bound to the SDK's own weak copy (its
+     malloc heap) instead of main's, as the console's loader does. The loader now binds a module's default-
+     visibility definitions to an earlier module's (runtime/loader.c; DECISIONS 2026-10-23). Not the server's
+     records: any destruction of that object stopped. After it: Save As twice, uploads, ten Worldbot visits (with and
+     without an uploaded world), the world played from the Worldbot and Course World, no stop
+   - ✅ fixed: My Info offered no **Delete** for the player's own uploaded world: the panel shows it only when the
+     user record's player id equals the account id the game holds (GetNetworkServiceAccountId, main+0x1aa46a0);
+     the mod gave its own maker a hash. The own maker's player id is now that account id (endless.c)
+   - ✅ fixed: My Info > Uploaded Courses gave "A communication error occurred": the tab asks DataStore 128 (the
+     player's courses the server took down, main+0x14f0090) first, which no one answered; now none, ok (world.c)
+   - ✅ the upload sends the slot's byte +0xcd25 as `planet_type` (the game sends it between the world count and
+     the map format [inf: the planet type]; 0 in the tests)
    - ⬜ thumbnails stay the game's placeholder planets (TGRCode's are on Nintendo's CDN; our own uploads' blocks are
      kept by the server but no in-game upload has made one yet)
 8. ✅ Disable the buttons that don't work yet (2026-10-22, checked in game): every Course World entry works or answers
