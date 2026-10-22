@@ -77,14 +77,17 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
   (not exactly alignable: Ryujinx grabs are wall-clock timed). Ryujinx against itself: 0.3-1.8 %.
   Evidence: `recomp/private/smm2/evidence/r1/final_*` (`_side_by_side.png`, `_diff.png`, `_recomp.png`; private,
   not in git)
-- 🔄 In-course frames vs Ryujinx, lockstep (2026-10-19): 90 reference courses (5 styles x 10 themes, night for the four
-  2D styles), the same game state in both runtimes (both freeze at the same player update, every `sead::Random`
-  seeded alike) and the presented frame captured raw at 1080p. **71 of 90 bit-identical** at update 900 (70 at 1200):
-  every SMB1, SMB3 and SMW course, day and night; NSMBU and 3D World within 20 pixels of +-1-4 levels, except NSMBU
-  underwater (3,706 px, <= 17 levels; 0.00 % > 24) and the 3D World liquid surfaces (castle lava 2.28 % > 24 /
-  0.03 % > 48; forest poison 0.20 % / 0.05 %; deterministic in both runtimes, so a real difference: the lava surface
-  draw, not yet found). Table and how: `recomp/docs/smm2-bringup.md` ("In-course frames"); evidence
-  `recomp/private/smm2/evidence/frames-r3/` (side-by-sides, diff maps, tables; private)
+- 🔄 In-course frames vs Ryujinx, lockstep (2026-10-19, liquids fixed 2026-10-23): 90 reference courses (5 styles x
+  10 themes, night for the four 2D styles), the same game state in both runtimes and the presented frame captured raw
+  at 1080p. **72 of 90 bit-identical** at update 900 (71 at 1200), and **no course has a pixel more than 24 levels
+  off** (all SMB1 / SMB3 / SMW exact; the rest +-1-4 levels in a few pixels, except 3D World water 41-50 px under
+  Mario's shoe, max 77 levels, and ghost 10-13 px, max 15). Fixed: the 3D World lava / poison (2.28 % / 0.20 % px
+  > 24) was the bloom chain reading the wrong mip level (feedback snapshots copied only level 0); NSMBU underwater
+  (3,706 px) was the per-frame clear of scene targets (now reshaped output only). Found with render-target dumps of
+  the same frame from both runtimes (a patched Ryujinx + `LARECOMP_DEBUG_RAW`). Next: the water spot under Mario
+  (new with these changes: which one not yet checked), a full rerun on main (stopped after 22 courses). Table and
+  how: `recomp/docs/smm2-bringup.md` ("In-course frames"); evidence `recomp/private/smm2/evidence/frames-r3/`,
+  `frames-r4/` (private)
 - ✅ Audio vs Ryujinx (rough check, 2026-10-19): each runtime's mixed output dumped and aligned. Boot / logo audio
   matched; in a course the recomp was ~5 dB quieter (10 dB above 2 kHz) because voices sent through splitters were
   dropped. Fixed (splitters, the AuxiliaryBuffer and BiquadFilter effects): the course's level now -27.5 dB against
@@ -454,8 +457,9 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     composite discards where that depth says "nothing" or loses to the scene depth (bring-up notes "Linux arm64").
     Lavapipe shows NaNs in the same composite (his eyes). Next: an Xcode GPU capture on the iPad (needs it local,
     not over Tailscale) of the character layer's RG16F target and the composite's discard.
-  - ⬜ The water in the background looks a bit too shiny. The 3D World liquid surfaces already differ most from
-    Ryujinx (castle lava 2.28 % px > 24), so check specular and reflection on liquids.
+  - 🔄 The water in the background looks a bit too shiny. Likely the bloom bug fixed 2026-10-23 (the glow of bright
+    highlights came from the wrong mip level: sparse and sparkly; lava and poison now match Ryujinx). Owner to look
+    again.
 
 - 🔄 **Vulkan fixes found by the SM35 port (2026-10-21; (1) and (2) landed 2026-10-23, run on lavapipe in Docker):**
   - ✅ (1) shader global memory was one storage buffer over the 3.2 GB heap, but a GPU only reaches
@@ -785,7 +789,7 @@ Setup failures first, since they block new players:
 
 | Platform | Builds | Boots to title | Plays courses | Frames match Ryujinx | Input replays in sync |
 |---|---|---|---|---|---|
-| macOS (Apple Silicon, Metal) | ✅ | ✅ title rendered, 60 fps | ✅ title course to the goal, Course Maker test play | 🔄 in course: 71 / 90 courses bit-identical (all SMB1/SMB3/SMW), the rest within 20 px except 3D World lava 2.28 % px >24 (title: 2.5-4.8 %) | ✅ 221,189 / 221,189 updates identical (31 sessions) |
+| macOS (Apple Silicon, Metal) | ✅ | ✅ title rendered, 60 fps | ✅ title course to the goal, Course Maker test play | 🔄 in course: 72 / 90 courses bit-identical (all SMB1/SMB3/SMW), none with a pixel > 24 levels off (title: 2.5-4.8 %) | ✅ 221,189 / 221,189 updates identical (31 sessions) |
 | Windows (x64, Vulkan) | ✅ cross-built with zig: exe 2.4 MB + game DLL 186 MB, needs SDL3.dll, libiconv-2.dll, libshaderc_shared.dll, vulkan-1.dll (driver); player zip 85 MB | ⬜ not run (no Windows machine) | ⬜ | ⬜ | ⬜ |
 | Linux arm64 (Vulkan) | ✅ cross-built with zig: exe 11.9 MB + game .so 688 MB, needs libSDL3.so.0, libvulkan.so.1, libshaderc.so.1, glibc 2.36; player zip 71 MB | ✅ title rendered (Debian 13 VM, Mesa lavapipe, ~7 fps); package first launch recompiled the game code from the dump (29 min) and booted | ⬜ | 🔄 seed 4 frame 2386 vs macOS same frame: 0.6 % px >24, 0.17 % >96 (before: Mario model missing on Vulkan; now in the scene, with a bloom blur at his eyes); colour-managed vs Ryujinx 2.99 % >24, 0.24 % >96 (macOS 2.35 / 0.11) | ⬜ |
 | Linux x64 (Vulkan) | ✅ cross-built with zig: exe 11.3 MB + game .so 856 MB (generated/smm2-c, x86-64-v3), same libraries; player zip 74 MB | ⬜ not run | ⬜ | ⬜ | ⬜ |

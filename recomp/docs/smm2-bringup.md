@@ -384,23 +384,55 @@ Per-session tables (each test, frames compared, identical, first divergence): `p
 | SMB1 (M1) | 20 | 20 / 20 | - | - |
 | SMB3 (M3) | 20 | 20 / 20 | - | - |
 | SMW (MW) | 20 | 20 / 20 | - | - |
-| NSMBU (WU) | 20 | 8 / 9 | 10 / 9 | underwater 3,706 px (max 17 levels, 0.00 % > 24); underwater night ~300 px |
-| 3D World (3W) | 10 | 3 / 1 | 5 / 7 | castle lava 2.28 % > 24, 0.03 % > 48; forest poison 0.20 % / 0.05 % |
-| **all** | 90 | **71 / 70** | | |
+| NSMBU (WU) | 20 | 9 / 10 (was 8 / 9) | 11 / 10 (underwater 32 / 54 px, max 3-4) | - (was: underwater 3,706 px up to 17 levels) |
+| 3D World (3W) | 10 | 3 / 1 | 5 / 7 (castle 68 / 63 px, max 4) | ghost 10-13 px (max 15), water 43 / 50 px (max 77, one spot under Mario's shoe) (was: castle lava 2.28 % > 24, forest poison 0.20 %) |
+| **all** | 90 | **72 / 71** (was 71 / 70) | | no course has a pixel > 24 levels off (was 2) |
 
+(2026-10-23, after the fixes below; 0.00 % of pixels > 24 levels everywhere. The courses as the references were made:
+`mmk ref-courses` with `R3F=63`, the Koopa and the owner-style header left out (`R3F=127` gives other liquid heights:
+M1_castle 7 % off, and the 3D World forest's glints differ). Rerun after rebasing on main's pitch-linear texture
+change: the 3D World and 12 SMB1 courses, same numbers within +-1-4-level flicker of a few pixels.)
 Per-course tables (pixels differing, > 24 / > 48 / > 96, mean), side-by-sides and diff maps:
-`private/smm2/evidence/frames-r3/`.
+`private/smm2/evidence/frames-r3/` (before), `private/smm2/evidence/frames-r4/` (after: logs, tools, the Ryujinx patch).
 
-- [obs] The 3D World liquids differ deterministically (both runtimes repeat themselves exactly), so it's a real
-  rendering difference. It is confined to the lava / poison surface: one draw (an uber shader with two scrolling
-  layers, a shadow-map compare and light probes), later bloomed and colour-graded like everything else (other 3D World
-  themes are exact through the same passes). Not: the sampler LOD bias (applying it, possible on Metal from macOS 26,
-  moves away from Ryujinx: MoltenVK evidently doesn't either), fast math (IEEE math moves away too), a capture
-  offset. Open [?].
+- [obs] **3D World liquids: the bloom chain read the wrong mip level.** Found with render-target dumps of the same
+  frame from both runtimes (below): every pass matched (0.00x % of texels, rounding) up to the bloom's downsample
+  from 200x114 to 100x57 (14 % of texels off, then worse down the chain and into the tone-mapped image). That pass
+  draws into level 2 of a 400x228 mip chain while sampling level 1 of the same texture (the sampler's LOD clamped to
+  1..1). Sampling an attachment of the current pass goes through a snapshot copy (`resolve_feedback`), and the copy had
+  only level 0: Metal clamped the LOD to it, so the glow came from the 4x larger level 0, point-like and aliased (a
+  sparse, sparkly bloom under every bright highlight - lava, poison water). The snapshot now has every level, sampled
+  through the texture's own view, swizzle and type (Metal; Vulkan's snapshots copy every level too). Castle 444,417 px
+  (2.28 % > 24) -> 68 px max 4 levels; forest 187,317 px -> 15 px max 1. Other 3D World themes were exact before
+  because nothing there is bright enough to reach the lower bloom levels in these frames.
+- [obs] **NSMBU underwater: the per-frame clear.** Scene render targets were cleared at their first use in each frame
+  (from LASRecomp, against trails where a level never draws). NSMBU's underwater background draws translucent light
+  columns before the opaque backdrop, so they blend over last frame's pixels on the Switch and in Ryujinx, over black
+  here (pass dumps: the light columns 1-4 units of 10 bits darker, the final frame up to 17 levels). The clear now
+  applies to reshaped output only (a window that isn't 16:9, where pixels outside the game's drawing exist). WU_water
+  3,706 px -> 32 (max 3), WU_water_night 286 -> 0.
+- Not it (tested on the way, each frame left bit for bit as it was): the lava shaders (Ryujinx's own SPIR-V for the
+  lava's vertex and fragment programs, through spirv-cross, run in our pipeline with `LARECOMP_MSL_OVERRIDE`: the
+  same frame to the pixel), sampler LOD bias, IEEE maths, polygon-offset scale, NSMBU's fragment shaders (all
+  replaced by Ryujinx's translations: no change).
+- Left: 3D World water, 41 px under Mario's shoe (max 77 levels, deterministic; new with these changes, which
+  of the two not yet checked: next, a run with the per-frame clear forced on, then the pass dumps of that frame); 3D World ghost
+  10-13 px (max 15); +-1-4-level rounding in a handful of pixels.
 - [obs] Twice, on the first capture of a course, the recomp's twinkling stars / bubbles differed (WU snow night,
   WU water); twelve later runs (idle, CPU-loaded, GPU-loaded next to Ryujinx, cold shader compiles) never repeated it.
   Unknown [?]: watch for it.
-- The +-1-4 level differences in NSMBU / 3D World are rounding (a handful of pixels per frame).
+
+### Render-target dumps of one frame from both runtimes
+
+- Ryujinx: the trace build (frames-r3 TraceHook.cs) plus a patch (`private/smm2/evidence/frames-r4/ryujinx-dumps.patch`):
+  `RYU_DUMP_DIR` (set at the trace shot, after the settle, until the captured present) makes the Vulkan backend write
+  each pass's first colour target as raw texels when the targets change; `RYU_DUMP_DRAWS=W,H,x,y,w,h` adds a crop
+  after every draw into a WxH target. Audio backend Dummy. The build reproduces the frames-r3 references bit for bit.
+- recomp: `RECOMP_TRACE_SHOT_DEBUG=1` makes the trace shot's frame the debug frame; `LARECOMP_DEBUG_RAW=<dir>` writes
+  each pass's own first target (the level drawn) as raw texels (`pass_NNN_WxH_<MTLPixelFormat>_<addr>.raw`), after
+  every draw with `LARECOMP_DEBUG_EACH_DRAW=1`. `LARECOMP_MSL_OVERRIDE=<dir>` replaces a program's MSL by
+  `<dir>/<code address>_vs|fs.metal`.
+- Matching the two pass lists by size and content (`tools/match.py` in the evidence) finds the first pass that differs.
 
 ### Audio (rough)
 
@@ -419,16 +451,14 @@ PCM before the host volume), the same session (the stock title course to the goa
   land at slightly different wall-clock times (audio runs on host time; loading and pacing differ), so the waveforms
   don't line up sample for sample.
 
-### Where the frame work stands (paused 2026-10-19)
+### Where the frame work stands (2026-10-23)
 
-- Sampler border colours are now honoured (`renderer.m` `sampler_for`): 3D World castle lava 2.28 % -> 0.22 % px
-  >24. Depth clamp (`nvnCommandBufferSetDepthClamp`) is recorded and applied (SMM2 leaves it off; Vulkan ignores it).
-  The 90-course recheck with both stopped after 23 courses (all still identical): resume from M1_sky_night.
-- Left: 3D World forest (0.20 %: glint quads on the poison water, an effect draw [inf]), NSMBU underwater (+-1-2
-  levels, rounding [inf]).
-- Menus in lockstep: a presented-frame clock from the first player update on both sides (`RECOMP_PAD_CLOCK=frame
-  RECOMP_PAD_ORIGIN=player`, `RECOMP_FRAME_SHOT=k1,k2,...`; the Ryujinx trace build's `RYU_TRACE_FRAMECLOCK=1
-  RYU_TRACE_FRAMESHOT`). Built, not yet run against Ryujinx.
+- Sampler border colours are honoured (`renderer.m` `sampler_for`; castle lava 2.28 % -> 0.22 % px > 24 on its own),
+  depth clamp is applied, feedback snapshots carry every mip level, and the per-frame target clear is limited to
+  reshaped output (above).
+- Next: the 3D World water spot under Mario's shoe; a full 90-course rerun on main (the rerun after the rebase was
+  stopped after 22 courses to save credits); menus in lockstep (`RECOMP_PAD_CLOCK=frame RECOMP_PAD_ORIGIN=player`,
+  `RECOMP_FRAME_SHOT=k1,k2,...`; Ryujinx `RYU_TRACE_FRAMECLOCK=1 RYU_TRACE_FRAMESHOT`): built, not yet run.
 
 ## First-use shader compiles: the Metal shader caches (2026-10-19)
 
