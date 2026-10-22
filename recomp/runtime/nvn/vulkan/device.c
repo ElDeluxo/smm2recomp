@@ -873,8 +873,15 @@ void backend_present(NvnTexture *t) {
             if (strchr(pat, '%')) snprintf(shot_path, sizeof shot_path, pat, (int)f1);
             else snprintf(shot_path, sizeof shot_path, "%s", pat);
         }
-        if (fg_gen) vk_frame_end_at(shot ? shot_path : NULL, t_gen + FG_HALF_SLOT_NS);
-        else vk_frame_end(shot ? shot_path : NULL);
+        // test hooks (LARECOMP_HOST_INPUT "<frame>:shot:<name>", runtime/hle/input.c): this frame's window image there
+        extern char g_window_shot_request[256];
+        bool req = !shot && g_window_shot_request[0];
+        if (req) {
+            snprintf(shot_path, sizeof shot_path, "%s", g_window_shot_request);
+            g_window_shot_request[0] = 0;
+        }
+        if (fg_gen) vk_frame_end_at(shot || req ? shot_path : NULL, t_gen + FG_HALF_SLOT_NS);
+        else vk_frame_end(shot || req ? shot_path : NULL);
         if (shot && f1 + win_step > win_b && getenv("LARECOMP_EXIT_AFTER_SHOT")) { fflush(stderr); _exit(0); }
     } else {
         renderer_submit();
