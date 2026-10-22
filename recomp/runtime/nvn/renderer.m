@@ -3381,9 +3381,11 @@ static const char *copy_src =
     "fragment D fs_depth(V in [[stage_in]], depth2d<float> t [[texture(0)]], sampler s [[sampler(0)]]) {\n"
     "  D o; o.d = t.sample(s, in.uv); return o; }\n";
 
-// Bytes per block of the Metal texture backing an NVN format (RGB8 is expanded to RGBA8 on the host).
-static uint64_t renderer_pixel_format_bytes(MTLPixelFormat pf, uint64_t nvn_bpb) {
+// Bytes per block of the Metal texture backing an NVN format (RGB8 and the packed 16-bit colour formats are expanded
+// to RGBA8 on the host).
+static uint64_t renderer_pixel_format_bytes(MTLPixelFormat pf, uint64_t nvn_bpb, uint32_t nvn_fmt) {
     (void)pf;
+    if (nvn_bpb == 2 && renderer_format_is_soft16(nvn_fmt)) return 4;
     return nvn_bpb == 3 ? 4 : nvn_bpb;
 }
 
@@ -3419,7 +3421,7 @@ static void copy_buffer_to_texture(uint64_t src, const TexRefRec *dst) {
     renderer_mark_gpu_owned(t);
     bool array = tex.textureType == MTLTextureType2DArray || tex.textureType == MTLTextureTypeCube;
     uint32_t hb = ((uint32_t)rg[4] + fi->bh - 1) / fi->bh, wb = ((uint32_t)rg[3] + fi->bw - 1) / fi->bw;
-    uint64_t mtl_bpb = renderer_pixel_format_bytes(tex.pixelFormat, fi->bpb);
+    uint64_t mtl_bpb = renderer_pixel_format_bytes(tex.pixelFormat, fi->bpb, t->format);
     for (int z = 0; z < (array ? rg[5] : 1); z++) {
         const uint8_t *s = (const uint8_t *)(uintptr_t)(src + (uint64_t)z * img);
         uint64_t out_row = (uint64_t)wb * mtl_bpb;
@@ -3431,6 +3433,8 @@ static void copy_buffer_to_texture(uint64_t src, const TexRefRec *dst) {
                 if (mtl_bpb == fi->bpb) memcpy(dr, sr, out_row);
                 else if (fi->bpb == 3 && mtl_bpb == 4)
                     for (uint32_t x = 0; x < wb; x++) { memcpy(dr + x * 4, sr + x * 3, 3); dr[x * 4 + 3] = 255; }
+                else if (fi->bpb == 2 && mtl_bpb == 4 && renderer_format_is_soft16(t->format))
+                    renderer_soft16_decode(t->format, sr, wb, dr);
                 else memset(dr, 0, out_row);
             }
         id<MTLBuffer> staging = [dev newBufferWithBytes:data length:out_row * hb * (array ? 1 : rg[5])
@@ -3524,7 +3528,7 @@ static void copy_texture_to_buffer(const TexRefRec *src, uint64_t dst) {
         tex = small;
     }
     id<MTLBlitCommandEncoder> b = [cb() blitCommandEncoder];
-    if (renderer_pixel_format_bytes(tex.pixelFormat, fi->bpb) != fi->bpb) { [b endEncoding]; return; }
+    if (renderer_pixel_format_bytes(tex.pixelFormat, fi->bpb, t->format) != fi->bpb) { [b endEncoding]; return; }
     bool array = tex.textureType == MTLTextureType2DArray || tex.textureType == MTLTextureTypeCube;
     for (int z = 0; z < (array ? rg[5] : 1); z++) {
         uint64_t boff;

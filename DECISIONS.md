@@ -2197,3 +2197,20 @@ falls back to a known-correct (just slower at upload) path elsewhere; Intel Macs
 one-time hardware decode.
 **Would change:** a per-pixel-format support query arriving in Metal, or Intel Macs' upload cost mattering enough
 to allow `Mac2` devices through after checking their vendor another way.
+
+## 2026-10-22 — Packed 16-bit colour textures are decoded on the CPU where the Metal GPU rejects them
+
+**Decision:** the same non-Apple-GPU test that turns on the ASTC fallback turns on `g_soft16`
+(`RECOMP_SOFT16=1|0` overrides it). `mtl_format` then maps NVN's packed colour formats — RGBA4 `0x39`, RGB5 `0x3a`,
+RGB5A1 `0x3b`, RGB565 `0x3c` (and the BGR5 variants `0x95`-`0x97`, which the Metal path already maps to `A1BGR5`) — to
+`RGBA8Unorm`. `upload_texture` expands each 16-bit texel on the CPU with the same bit layouts `vulkan/textures.c`
+uses (`R4G4B4A4`, `R5G6B5`, `R5G5B5A1`), and buffer→texture copies do the same expansion. Texture→buffer readbacks of
+these textures are skipped like the other host-expanded formats (SMM2 does none).
+**Why:** shooting a fireball in the first level made the game create an RGB565 texture, and the GT 755M's Metal 2
+driver aborted in `MTLTextureDescriptor` validation with "invalid pixelFormat (40)" (`B5G6R5Unorm`). `A1BGR5Unorm`
+(41, `0x3b`/`0x95`-`0x97`) and `ABGR4Unorm` (42, `0x39`) are rejected the same way (`RGBA8Unorm_sRGB` /
+`RG8Unorm_sRGB` 11/31 too, but no NVN format maps to them). `BGR5A1Unorm` (43) is supported, but its bit layout
+(`A` in the low bit) is not NVN's `0x3b`, so it can't substitute. There is no per-format support query, as with ASTC;
+on a device where the formats exist the decoded path is still correct, just slower at upload.
+**Would change:** a per-pixel-format support query in Metal, or proof that some non-Apple families support the
+formats (all of them are gated on `Apple2` today, so Intel Macs with native RGB565 pay a one-time CPU expansion).

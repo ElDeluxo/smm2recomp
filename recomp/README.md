@@ -314,6 +314,8 @@ Added for SMM2:
 | `RECOMP_NO_MOUSE_TOUCH=1` | the left mouse button no longer touches the console's touch screen (desktop) |
 | `LARECOMP_HOST_INPUT="<frame>:tap:<x>/<y>:<frames>"` | (tests) a finger on the touch screen at game pixel x, y (1280x720) for that many frames |
 | `RECOMP_BC_SOFT=1` | (Metal) decode BC textures on the CPU, as on GPUs without BC support |
+| `RECOMP_ASTC_SOFT=1` | (Metal) decode ASTC textures on the CPU, as on GPUs without ASTC support |
+| `RECOMP_SOFT16=1` | (Metal) decode packed 16-bit colour textures (RGBA4 / RGB565 / RGB5A1) on the CPU, as on GPUs without them |
 | `RECOMP_NO_CORES=1` | run guest threads without per-core exclusivity (LAS's behaviour; SMM2 races then) |
 | `SMM2_SEED_ALL=1` | with `SMM2_SEED`: every later `sead::Random` gets the same seed too (what the Ryujinx trace build's seed patch does; replays with enemies) |
 | `RECOMP_PAD_SCRIPT=<file>` | play an input script instead of the keyboard / controllers (which are left out meanwhile): `N BUTTONS` per line, the Ryujinx trace tooling's format (A B X Y L R ZL ZR PLUS MINUS UP DOWN LEFT RIGHT LSTICK RSTICK, and JUMP=A RUN=Y SPIN=ZR; `-` = nothing) |

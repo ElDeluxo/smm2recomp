@@ -59,8 +59,40 @@ static bool g_bc_soft;
 // texture there aborts inside Metal ("invalid pixelFormat 204", the course menu's thumbnails, 2026-10-22).
 static bool g_astc_soft;
 static bool astc_format(uint32_t f) { return f >= 0x79 && f <= 0x94; }
+// Older non-Apple Metal drivers also reject the packed 16-bit colour formats (macOS 11 additions): RGBA4 (0x39),
+// RGB5/RGB565 (0x3a/0x3c) and RGB5A1 (0x3b). Creating one aborts ("invalid pixelFormat 40", the first level's
+// fireball effect, 2026-10-22), so they are decoded on the CPU into RGBA8 at upload. RECOMP_SOFT16=1/0 overrides.
+static bool g_soft16;
+static int soft16_kind(uint32_t f) {
+    switch (f) {
+    case 0x39: return 1;              // RGBA4
+    case 0x3A: case 0x3C: return 2;   // RGB5 / RGB565
+    case 0x3B: case 0x95: case 0x96: case 0x97: return 3;  // RGB5A1, and the BGR5 variants Metal maps to A1BGR5
+    }
+    return 0;
+}
+static void soft16_decode(uint32_t f, const uint8_t *src, uint64_t n, uint8_t *dst) {
+    int kind = soft16_kind(f);
+    for (uint64_t i = 0; i < n; i++) {
+        uint16_t v;
+        memcpy(&v, src + i * 2, 2);
+        unsigned r, g, b, a;
+        if (kind == 1) {  // R4G4B4A4
+            r = v & 15; g = (v >> 4) & 15; b = (v >> 8) & 15; a = (v >> 12) & 15;
+            r = (r << 4) | r; g = (g << 4) | g; b = (b << 4) | b; a = (a << 4) | a;
+        } else if (kind == 3) {  // R5G5B5A1
+            r = v & 31; g = (v >> 5) & 31; b = (v >> 10) & 31; a = (v >> 15) ? 255 : 0;
+            r = (r << 3) | (r >> 2); g = (g << 3) | (g >> 2); b = (b << 3) | (b >> 2);
+        } else {  // R5G6B5
+            r = v & 31; g = (v >> 5) & 63; b = (v >> 11) & 31; a = 255;
+            r = (r << 3) | (r >> 2); g = (g << 2) | (g >> 4); b = (b << 3) | (b >> 2);
+        }
+        dst[i * 4] = (uint8_t)r; dst[i * 4 + 1] = (uint8_t)g; dst[i * 4 + 2] = (uint8_t)b; dst[i * 4 + 3] = (uint8_t)a;
+    }
+}
 static MtlFormat mtl_format_hw(uint32_t f);
 static MtlFormat mtl_format(uint32_t f) {
+    if (g_soft16 && soft16_kind(f)) return (MtlFormat){MTLPixelFormatRGBA8Unorm};
     if (g_astc_soft && astc_format(f)) return (MtlFormat){f >= 0x87 ? MTLPixelFormatRGBA8Unorm_sRGB : MTLPixelFormatRGBA8Unorm};
     int k = g_bc_soft ? bcsoft_kind(f) : 0;
     if (!k) return mtl_format_hw(f);
@@ -185,6 +217,8 @@ static MtlFormat mtl_format_hw(uint32_t f) {
 
 bool renderer_format_is_depth(uint32_t f) { return f >= 0x31 && f <= 0x36; }
 bool renderer_format_has_stencil(uint32_t f) { return f == 0x31 || f == 0x35 || f == 0x36; }
+bool renderer_format_is_soft16(uint32_t f) { return g_soft16 && soft16_kind(f) != 0; }
+void renderer_soft16_decode(uint32_t f, const uint8_t *src, uint64_t n, uint8_t *dst) { soft16_decode(f, src, n, dst); }
 MTLPixelFormat renderer_pixel_format(uint32_t f) { return mtl_format(f).pf; }
 bool renderer_format_alpha_one(uint32_t f) { return mtl_format(f).force_alpha_one; }
 
@@ -655,6 +689,18 @@ static void upload_texture(NvnTexture *t, TexBackend *b, id<MTLBlitCommandEncode
                     data[i * 4 + 3] = 255;
                 }
                 out_row = l.wb * 4;
+                free(lin);
+                lin = data;
+            }
+            if (g_soft16 && soft16_kind(t->format)) {  // packed 16-bit colour on the CPU (see g_soft16)
+                static int log16;
+                if (log16++ < 4) LOG("[metal] soft16 %#x %ux%u decoded on the CPU\n", t->format, l.w, l.h);
+                uint32_t d = l.d ? l.d : 1;
+                uint64_t n = (uint64_t)l.w * l.h * d;
+                data = malloc(n * 4);
+                soft16_decode(t->format, lin, n, data);
+                out_row = l.w * 4;
+                out_h = l.h;
                 free(lin);
                 lin = data;
             }
@@ -1712,6 +1758,12 @@ void ui_window_init(void) {
     g_astc_soft = ![dev supportsFamily:MTLGPUFamilyApple2];
     if (getenv("RECOMP_ASTC_SOFT")) g_astc_soft = atoi(getenv("RECOMP_ASTC_SOFT")) != 0;
     if (g_astc_soft) LOG("[metal] no ASTC texture support on this GPU: ASTC decoded on the CPU\n");
+    // Packed 16-bit colour formats are macOS 11 additions too; the same Metal 2 drivers reject them (the first
+    // level's fireball effect made an RGB565 texture and Metal aborted with "invalid pixelFormat 40"). Decode them on
+    // the CPU into RGBA8 as well; Apple GPUs keep the native formats.
+    g_soft16 = ![dev supportsFamily:MTLGPUFamilyApple2];
+    if (getenv("RECOMP_SOFT16")) g_soft16 = atoi(getenv("RECOMP_SOFT16")) != 0;
+    if (g_soft16) LOG("[metal] no packed 16-bit texture formats on this GPU: RGB565/RGBA4/RGB5A1 decoded on the CPU\n");
     layer.device = dev;
     layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
     layer.framebufferOnly = getenv("LARECOMP_WINDOW_SHOT") ? NO : YES;
