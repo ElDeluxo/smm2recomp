@@ -453,7 +453,10 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     (a5e5395). Lower priority.
   - The test setup: `recomp/tools/linux_vk_docker.sh` (Debian 13 arm64 container, lavapipe, Xvfb; the zig cross-build;
     a run folder linking the dev data read-only). Found with it: compile-ahead's `cache/spirv` is ~470 MB per GLSL
-    variant and never pruned, so each version whose GLSL changes adds another set in a player's data folder.
+    variant and was never pruned, so each version whose GLSL changes added another set in a player's data folder.
+    Fixed 2026-10-23: a cache hit touches the file, and each start removes the least recently used once the folder
+    passes 640 MB, down to 480 MB (`vulkan/shaders.c` cache_prune; tested on a fake 700 MB cache: the 220 oldest
+    went). Cross-compiled for Windows and Linux; not run on a Vulkan machine.
 
 ### GitHub issues (triaged 2026-10-22; owner: no replies needed, fix what they reveal)
 Release times (UTC, 2026-10-21): v0.3.0 06:51, v0.3.1 09:23, v0.3.2 12:58. #9 (prod.keys legal): the owner's, no action.

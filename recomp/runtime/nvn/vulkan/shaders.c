@@ -1,17 +1,24 @@
 // GLSL -> SPIR-V (shaderc), descriptor layouts from the SPIR-V itself, translated NVN programs, built-in shaders.
+#include <dirent.h>
 #include <pthread.h>
 #include <shaderc/shaderc.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
+#include <utime.h>
 
 #include "shaders.h"
 #include "../framegen.h"
+
+static void *cache_prune(void *arg);
 
 void vk_shaders_init(void) {  // (compilers are per thread: check shaderc works at all)
     shaderc_compiler_t c = shaderc_compiler_initialize();
     if (!c) FATAL("shaderc_compiler_initialize failed\n");
     shaderc_compiler_release(c);
+    pthread_t t;
+    if (!getenv("LARECOMP_NO_SPIRV_PRUNE") && pthread_create(&t, NULL, cache_prune, NULL) == 0) pthread_detach(t);
 }
 
 static shaderc_shader_kind kind_of(int stage) {
@@ -27,11 +34,62 @@ static uint64_t src_hash(const char *src, int stage) {
     return h;
 }
 
+// The cache is kept to a size: a file used (read, or found by the compile-ahead) is touched, and at each start the
+// least recently used go once the folder holds more than SPIRV_KEEP_MAX, down to SPIRV_KEEP (one full set of the
+// game's shaders is about 470 MB; a new version whose translation changes adds another, the old one ages out). Left
+// over temporary files (a store cut short) go too. LARECOMP_NO_SPIRV_PRUNE=1: off.
+#define SPIRV_KEEP_MAX (640ull << 20)
+#define SPIRV_KEEP (480ull << 20)
+typedef struct { char name[40]; time_t t; long long size; } CacheFile;
+static int by_time(const void *a, const void *b) {
+    time_t x = ((const CacheFile *)a)->t, y = ((const CacheFile *)b)->t;
+    return x < y ? -1 : x > y;
+}
+static void *cache_prune(void *arg) {
+    (void)arg;
+    DIR *d = opendir("cache/spirv");
+    if (!d) return NULL;
+    CacheFile *fs = NULL;
+    size_t n = 0, cap = 0;
+    unsigned long long total = 0;
+    time_t now = time(NULL);
+    char path[96];
+    for (struct dirent *e; (e = readdir(d));) {
+        size_t l = strlen(e->d_name);
+        if (e->d_name[0] == '.' || l >= sizeof fs[0].name) continue;
+        snprintf(path, sizeof path, "cache/spirv/%s", e->d_name);
+        struct stat sb;
+        if (stat(path, &sb) != 0) continue;
+        if (l < 4 || strcmp(e->d_name + l - 4, ".spv")) {  // (a temporary file: gone after a day)
+            if (now - sb.st_mtime > 86400) remove(path);
+            continue;
+        }
+        if (n == cap && !(fs = realloc(fs, (cap = cap ? cap * 2 : 4096) * sizeof *fs))) { closedir(d); return NULL; }
+        snprintf(fs[n].name, sizeof fs[n].name, "%s", e->d_name);
+        fs[n].t = sb.st_mtime, fs[n].size = (long long)sb.st_size;
+        total += (unsigned long long)sb.st_size, n++;
+    }
+    closedir(d);
+    if (total > SPIRV_KEEP_MAX) {
+        qsort(fs, n, sizeof *fs, by_time);
+        unsigned long long was = total;
+        size_t gone = 0;
+        for (size_t i = 0; i < n && total > SPIRV_KEEP; i++) {
+            snprintf(path, sizeof path, "cache/spirv/%s", fs[i].name);
+            if (remove(path) == 0) total -= (unsigned long long)fs[i].size, gone++;
+        }
+        LOG("[vk] SPIR-V cache: %zu least recently used shaders removed (%llu -> %llu MB)\n", gone, was >> 20, total >> 20);
+    }
+    free(fs);
+    return NULL;
+}
+
 static uint32_t *cache_load(uint64_t h, size_t *nwords) {
     char path[64];
     snprintf(path, sizeof path, "cache/spirv/%016llx.spv", (unsigned long long)h);
     FILE *f = fopen(path, "rb");
     if (!f) return NULL;
+    utime(path, NULL);  // (used: cache_prune keeps it)
     fseek(f, 0, SEEK_END);
     long n = ftell(f);
     fseek(f, 0, SEEK_SET);
@@ -60,7 +118,9 @@ bool vk_spirv_cached(const char *src, int stage) {  // (the compile-ahead: alrea
     char path[64];
     snprintf(path, sizeof path, "cache/spirv/%016llx.spv", (unsigned long long)src_hash(src, stage));
     struct stat sb;
-    return stat(path, &sb) == 0 && sb.st_size > 20;
+    if (stat(path, &sb) != 0 || sb.st_size <= 20) return false;
+    utime(path, NULL);  // (wanted: cache_prune keeps it)
+    return true;
 }
 
 // Vertex shaders: every float add/sub/mul/div/fma gets NoContraction, so no compiler fuses or splits them. Depth
