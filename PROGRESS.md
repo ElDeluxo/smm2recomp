@@ -389,6 +389,51 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
   adb pushed into Android/data/<pkg>: SM35 falls back to the internal folder (a5e5395). Likely behind SMM2's
   Vulkan-only differences (3D World Mario on lavapipe); port when Windows / Linux / Android get attention.
 
+### GitHub issues (triaged 2026-10-22; replies drafted in `research/issue-replies.md`, not posted)
+Release times (UTC, 2026-10-21): v0.3.0 06:51, v0.3.1 09:23, v0.3.2 12:58. #9 (prod.keys legal): the owner's, no action.
+Setup failures first, since they block new players:
+- ✅ (next release) **"hactool stopped without a message (exit code 1)" on the cnmt NCA** (#10, #17, a comment on #7;
+  "no output" in v0.2.1: #4, #6). hactool did say why, but its message mentions keys ("Invalid NCA header! Are keys
+  correct?", "Key (...) must be 32 hex digits!"), and `masked()` drops every line with "key" in it, so setup called
+  it a crash. Now: a header key that doesn't fit says so (`KEYS`, also in sysdata.py), and our hactool build skips a
+  key file line it can't read (a known key whose value is the wrong length, a title key listed twice) instead of
+  exiting on it, without printing the value (`tools/build_hactool.sh`; checked with a broken key file on macOS and
+  the Windows build under Wine). Emulators' key files often have such a line, which is why "it works in Ryujinx".
+- ✅ (next release) **Setup copied and linked its own last result onto itself** when the chosen folder held the data
+  folder (on Windows the program's folder is the data folder): the scan found `extracted/exefs` and
+  `extracted/romfs` as sources. It now skips setup's own output. Likely #11 ("keep the game files out of the
+  program's folder" fixed it for two players); its crash after setup still needs a log.
+- ✅ (next release) **Windows: "vkCmdBeginRendering not found in vulkan-1.dll" before anything shows** (#15): the exe
+  imported 17 Vulkan 1.2 / 1.3 commands (and VMA two more), which an older Vulkan loader doesn't have, so Windows
+  refused to start it. They're now fetched from the device (`vk.h` `VK_LATE_FUNCS`, VMA's dynamic functions); the
+  cross-built exe imports no 1.2 / 1.3 command. A driver without Vulkan 1.3 still can't run it, but now says so.
+- 🔄 **"The game code couldn't be prepared" with disk space free** (#5, #12): the generator failed. Its main module
+  peaks at ~3.2 GB of memory with the sdk one beside it, and the launcher started up to (RAM − 2) compilers of
+  ~1 GB each at the same time. Now (RAM − 6), a MemoryError is named, and the hint says disk space *and* memory.
+  Needs the reporter's `smm2recomp.log` (the generator's last line is in it) to confirm.
+- 🔄 **Crash after setup** (#11, v0.3.2): see the self-copy fix above; needs `smm2recomp.log` if it still happens.
+- ⬜ **Firmware 20.0.0+ "shared fonts not found" / "No system titles could be read"** (#16; 18.0.0 works with the
+  same keys): not a hactool limit, since the owner's firmware 21.0.0 sets up fine on v0.4.0. Needs the setup log and
+  where the firmware came from (Ryujinx install, Eden, a firmware zip).
+- ✅ **Course World bounces to the title, "create a Mii"** (#14, #13's second half): fixed in v0.4.0.
+- ✅ **Applying the update crashed (access violation)** (#7, v0.3.1): fixed in v0.3.2.
+- ⬜ **Steam Deck runs slowly** (#13, v0.3.2): needs the frame rate and render scale; try a lower render scale.
+
+### Next features (owner's order, 2026-10-22)
+1. 🔄 Co-op in Endless / 100 Mario (see the entry under Future)
+2. ⬜ Lanky Mario (SMM1's Weird Mushroom) as an SMM1 mod switch, off by default
+3. ⬜ Mid-air shell jumps (finish, with the test course)
+4. ⬜ Mystery Mushroom costumes: a hit removes the costume, the taunt, the reward window, more than one per course
+5. ⬜ Edit any course: the d-pad onto Make, the upload credit, Edit on the course card / Endless
+6. ⬜ Course World thumbnails: check whether they already work; fix only if not
+7. ⬜ Super Worlds
+8. ⬜ Disable the buttons that don't work yet (e.g. Ninji Speedruns), greyed out or hidden the way SMM2 would
+9. ⬜ Online multiplayer via Nextendo (branch `nextendo`): the gen.py jump-table change + regen + retest, the iOS
+   compile, a live sign-in, Network Play, then merge once verified. The SMM2 client ID is in the owner's notes. Live tests:
+   one device per internet connection; the account needs a verified e-mail and a linked Discord
+10. ⬜ iPhone layout (the notch-safe L / ZL: verify)
+11. ⬜ Exact sound timing (owner: seems fine now; only if cheap)
+
 ### Future (owner's backlog, not scheduled)
 - 🔄 **120 fps output by frame generation** (owner, 2026-10-19): built 2026-10-20 (Video tab, `frame_gen`,
   off by default; our own interpolation for Metal and Vulkan, not MetalFX's; game logic stays 60 Hz). Owner on
@@ -457,15 +502,6 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
   server, though that showed "communication error"); the `courses=` / server settings a fresh data folder gets; and
   whether Course World's sign-in (our offline answer) fails without a saved account. If it isn't fixed by v0.4.0,
   the release notes should ask for the version and `smm2recomp.log`.
-- ⬜ **OpenCourse World as a course source** (owner, 2026-10-22): https://opencourse.world/ selectable as one of the
-  course server options (next to our own server and TGRCode, in the Mods tab's course source setting). Looked at
-  2026-10-22: OCW is a replacement online service for SMM2 3.0.2 / 3.0.3 on Switch (Atmosphere) and Ryujinx. The
-  player signs in (Discord etc.), accepts its EULA, and downloads a mod package plus a personal auth token for the SD
-  card; the game's own online code then talks to OCW's server. Its web API (server.opencourse.world/api/...) is
-  public for course metadata (latest, uncleared, makers, Ninji leaderboards, one-screen thumbnails) but has no web
-  download of course data. So the way in is the game's own network stack (backend local-nex, the Nextendo groundwork)
-  pointed at OCW with the player's token, not a TGRCode-style HTTP source. Needs the owner's OCW account to build and
-  test; not for v0.4.0.
 - 🔄 **iPhone: on-screen L and ZL sit behind the notch** (owner, 2026-10-20, iPhone 12 mini; built 2026-10-21: the
   controls are offset by the window's left / right safe-area insets, `SDL_GetWindowSafeArea`, updated on safe-area
   and resize events and on touches; not yet seen on the iPhone): the touch
@@ -482,6 +518,19 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
   setup screen, macOS app "Super Mario Maker 2.app", Linux menu entry), "SMMaker 2" on iOS and Android home screens
   (game.mk `GAME_TITLE` / `GAME_MOBILE_TITLE`). Bundle IDs, data folders, exe names and package file names stay, so
   saves and scripts carry over. From the release after v0.3.1.
+
+### Possible features (not planned)
+- **OpenCourse World as a course source** (owner, 2026-10-22; moved here the same day, "a possible feature for the future"): https://opencourse.world/ selectable as one of the
+  course server options (next to our own server and TGRCode, in the Mods tab's course source setting). Looked at
+  2026-10-22: OCW is a replacement online service for SMM2 3.0.2 / 3.0.3 on Switch (Atmosphere) and Ryujinx. The
+  player signs in (Discord etc.), accepts its EULA, and downloads a mod package plus a personal auth token for the SD
+  card; the game's own online code then talks to OCW's server. Its web API (server.opencourse.world/api/...) is
+  public for course metadata (latest, uncleared, makers, Ninji leaderboards, one-screen thumbnails) but has no web
+  download of course data. So the way in is the game's own network stack (backend local-nex, the Nextendo groundwork)
+  pointed at OCW with the player's token, not a TGRCode-style HTTP source. Needs the owner's OCW account to build and
+  test.
+- **Platform extras** (owner, 2026-10-22: backlog, don't start): a Linux AppImage, a notarised macOS app, a web
+  build.
 
 | Platform | Builds | Boots to title | Plays courses | Frames match Ryujinx | Input replays in sync |
 |---|---|---|---|---|---|
