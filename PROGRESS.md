@@ -486,9 +486,11 @@ Setup failures first, since they block new players:
    requests (event count main+0x14f3980, event list +0x14f3770) are now answered empty, so it shows SMM2's own "No
    active speedruns / No courses found". Super Worlds and Network Play's modes already say SMM2's "This service is
    not active right now" (the application config's switches); Leaderboards opens (empty until our server ranks).
-9. ⬜ Online multiplayer via Nextendo (branch `nextendo`): the gen.py jump-table change + regen + retest, the iOS
-   compile, a live sign-in, Network Play, then merge once verified. The SMM2 client ID is in the owner's notes. Live tests:
-   one device per internet connection; the account needs a verified e-mail and a linked Discord
+9. ✅ Online multiplayer via Nextendo (2026-10-22: branch `nextendo` merged into main; new, not yet tested on
+   hardware): main merged into it, SM35's gen.py jump-table fix ported (no change to SMM2's code: function count
+   unchanged), regenerated, boots, plays a 100 Mario course with default settings (the backend stays ours unless the
+   Online section picks Nextendo), `nextendo_ios.mm` compiles for iOS. Owner to test: a live sign-in (verified
+   e-mail, linked Discord) and Network Play with a second player on another connection
 10. ⬜ iPhone layout (the notch-safe L / ZL: verify)
 11. ⬜ Exact sound timing (owner: seems fine now; only if cheap)
 
