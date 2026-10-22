@@ -349,13 +349,24 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     9.3 s of compiler time). The first course frame waits up to 0.4-0.7 s, then one 1.6 s gap with a black
     frame. Once seen, a shader is in Metal's cache and the precompiled set, so it happens once per machine per
     style / theme. A smaller 0.57 s stall falls on the black between the iris and the card (the scene switch),
-    where it isn't seen. Measured how much earlier they could compile (`LARECOMP_PROG_STATS=1`; 35 new
-    programs at one course start): 34 use the default key, so a guess would be right. But the game sets their
-    shaders only shortly before the first draw: 6 under 0.1 s, 27 in 0.1-1 s, 2 over 1 s. Compiling at that
-    point would shorten the hitch by about half, not remove it. Left as is (once per machine per style /
-    theme). A full fix would compile the game's shaders well ahead (at setup or at the title), which is a
-    bigger project. The rest of the animation still needs the
-    owner's eye against SMM1 / SMM2.
+    where it isn't seen. The game sets their shaders only shortly before the first draw (`LARECOMP_PROG_STATS=1`:
+    6 under 0.1 s, 27 in 0.1-1 s, 2 over 1 s), so compiling from there would halve the hitch at best.
+    - ✅ Shader compile-ahead (2026-10-23; `runtime/nvn/shader_ahead.h`, `recomp/docs/smm2-bringup.md` "Shader
+      compile-ahead", DECISIONS 2026-10-23): from boot, a background thread translates and compiles what the game
+      will draw - every shader in its files in the RomFS (models, layouts, effects, agl; SMM2's order in
+      `games/smm2/shader_rank.c`, the next course's style and themes first as soon as a run or a download names
+      them) and the programs the game sets up - into Metal's cache (Vulkan: `cache/spirv/`), never while the game
+      is building. A whole pass: ~6,900 sources, ~11 min while playing (once per machine and version; a new version
+      with the same shaders: 20 s). Measured cold (macOS): once the pass has run, a course start of a style the game
+      never drew compiles nothing worth counting (NSMBU 100 Mario: 8.7 s of compiler time -> 0.11 s, draws waiting
+      1.8 s -> 0.09 s; 3D World 2.8 s -> 0.15 s and 2.1 s -> 0.05 s; a Course World course 7.4 s -> 0.03 s,
+      1.0 s -> 0.01 s). The title keeps 59 fps meanwhile. On a new machine's very first course (~2 min after boot)
+      the pass is part way: compiler time 1.1-3.1 s, waits 1.0-1.4 s.
+    - 🔄 Left: the game's own course load (one ~0.55-0.75 s frame as the card gives way, and on NSMBU ~0.9 s of
+      first-frame work; no compiles and no waits in them, also when everything is warm), the pipelines' first build
+      (Metal's back end; cached after the first time), programs with integer inputs / targets. ⬜ Not measured: iOS
+      (2 compiles at a time there, paused when hot or in low power mode), the Vulkan path (builds for Windows; no
+      Vulkan run here). The rest of the animation still needs the owner's eye against SMM1 / SMM2.
 - 🔄 **Mac app won't start the game; release zip lacks `smm1_extras.py` (owner, 2026-10-20 / 21):** one cause.
   Every v0.2.0 package left out `gamelib-src/mods/smm1_extras.py` (`tools/package_lib.sh` copied only
   `mods/patches.py`), so the first-launch recompile stopped at once. The owner's Mac app log shows it: steps 1-2

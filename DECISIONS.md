@@ -1982,3 +1982,34 @@ ID like every other maker's. Hybrid mode keeps the backend's id; without an `/ap
 user record's player id with the account id directly in places: My Info's Super World panel shows Delete only then
 (main+0x1aa46a0), so the player could not delete their uploaded world. On a console the two are the same number.
 **Would change:** a backend whose player ids must be the server's own (Nextendo: its PID is the account id already).
+
+## 2026-10-23 — Shader compile-ahead: the game's own shader files and the programs it sets, compiled in the background
+**Decision:** both backends compile the game's shaders before their first use, from boot, in the background
+(`runtime/nvn/shader_ahead.h`; Metal `renderer.m`, Vulkan `vulkan/ahead.c`; measurements in
+`recomp/docs/smm2-bringup.md`, "Shader compile-ahead"). Of the two ideas weighed, (a) compiling from the game's own
+shader archives in the player's RomFS was built; (b) recording per style / theme what a machine compiled and replaying
+it already existed (`cache/shaders/` and its warm-up, the pipeline cache) and can't help with a style the machine has
+never drawn, which is the case at hand. (a) is extended by the programs the game sets up (`nvnProgramSetShaders`),
+which carry exact pairs for agl's and the effects' programs the files alone don't give.
+- **Shaders, not archive formats:** the scan takes every NVN shader blob in the RomFS's archives (SARC / Yaz0 / zstd),
+  whatever holds it (BNSH in models and layouts, `.sharcb`, `.ptcl`), and translates each alone; a fragment shader
+  as if its vertex shader wrote every input it reads (true of almost all the game's pairs); BNSH variations are also
+  taken whole. Map-mode runs (`LARECOMP_AHEAD=map`) found all but 1 of the sources an NSMBU course start compiles.
+- **Order over completeness:** a pass is ~6,900 sources, 7-11 minutes while the game runs, so the order matters for a
+  new player's first minutes: what the game set in the last 10 s, a model it's reading, the next course's style and
+  themes (SMM2: from the run's next course and every download), then SMM2's ranks (`games/smm2/shader_rank.c`: the
+  models every course draws and the course themes' first), the boot backlog of set programs, the rest; agl's
+  thousands of variants last.
+- **Never in the game's way:** no compile while the game builds or has built in the last 1.5 s, 4 at a time (2 on
+  iOS) at utility QoS, none while the device is hot or in low power mode; the title kept its 59 fps. Bounded: the
+  set programs kept are at most 4,096 copies, a file is read, its shaders passed on and freed; a stop flag at exit.
+- **Where it lands:** Metal's own shader cache (we can't serialize a source-compiled library; the offline compiler
+  isn't on players' machines), so the hit relies on Metal keeping it: the 6,900 sources stayed cached (a forced pass
+  over them took 20 s). Vulkan: our `cache/spirv/`. A stamp (`cache/ahead.done`: executable size and time, key,
+  salt) skips the files on later starts; a new version reads them again.
+- **No list in the repository:** no shader hashes or "hot lists" are shipped; everything comes from the player's
+  dump at run time.
+**What would change it:** Metal evicting the compiled sources before use (then keep the libraries of the likeliest
+in memory, or a pipeline-level warm-up); pipelines (Metal's back end, per state) becoming the bigger part of a course
+start's hitch (then guess the common pipeline states from the programs the game sets); iOS measurements showing heat
+or battery cost (then compile only while the player is in menus, or only ranks 0-1).

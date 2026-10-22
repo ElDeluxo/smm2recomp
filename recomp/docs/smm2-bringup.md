@@ -458,3 +458,83 @@ Measured with seed-4 boots to the title course and the Make / Play menu (`recomp
   before, almost every pixel of every frame wrong; after, frames within noise, the draws building their own).
 - `[shader] prefetch: ...` every 600 frames: draws / submits scanned and the time, builds started ahead, waits, and
   builds the scan didn't foresee. A wait over 2 s is logged once per object (`[shader] waited N ms for ...`).
+
+## Shader compile-ahead (2026-10-23)
+
+The first time a course of a style / theme shows on a machine, its shaders compiled as the course started: 50-100
+sources (3-9 s of compiler time), draws waiting for them 1-2 s in all. Once seen they are in Metal's cache, but that
+is every new player and every new version, and worst on iOS. The game sets a model's programs only shortly before
+its first draw (2026-10-21: 0.1-1 s for most), so compiling from there halves the hitch at best. Now the shaders are
+compiled ahead, from what the game will draw (`runtime/nvn/shader_ahead.h`, Metal in `renderer.m`, Vulkan in
+`vulkan/ahead.c`; decision in DECISIONS.md, 2026-10-23):
+
+- **Where the shaders are.** SMM2 has few shader archives of its own: each model (`Model/*.zs`, the models in
+  `Pack/*_Model.pack`: zstd, then a SARC) carries a `Block_UBER.bfsha` with the variations it uses, the layouts carry
+  BNSH, the effects a `.ptcl`, agl and gsys `.sharcb` archives (`Pack/Static.pack`). The scan reads the RomFS folder
+  (`g_romfs_dir`), opens SARC / Yaz0 / zstd, and takes every 256-byte aligned NVN shader blob (`0x12345678`, zeros,
+  a Maxwell SPH at +0x30), so the containers' own formats don't matter: 7,963 distinct vertex / fragment shaders and
+  4,298 BNSH programs, about 6,900 distinct MSL sources (140 MB of MSL). 1,800 don't translate: ~920 fragment shaders
+  in 3D World / NSMBU models use `VOTE`, which the translator lacks (no game run here ever compiled one), and some agl
+  blobs have no padding before their constants. Reading and translating everything: 4 s warm, 10-25 s from a cold
+  disk.
+- **One shader alone.** A fragment shader's MSL depends on its vertex shader only where that one doesn't write an
+  input it reads (`vs_out_mask`); alone it's translated as if all were written, which matches the game's own pairs
+  almost always. The BNSH variations are also taken whole (models' exact pairs, geometry stages). The effects pair
+  their shaders differently from their BNSH's variations, so they're only covered shader by shader.
+- **The programs the game sets.** `nvnProgramSetShaders` (objects.c) copies each new program for the compile-ahead
+  (`shader_ahead_program_set`): the game sets ~3,000 programs at boot (agl's post effects, the styles' models: a few
+  hundred of them are drawn later) and a course's own as it loads. Those set in the last 10 s go first, newest first;
+  the boot backlog oldest first, one for each shader of the scan's rank 0, then all of it.
+- **Order.** SMM2's ranks (`games/smm2/shader_rank.c`): 0 the models every course draws (`Pack/StaticModel.pack`) and
+  the course themes' backgrounds and ground (`Model/<style>_DV_*`, `_Field_*`, read by the game only a second or two
+  before the first frame) with the layouts; 1 the styles' models and the effects; 2 the rest (story mode, Mii
+  costumes); 3 agl / gsys. Ahead of its turn: a file the game reads (4 MB at most: a model, not a pack read at boot) and
+  a game's hint - SMM2 names the next course's style and themes as soon as it knows them (the next course of an
+  Endless / 100 Mario run, any course download: `smm2_shader_hint_course`), so its models are read first.
+- **Not in the game's way.** 4 compiles at a time (2 on iOS) at utility priority, and none while the game builds or
+  has built in the last 1.5 s (`build_idle_ms()`; the game's bursts at a scene change) or the device is hot / in low
+  power mode. The translator is thread-safe now (its one static buffer ring is per thread).
+- **Where it lands.** Metal: Metal's own shader cache (sources it already has cost ~0.3 ms). `cache/ahead.done` marks a
+  finished pass (executable size and time, the key, the salt): later starts skip the files, and the programs the game
+  sets still go through it. Vulkan: `cache/spirv/` (ours, it stays), `cache/ahead_vk.done`.
+
+Measured (macOS M4 Pro, a machine shared with other agents' game runs: noisy). 100 Mario (`RECOMP_HUNDRED_AUTO=0`,
+easy) and Course World (Courses, the first course, Play) against a local server with one test course, cold
+(`LARECOMP_SHADER_SALT` new per run, `LARECOMP_NO_PRECOMPILED=1 LARECOMP_NO_PIPELINE_CACHE=1 LARECOMP_NO_SHADER_WARM=1`),
+the course starting ~110 s after boot. "Ahead finished before": a long run of 100 Mario on an SMB1 course until the
+pass finished (652 s), then a new run on that data folder and salt with the other style - a style / theme the game
+never drew on this machine. Long frames (>= 100 ms) include the game's own course load: one ~540-750 ms frame as the
+card gives way, and on NSMBU ~0.9 s of first-frame work, with no compiles and no waits, also when everything is warm.
+
+| Course start | the game's compiles (compiler time) | draws waiting for builds | long frames, in all |
+|---|---|---|---|
+| 100 Mario, NSMBU: no compile-ahead | 105 (8.7 s) | 1.8 s | 2.6 s |
+| - compile-ahead since boot (110 s) | 105 (1.1-3.1 s) | 1.0-1.4 s | 2.0-2.3 s |
+| - compile-ahead finished before | 101 (0.11 s) | 0.09 s | 1.5 s |
+| 100 Mario, 3D World: none | 48 (2.8 s) | 2.1 s | 2.1 s |
+| - since boot | 48 (1.3 s) | 1.6 s | 1.5 s |
+| - finished before | 46 (0.15 s) | 0.05 s | 0.5 s |
+| Course World, NSMBU: none | 101 (7.4 s) | 1.0 s | 2.5 s |
+| - since boot | 101 (1.6 s) | 0.8 s | 2.2 s |
+| - finished before | 97 (0.03 s) | 0.01 s | 1.5 s |
+
+(Compiles: the 14 s from the course start, or 20 s from the course download in Course World. Waits: the prefetch
+stats lines of the 35 s from the download - a draw waiting for its program or pipeline. NSMBU and 3D World: one run
+each for "none" and "finished", 1-6 for "since boot".)
+
+- The title and menus while it compiles (30-95 s after boot): 58.9-59.5 fps on average against 58.7-59.1 without, the
+  worst half second 25-31 fps against 10-20 (the boot's own cold compiles make both); the boot's long frames the same
+  (4.2-5.0 s against 5.1-5.2 s). Memory: no measurable change (2.4-3.3 GB either way).
+- A whole pass: 6,933 sources compiled in 652 s while the game ran (about 10 a second: they wait for compile slots
+  most of the time; the game uses the CPU too); 20 s again when Metal has them all (a new version).
+- Since boot, the first course gets part of it: by ~110 s the pass is at rank 0-1. Of the sources a fresh machine's
+  first NSMBU course compiles, 81-86 were compiled ahead and 17-25 weren't yet (agl's and the effects' programs the
+  game set at boot, still in the backlog).
+- Left for the first use: pipelines (Metal's back end, per pipeline state; the pipeline cache keeps them after the
+  first time), programs with integer vertex inputs or render targets or mirror mode (another key), and the game's
+  own course load. Not measured yet: iOS, and the Vulkan path at all (it compiles for Windows; no Vulkan run here).
+- Tools: `make build/test_shader_ahead` (`tools/test_shader_ahead.m`: scan, translate and compile a RomFS folder
+  alone: `-n` translate only, `-j` jobs, `-s` salt, `-q` QoS; `AHEAD_PER_FILE=1` sources per file); in the game
+  `LARECOMP_AHEAD=0 | force | map`, `LARECOMP_AHEAD_LOG=1` (each source the game compiles: compiled ahead or not, and
+  where the scan read it), `LARECOMP_AHEAD_JOBS`, `LARECOMP_AHEAD_QUIET_MS`, `LARECOMP_LOG_GAPS=<ms>` (each frame that
+  came that late), `LARECOMP_LOG_WAITS=<ms>` (each draw that waited that long for its program / pipeline).
