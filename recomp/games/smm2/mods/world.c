@@ -14,6 +14,7 @@
 void mod_fill_course(uint64_t e, Json *m, uint32_t data_id, uint32_t difficulty);  // endless.c
 bool mod_maker_id(uint64_t pid, char out[16]);
 const char *mod_own_maker_id(void);
+uint64_t mod_player_pid(void);
 
 #define NO_STATUS 0x60
 #define NO_COURSES 0x30780       // course list ring: entries (0x548 bytes), +8 capacity, +0xc head, +0x10 count
@@ -97,8 +98,15 @@ void world_search(Cpu *c, uint64_t no, uint32_t type) {
     default: none = true; break;                                // followed makers, versus: none kept
     }
     Json *j = NULL;
+    // (a player id that isn't one of ours, which all start 0x4 / 0x5: the console's own account, as the Super World
+    // upload's check of the player's posted courses sends it)
+    uint64_t search_pid = g64(no + NO_SEARCH_PID);
+    if (by_maker && !mod_maker_id(search_pid, id) && (search_pid >> 60) != 4 && (search_pid >> 60) != 5) {
+        mod_player_pid();
+        snprintf(id, sizeof id, "%s", mod_own_maker_id());
+    }
     if (by_maker) {
-        if (mod_maker_id(g64(no + NO_SEARCH_PID), id)) j = maker_get(id);
+        if (*id) j = maker_get(id);
     } else if (player_list) {
         if (mod_maker_id(g64(no + NO_SEARCH_PID), id) && page == 0) {
             snprintf(path, sizeof path, "/api/makers/%s/%s", id, player_list);
@@ -204,23 +212,30 @@ static void fill_user(uint64_t e, uint64_t pid, const char *maker_id, const char
     mii_default_charinfo((uint8_t *)(uintptr_t)(e + 0x9c), name);
     s32(e + 0x124, likes);
     s32(e + 0x128, points);
+    const char *world = json_str(json_get(prof, "super_world_id"), "");  // the maker's Super World (UTF-8, +0x1b0)
+    if (*world && g64(e + 0x1b0) && g32(e + 0x1b8) > strlen(world))
+        memcpy((void *)(uintptr_t)g64(e + 0x1b0), world, strlen(world) + 1);
     s8(e + 0x1ec, 1);
 }
 
 // Users by player id into the user ring: a list of ids (ring at +0x72b10: entries, +8 capacity, +0xc head, +0x10
-// count; GetUsers main+0x14d02d0 / +0x14d7780) or the one id at +0x73a30 (the maker page, main+0x14d2f00).
-static void users_answer(Cpu *c, uint64_t no, const uint64_t *pids, uint32_t n, const char *what) {
-    char ids[32][16], names[32][48];
+// count; GetUsers main+0x14d02d0 / +0x14d7780) or the one id at +0x73a30 (the maker page, main+0x14d2f00). At most
+// MAX_USERS (a Super World list names up to 50 owners). `world`: the first maker's Super World id ("" none), if
+// wanted.
+#define MAX_USERS 64
+static void users_answer(Cpu *c, uint64_t no, const uint64_t *pids, uint32_t n, const char *what, char world[64]) {
+    char ids[MAX_USERS][16], names[MAX_USERS][48];
     uint32_t k = 0;
-    for (uint32_t i = 0; i < n && k < 32; i++) {
+    for (uint32_t i = 0; i < n && k < MAX_USERS; i++) {
         if (!pids[i]) continue;
         mod_maker_id(pids[i], ids[k]);
         extern void mod_maker_name(uint64_t pid, char *out, size_t cap);
         mod_maker_name(pids[i], names[k], sizeof names[k]);
         k++;
     }
-    Json *prof[32] = {0};
+    Json *prof[MAX_USERS] = {0};
     for (uint32_t i = 0; i < k; i++) prof[i] = maker_profile(ids[i]);  // (outside the lock: HTTP)
+    if (world) snprintf(world, 64, "%s", k ? json_str(json_get(prof[0], "super_world_id"), "") : "");
     netobj_lock(c);
     uint64_t out = no + USER_RING;
     uint32_t cap = g32(out + 8), m = 0;
@@ -237,26 +252,32 @@ static void users_answer(Cpu *c, uint64_t no, const uint64_t *pids, uint32_t n, 
     finish(c, no, true, 0);
 }
 
-static uint32_t pid_list(uint64_t no, uint64_t pids[32]) {
+static uint32_t pid_list(uint64_t no, uint64_t pids[MAX_USERS]) {
     uint64_t req = no + 0x72b10;
     uint32_t rcap = g32(req + 8), rhead = g32(req + 0xc), rcount = g32(req + 0x10), n = 0;
-    for (uint32_t i = 0; i < rcount && rcap && n < 32; i++) pids[n++] = g64(g64(req) + 8ull * ((rhead + i) % rcap));
+    for (uint32_t i = 0; i < rcount && rcap && n < MAX_USERS; i++)
+        pids[n++] = g64(g64(req) + 8ull * ((rhead + i) % rcap));
     return n;
 }
 
 static void get_users_list(Cpu *c) {  // main+0x14d02d0 and +0x14d7780 (GetUsers for listed players)
     if (!mod_hundred()) { guest_call_orig(c, c->pc); return; }
-    uint64_t no = c->x[0], pids[32];
+    uint64_t no = c->x[0], pids[MAX_USERS];
     netobj_lock(c);
     uint32_t n = pid_list(no, pids);
     netobj_unlock(c);
-    users_answer(c, no, pids, n, "GetUsers");
+    users_answer(c, no, pids, n, "GetUsers", NULL);
 }
 
-static void get_user_page(Cpu *c) {  // main+0x14d2f00 (a maker's page: GetUsers + their Super World: none)
+// main+0x14d2f00: a maker's page: GetUsers, and when the maker has a Super World (our server's players' uploads),
+// GetWorldMap into the detail record as the original does (superworld.c)
+bool superworld_fill_detail(Cpu *c, uint64_t no, const char *id);
+static void get_user_page(Cpu *c) {
     if (!mod_hundred()) { guest_call_orig(c, c->pc); return; }
     uint64_t no = c->x[0], pid = g64(no + 0x73a30);
-    users_answer(c, no, &pid, 1, "maker page");
+    char world[64];
+    users_answer(c, no, &pid, 1, "maker page", world);
+    if (*world) superworld_fill_detail(c, no, world);
 }
 
 static void get_user_counts(Cpu *c) {  // main+0x14d74a0 (two counters of one user, map +0x190 keys 0 / 1): 0

@@ -709,6 +709,11 @@ impl Fetcher {
     fn serve_urgent(&mut self, store: &Store) -> bool {
         self.serve_waiting(store);
         let mut updated = false;
+        // (an empty Super World pool a client asked for goes first: the client shows nothing until
+        // it comes)
+        if store.super_worlds_status().len == 0 && self.pool_due(store) {
+            updated |= self.refresh_pool(store);
+        }
         // (a list that fails waits a second at least: it isn't due again in this loop)
         while let Some((kind, more)) = self.list_work(store) {
             updated |= self.update_list(store, kind, more);
@@ -2099,7 +2104,7 @@ mod tests {
         let ids: Vec<&str> = list.iter().map(|w| w["id"].as_str().unwrap()).collect();
         assert_eq!(ids, [b, a]);
         assert_eq!(list[0]["maker_name"], "World Maker");
-        assert_eq!(list[0]["maker_id"], "WMK123456");
+        assert_eq!(list[0]["maker_id"], "WMK-123-456");
         assert_eq!(list[0]["planet_type"], 4);
         assert_eq!(list[0]["created"], 1_767_225_600u64);
         // (three answers while it is small, then none until the refresh time)
@@ -2154,6 +2159,11 @@ mod tests {
         drop(store);
         let store = Store::open(&dir).unwrap();
         assert_eq!(store.super_worlds_status().len, 2);
+        let fetched = store.super_worlds_status().fetched;
+        assert!(
+            fetched.is_some_and(|t| t.elapsed() < Duration::from_secs(60)),
+            "the source's last answer is remembered: a restart doesn't ask again at once"
+        );
         let w = store.super_world(b).unwrap();
         assert_eq!(w.courses.len(), 2);
         assert_eq!(w.courses[1].meta.data_id, 26065833);

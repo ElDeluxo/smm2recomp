@@ -18,6 +18,7 @@
 #include "mod.h"
 #include "../../../runtime/net/netcfg.h"
 #include "../../../runtime/net/nextendo.h"
+#include "../../../runtime/net/json.h"
 
 #define STATE_CHANGE MAIN_ADDR(0x8b9320)  // (state machine, new state)
 
@@ -86,10 +87,10 @@ static void answered(Cpu *c, const char *what) {
     }
 
 // The server's application config: 38 u32 values at +0x737b0 (copied to the UI cache at +0x28). Values 0-3 switch the
-// Endless Challenge on per difficulty (> 0; with 0 the game says "This service is not active right now"); the rest
-// stay 0 (features the mod doesn't serve). Hybrid: the backend's config (Utility.GetIntegerSettings(0): its keys
-// 0..37 into the array, Network Play's switches among them) with the Endless Challenge's four switched on, since
-// the mod serves it.
+// Endless Challenge on per difficulty (> 0; with 0 the game says "This service is not active right now"), value 37
+// Course World's Super Worlds (exactly 1; superworld.c); the rest stay 0 (features the mod doesn't serve). Hybrid: the backend's config (Utility.GetIntegerSettings(0): its keys
+// 0..37 into the array, Network Play's switches among them) with the Endless Challenge's four and Super Worlds
+// switched on, since the mod serves them.
 #define APP_CONFIG 0x737b0
 
 static void get_application_config(Cpu *c) {
@@ -100,6 +101,7 @@ static void get_application_config(Cpu *c) {
             uint64_t ret = c->x[0];
             netobj_lock(c);
             for (int d = 0; d < 4; d++) s32(no + APP_CONFIG + 4 * d, 1);
+            s32(no + APP_CONFIG + 4 * 37, 1);
             netobj_unlock(c);
             c->x[0] = ret;
             LOG("[mod] GetApplicationConfig: the backend's, Endless on\n");
@@ -109,6 +111,7 @@ static void get_application_config(Cpu *c) {
     if (!mod_answers_login()) { guest_call_orig(c, MAIN_ADDR(0x14ce2f0)); return; }
     netobj_lock(c);
     for (int d = 0; d < 4; d++) s32(no + APP_CONFIG + 4 * d, 1);
+    s32(no + APP_CONFIG + 4 * 37, 1);
     netobj_unlock(c);
     answered(c, "get_application_config");
 }
@@ -252,6 +255,10 @@ static void get_my_user(Cpu *c) {
     snprintf(name, sizeof name, "%s", getenv("RECOMP_USER_NAME") ? getenv("RECOMP_USER_NAME") : "Player");
     uint32_t best[4] = {0};
     mod_account_info(name, sizeof name, best);
+    char world[64] = "";
+    Json *me = srv_call("GET", "/api/me", NULL, NULL);
+    snprintf(world, sizeof world, "%s", json_str(json_get(me, "super_world_id"), ""));
+    json_free(me);
     netobj_lock(c);
     s64(no + USER_RING + 0xc, 0);  // head 0, count 0
     if (g32(no + USER_RING + 8) > 0) {
@@ -270,9 +277,17 @@ static void get_my_user(Cpu *c) {
         mii_default_charinfo((uint8_t *)(uintptr_t)(e + 0x9c), name);
         for (int d = 0; d < 4; d++) s32(e + 0x114 + 4 * d, best[d]);
         s8(e + 0x1ec, 1);  // a registered Course World user (Course World's top screen checks it, with the id)
+        // the player's uploaded Super World (+0x1b0, UTF-8; the upload scene reads it back after an upload)
+        if (*world && g64(e + 0x1b0) && g32(e + 0x1b8) > strlen(world))
+            memcpy((void *)(uintptr_t)g64(e + 0x1b0), world, strlen(world) + 1);
         s32(no + USER_RING + 0x10, 1);
     }
     netobj_unlock(c);
+    // ... and, as the original asks GetWorldMap for it, its detail record (superworld.c)
+    if (*world) {
+        extern bool superworld_fill_detail(Cpu * c, uint64_t no, const char *id);
+        superworld_fill_detail(c, no, world);
+    }
     // The Maker avatar's name in the player's settings (an empty one sends Course World to "Create Maker Avatar",
     // which needs the console's Mii editor): the account's name when there is none yet.
     uint64_t settings = g64(MAIN_ADDR(0x2a57d60));

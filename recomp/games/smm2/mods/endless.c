@@ -657,19 +657,21 @@ WRAPPER(course_comments, 0x14e8ec0) {
 
 // Course records by data id (asked for after a clear, for the map): the ids are in a linked list at +0x74748 (count
 // +0x74760); the answer goes to the course list ring at +0x30780, as for a search. From GET /api/courses/<code>.
+// (A Super World has up to 40 courses.)
+#define GET_COURSES_MAX 64
 WRAPPER(get_courses, 0x14dbae0) {
-    uint64_t ids[16];
+    uint64_t ids[GET_COURSES_MAX];
     uint32_t n = 0;
     netobj_lock(c);
-    uint64_t sentinel = no + 0x74748, p = g64(no + 0x74758);
-    if (p != no + 0x74750)
-        for (int guard = 0; guard < 64 && n < 16; guard++) {
-            p = g64(p + 8);
-            if (!p || p - 8 == sentinel) break;
-            ids[n++] = g64(p - 8);
-        }
+    // (a node's link is at p: its id at p - 8, the next link at p + 8; the list's own link, at +0x74750, ends it. The
+    // first id is the first node's, as the original reads them [obs main+0x14dbb8c].)
+    uint64_t end = no + 0x74750, p = g64(no + 0x74758);
+    for (int guard = 0; p && p != end && guard < 4 * GET_COURSES_MAX && n < GET_COURSES_MAX; guard++) {
+        ids[n++] = g64(p - 8);
+        p = g64(p + 8);
+    }
     netobj_unlock(c);
-    Json *metas[16] = {0};
+    Json *metas[GET_COURSES_MAX] = {0};
     for (uint32_t i = 0; i < n; i++) {
         char code[12], path[96];
         code_of(ids[i], code);

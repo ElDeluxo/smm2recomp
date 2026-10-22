@@ -274,6 +274,8 @@ void game_mod_toggles_changed(void) {
 __attribute__((constructor)) static void mods_start(void) {
     extern void world_register(void);
     world_register();  // (first: the first override of an address wins, before the trace wrappers)
+    extern void superworld_register(void);
+    superworld_register();
     online_register();
     endless_register();
     extern void bridge_register(void);

@@ -97,10 +97,7 @@ impl Summary {
         let id = v["id"].as_str().filter(|id| is_world_id(id))?;
         Some(Self {
             id: id.to_string(),
-            maker_id: v["uploader"]["code"]
-                .as_str()
-                .unwrap_or_default()
-                .to_string(),
+            maker_id: dashed(v["uploader"]["code"].as_str().unwrap_or_default()),
             maker_name: v["uploader"]["name"]
                 .as_str()
                 .unwrap_or_default()
@@ -208,6 +205,15 @@ fn ninjis_of(v: &Value) -> Vec<u32> {
         .unwrap_or_default()
 }
 
+/// A maker code in the game's form (`XXX-XXX-XXX`; the source gives it without dashes).
+fn dashed(code: &str) -> String {
+    if code.len() == 9 && code.is_ascii() {
+        format!("{}-{}-{}", &code[..3], &code[3..6], &code[6..])
+    } else {
+        code.to_string()
+    }
+}
+
 /// A world ID safe in a path: what the game and the source use (hex, `_`, digits), at most 63.
 pub fn is_world_id(id: &str) -> bool {
     !id.is_empty() && id.len() < 64 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
@@ -230,6 +236,8 @@ pub(crate) struct SuperWorlds {
     /// maker ID → world ID → the play record (plus `updated`).
     progress: HashMap<String, HashMap<String, Value>>,
     status: PoolStatus,
+    /// When the source last answered (POSIX seconds; kept in `pool.json`).
+    fetched_at: u64,
 }
 
 pub(crate) type PoolWanted = Box<dyn Fn() + Send + Sync>;
@@ -248,7 +256,14 @@ pub(crate) fn load(dir: &Path) -> (SuperWorlds, Vec<Listed>) {
             .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
             .unwrap_or(Value::Null)
     };
-    let pool = read(d.join("pool.json"))["super_worlds"]
+    let pool_file = read(d.join("pool.json"));
+    // (the source's last answer, kept across restarts: a restart doesn't ask again before its time)
+    let fetched_at = pool_file["fetched"].as_u64().unwrap_or(0);
+    let fetched = crate::now()
+        .checked_sub(fetched_at)
+        .filter(|_| fetched_at > 0)
+        .and_then(|ago| Instant::now().checked_sub(Duration::from_secs(ago)));
+    let pool = pool_file["super_worlds"]
         .as_array()
         .map(|a| a.iter().filter_map(Summary::from_json).collect())
         .unwrap_or_default();
@@ -290,7 +305,11 @@ pub(crate) fn load(dir: &Path) -> (SuperWorlds, Vec<Listed>) {
             pool,
             held,
             progress,
-            status: PoolStatus::default(),
+            status: PoolStatus {
+                fetched,
+                ..PoolStatus::default()
+            },
+            fetched_at,
         },
         courses,
     )
@@ -418,7 +437,7 @@ impl Store {
         let list: Vec<Value> = g.pool.iter().map(Summary::to_json).collect();
         self.write_sw(
             "pool.json",
-            &serde_json::to_vec(&json!({ "super_worlds": list })).unwrap(),
+            &serde_json::to_vec(&json!({ "super_worlds": list, "fetched": g.fetched_at })).unwrap(),
         )
     }
 
@@ -448,6 +467,7 @@ impl Store {
         }
         order(&mut g.pool);
         g.status.fetched = Some(Instant::now());
+        g.fetched_at = crate::now();
         self.save_pool(&g)
     }
 
