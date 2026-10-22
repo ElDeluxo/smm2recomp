@@ -303,20 +303,29 @@ void smm1_bgm_fade(int frames) {
 void smm1_game_sound(bool on) { g_game_target = on ? 1 : 0; }
 
 // the sound effects: the screens' sound banks (Pack/Sound.pack -> Sound/Resource/<bank>.bars: a SARC of
-// <name>.bfwav + <name>.bameta), loaded on first use (smm1_se_bank)
-static struct { char name[80]; SPcm *p; float vol; } g_sfx[512];
+// <name>.bfwav + <name>.bameta), loaded on first use (smm1_se_bank). Room for every costume's two banks (100
+// costumes) besides the screens' own; a bank past that is not loaded (once said in the log), never loaded twice
+#define SFX_BANKS 256
+#define SFX_SOUNDS 4096
+static struct { char name[80]; SPcm *p; float vol; } g_sfx[SFX_SOUNDS];
 static int g_nsfx;
-static char g_banks[32][64];
+static char g_banks[SFX_BANKS][64];
 static int g_nbanks;
 void smm1_se_bank(const char *bank) {
     for (int i = 0; i < g_nbanks; i++)
         if (!strcmp(g_banks[i], bank)) return;
-    if (g_nbanks < 32) snprintf(g_banks[g_nbanks++], 64, "%s", bank);
+    if (g_nbanks == SFX_BANKS || g_nsfx == SFX_SOUNDS) {
+        static bool said;
+        if (!said) fprintf(stderr, "[smm1ui] sound banks full: %s not loaded\n", bank);
+        said = true;
+        return;
+    }
+    snprintf(g_banks[g_nbanks++], 64, "%s", bank);
     size_t n;
     uint8_t *d = smm1_sound_file(bank, &n);
     LSarc s;
     if (!d || !lyt_sarc_open(&s, d, n)) { free(d); return; }
-    for (int i = 0; i < s.count && g_nsfx < 512; i++) {
+    for (int i = 0; i < s.count && g_nsfx < SFX_SOUNDS; i++) {
         const char *nm = s.e[i].name, *dot = strstr(nm, ".bfwav");
         if (!dot) continue;
         SPcm *p = smm1_bfwav_decode(s.data + s.e[i].start, s.e[i].end - s.e[i].start);

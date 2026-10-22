@@ -504,7 +504,8 @@ Setup failures first, since they block new players:
    Fire too (SMM1). With it: "Mystery Mushroom costume now" in Try it now, a choice row of every costume. Then
    (2026-10-22): SMM2's jump sound muted under the costume's (the game's own jump sound request; a costume without one
    keeps SMM2's, as do goal / death), the costume stays on through a sub-area pipe and back (checked), and the
-   Mystery Mushroom looks like SMM1's ("?" mushroom). Open: its 2 x 2 size and palette icon (the Big Mushroom's)
+   Mystery Mushroom looks like SMM1's ("?" mushroom). The SMM1 sound loader holds every costume's banks (it kept 32
+   banks / 512 sounds: costumes past about 16 in a session went silent). Open: its 2 x 2 size and palette icon (the Big Mushroom's)
 5. ✅ Edit any course: ✅ the d-pad onto Make, ✅ the upload credit, ✅ Edit on the course card (Download again);
    ⬜ the card's "Edit" text, ⬜ Endless / 100 Mario "save for later" (design in mods.md)
 6. ✅ Course World thumbnails (2026-10-22): they were blank when TGRCode was busy (it allows about one request per
