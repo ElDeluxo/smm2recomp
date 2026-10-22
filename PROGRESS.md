@@ -302,7 +302,7 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
   - ⬜ Windows / Linux packages not run on their systems yet; Linux AppImage (bundled SDL3); notarized macOS app
     (needs a Developer ID); Android / iOS stay build-it-yourself (iOS: a desktop build-sign-install helper)
 
-- ⬜ **Bug (owner, 2026-10-19):** sound effects when opening a course and during course loading are
+- ✅ **Bug (owner, 2026-10-19; closed 2026-10-22: the owner found the timing fine in play, Next features item 11):** sound effects when opening a course and during course loading are
   slightly off (timing). Probably tied to the SLink sound trigger table not being decoded (sounds are
   placed by name, not frame-exact). 🔄 2026-10-21: SMM1's SLink2DB (XLNK v0x15) partly decoded: users, keys,
   actions, frame triggers and the parameter names (notes in `research/specs/smm1-slink2db.md`, private). The 100
@@ -625,7 +625,7 @@ Setup failures first, since they block new players:
   controls (`recomp/runtime/ui/touchpad.mm`) don't keep clear of the safe area, so the L / ZL buttons are partly
   under the notch in landscape. Inset them by the window's safe area. The phone reached the title screen and ran
   well, then was killed for memory (jetsam `vm-pageshortage` at ~1.85 GB); owner isn't chasing that for now.
-- ⬜ **"Lanky Mario" as an SMM1 mod** (owner, 2026-10-21): SMM1's tall, stretched, glitchy-looking Mario. This is
+- ✅ **"Lanky Mario" as an SMM1 mod** (owner, 2026-10-21; built 2026-10-22, Next features item 2): SMM1's tall, stretched, glitchy-looking Mario. This is
   most likely the Weird Mushroom ("Weird Mario"), SMB1 style only. Found 2026-10-21: SMM1's name for it is
   `KinokoFunny` (editor sounds in every style, edit DB entries); there is no separate model, so the stretch and
   its jump are likely code (Block.rpx). Notes in `research/specs/smm1-extras-recomp-notes.md` (private). Confirm from the SMM1 files what it is: its
