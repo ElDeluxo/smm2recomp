@@ -234,11 +234,8 @@ bool superworld_fill_detail(Cpu *c, uint64_t no, const char *id) {
     info_fill(w, pid, map, courses);
     call2(c, CONVERT_DETAIL, rec, g_info);
     s64(rec + 0x230, (uint64_t)json_num(json_get(w, "created"), 0));
-    // the owner [inf: a block the converter only resets, an owner's name (UTF-16 string object, capacity +0x950: 11)
-    // and player id; the world's title screen doesn't take its name from it (it shows the player's own)]
-    if (g64(rec + 0x948) && g32(rec + 0x950) > 1 && g32(rec + 0x950) < 0x100)
-        put_utf16(g64(rec + 0x948), g32(rec + 0x950), json_str(json_get(w, "maker_name"), ""));
-    s64(rec + 0x970, pid);
+    // (+0x940..+0xa38 is the owner's user block: the game fills it itself when it copies the record into the profile,
+    // main+0x14ba520, from the Course World list's entry of this world, whose owner GetUsers named; see title_setup)
     // ninjis: one per course (the source's list, when it has one per course)
     if (json_len(ninjis) == levels)
         for (uint32_t k = 0; k < levels && k < MAX_LEVELS; k++)
@@ -413,7 +410,47 @@ SW_WRAPPER(sw_delete, 0x14f7c30) {
     json_free(j);
 }
 
+// ---- the world's title ("SUPER <name> WORLD", main+0x199fb60). The game names another maker's world after the owner
+// block of its profile copy (profile +0x226010: name, +0x22606c: Mii, +0x226108: set), but first asks whether the
+// save's own player name (save.dat +0x10, from the Mii the player picks for Course World) is still the default " "
+// (main+0x168d300 against the constant at main+0x239f14a); if so it shows the account's nickname for every world.
+// Our Mii database is empty (runtime/services/mii.c), so that name is never set and every world read "SUPER Player
+// WORLD". For another maker's world with its owner known, the save name holds the account's nickname for the length
+// of the call (as if the player had picked a Mii named so), then the default again: nothing else sees it.
+#define WORLD_MGR MAIN_ADDR(0x2c0d558)   // the map's world manager: +0x48 the world played, entries (0x18) at +0x50
+#define PROFILE MAIN_ADDR(0x2c115e0)
+#define SAVE_HOLDER MAIN_ADDR(0x2a39088) // +0x20: save.dat's data (+0x10: the player's name, UTF-16, 11 units)
+#define ACCOUNT MAIN_ADDR(0x2a395a8)     // +0x178: the account's nickname (string object, UTF-16 at +0x180)
+static void title_setup(Cpu *c) {
+    uint64_t w = g64(WORLD_MGR), prof = g64(PROFILE), holder = g64(SAVE_HOLDER), acct = g64(ACCOUNT);
+    uint64_t save = holder ? g64(holder + 0x20) : 0, nick = acct ? g64(acct + 0x180) : 0;
+    uint8_t keep[0x16];
+    bool swap = false;
+    if (mod_hundred() && w && prof && save && nick) {
+        int32_t i = (int32_t)g32(w + 0x48);
+        bool own = i == 1 && !g8(w + 0x7d);                  // (the Worldbot world being played: the save's name)
+        bool other = i >= 0 && i < 8 && g8(w + 0x18ull * i + 0x65) && g8(prof + 0x226108);  // (a downloaded world)
+        uint16_t c0 = *(volatile uint16_t *)(uintptr_t)(save + 0x10), c1 = *(volatile uint16_t *)(uintptr_t)(save + 0x12);
+        if (!own && other && c0 == ' ' && c1 == 0) {
+            memcpy(keep, (const void *)(uintptr_t)(save + 0x10), sizeof keep);
+            uint32_t n = 0;
+            for (; n < 10; n++) {
+                uint16_t ch = *(volatile uint16_t *)(uintptr_t)(nick + 2 * n);
+                if (!ch) break;
+                s16(save + 0x10 + 2 * n, ch);
+            }
+            s16(save + 0x10 + 2 * n, 0);
+            swap = n > 0;
+            if (!swap) memcpy((void *)(uintptr_t)(save + 0x10), keep, sizeof keep);
+        }
+    }
+    guest_call_orig(c, MAIN_ADDR(0x199fb60));
+    if (swap) memcpy((void *)(uintptr_t)(save + 0x10), keep, sizeof keep);
+    if (swap) MLOG("Super World title: the owner's name\n");
+}
+
 void superworld_register(void) {
+    hle_override(MAIN_ADDR(0x199fb60), title_setup, "mod: Super World title (the owner's name)");
     hle_override(MAIN_ADDR(0x14f79a0), sw_list, "mod: SearchWorldMap (Super Worlds list)");
     hle_override(MAIN_ADDR(0x14f6600), sw_detail, "mod: GetWorldMap (Super World detail)");
     hle_override(MAIN_ADDR(0x14f6100), sw_one, "mod: GetWorldMap (Super World list entry)");
