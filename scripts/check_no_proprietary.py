@@ -99,7 +99,8 @@ MAGICS = [
 ]
 # Paths that hold files derived from the dump (recompiled code, translated shaders, extracted data), and the
 # player packages (recomp/dist: built locally, published only as release assets)
-BLOCKED_PATH_PARTS = ("/recomp/private/", "/recomp/generated/", "/recomp/build/", "/recomp/dist/")
+BLOCKED_PATH_PARTS = ("/recomp/private/", "/recomp/generated/", "/recomp/build/", "/recomp/dist/",
+                      "/mods-generated/")  # (the SMM1 mods' output from the dump, wherever a tool wrote it)
 # AArch64 disassembly lines ("71000123c0: f9400420  ldr x0, [x1, #8]" or "ldr x0, [x1]")
 ASM_LINE = re.compile(
     r"\b(ldr|str|ldp|stp|ldrb|strb|ldrh|strh|adrp|movz|movk|blr|cbz|cbnz|tbz|tbnz|ldaxr|stlxr)"
@@ -152,7 +153,7 @@ def check_file(path: Path) -> list[str]:
     name = path.name.lower()
     posix = "/" + path.as_posix().lstrip("/")
     if any(part in posix for part in BLOCKED_PATH_PARTS):
-        problems.append("file is under a recomp folder for dump-derived output (private/generated/build)")
+        problems.append("file is under a recomp folder for dump-derived output (private/generated/build/mods-generated)")
     if name in BLOCKED_NAMES or path.suffix.lower() in BLOCKED_EXTENSIONS:
         problems.append(f"blocked file type '{path.suffix or name}'")
     suffix = path.suffix.lower()

@@ -123,6 +123,28 @@ static void open_extra(SDL_JoystickID id) {
         }
 }
 
+// The "Controllers start at player 2" setting: no controller is player 1's (the keyboard and the on-screen controls
+// are); every one is the next free player's
+static bool pads_from_p2(void) { return g_settings.pads_from_p2; }
+static void note_family(void);
+static bool scanned;  // pads present at startup: their ADDED event may have gone to the start screen's loop
+
+// The setting changed: every controller let go and taken again under the new rule (the game hears of the players
+// coming and going by its style set events)
+void input_pads_reassign(void) {
+    if (pad) SDL_CloseGamepad(pad), pad = NULL;
+    for (int i = 0; i < EXTRA_PADS; i++)
+        if (extra_pad[i]) {
+            SDL_CloseGamepad(extra_pad[i]);
+            extra_pad[i] = NULL;
+            recompute_extra(i);
+        }
+    style_changed();
+    note_family();
+    recompute_pad();
+    scanned = false;  // (taken again on the next event)
+}
+
 // Forget held keys (the menu took focus); the gamepad is re-read on its next event.
 void input_reset(void) {
     memset(keys_down, 0, sizeof keys_down);
@@ -214,13 +236,12 @@ void input_handle_event(const SDL_Event *e) {
     extern bool touchpad_handle_event(const SDL_Event *e);  // runtime/ui/touchpad.mm (the on-screen controller)
     extern bool touch_handle_event(const SDL_Event *e);  // runtime/hle/touch.c (touches, the mouse as a finger)
     if (touchpad_handle_event(e) || touch_handle_event(e)) return;
-    static bool scanned;  // pads present at startup: their ADDED event may have gone to the start screen's loop
     if (!scanned) {
         scanned = true;
         int n = 0;
         SDL_JoystickID *ids = SDL_GetGamepads(&n);
-        if (n > 0 && !pad && real_gamepad(ids[0])) { pad = SDL_OpenGamepad(ids[0]); LOG("[input] gamepad: %s\n", SDL_GetGamepadName(pad)); note_family(); }
-        for (int i = 1; i < n; i++) open_extra(ids[i]);
+        if (n > 0 && !pad && !pads_from_p2() && real_gamepad(ids[0])) { pad = SDL_OpenGamepad(ids[0]); LOG("[input] gamepad: %s\n", SDL_GetGamepadName(pad)); note_family(); }
+        for (int i = pad ? 1 : 0; i < n; i++) open_extra(ids[i]);
         SDL_free(ids);
     }
     switch (e->type) {
@@ -230,7 +251,7 @@ void input_handle_event(const SDL_Event *e) {
         recompute_keyboard();
         break;
     case SDL_EVENT_GAMEPAD_ADDED:
-        if (!pad && real_gamepad(e->gdevice.which)) { pad = SDL_OpenGamepad(e->gdevice.which); LOG("[input] gamepad: %s\n", SDL_GetGamepadName(pad)); note_family(); }
+        if (!pad && !pads_from_p2() && real_gamepad(e->gdevice.which)) { pad = SDL_OpenGamepad(e->gdevice.which); LOG("[input] gamepad: %s\n", SDL_GetGamepadName(pad)); note_family(); }
         else open_extra(e->gdevice.which);
         break;
     case SDL_EVENT_GAMEPAD_REMOVED:

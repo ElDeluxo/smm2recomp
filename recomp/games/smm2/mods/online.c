@@ -122,6 +122,11 @@ LOCAL_WRAPPER(get_new_notification, 0x14edee0, { s8(no + 0xeac12, 0); s8(no + 0x
 LOCAL_WRAPPER(get_event_course_status, 0x14f3ab0, {
     s64(no + 0x1a0810, 0); s8(no + 0x1a0818, 0); s64(no + 0x1a0820, 0); s8(no + 0x1a0828, 0);
 })
+// Ninji Speedruns' event count (+0x1a0808): none, so the screen shows SMM2's own "No active speedruns" instead of a
+// communication error (TGRCode has past events: ninji_info, a later step)
+LOCAL_WRAPPER(get_event_course_count, 0x14f3980, s32(no + 0x1a0808, 0))
+// ... and its list of events (a ring of 0xf38-byte entries at +0x141610: head and count at +0x14161c): empty
+LOCAL_WRAPPER(get_event_courses, 0x14f3770, s64(no + 0x14161c, 0))
 
 // The player's own user record (GetUsers for the signed-in player): one entry of 0x1f0 bytes in the ring at +0x68
 // (entries, +0x70 capacity, +0x74 head, +0x78 count). Name and best Endless clears come from our server. The entry
@@ -369,6 +374,8 @@ void online_register(void) {
     hle_override(MAIN_ADDR(0x14f0b30), post_activity_quest, "mod: PostActivityQuest");
     hle_override(MAIN_ADDR(0x14edee0), get_new_notification, "mod: GetNewNotification");
     hle_override(MAIN_ADDR(0x14f3ab0), get_event_course_status, "mod: GetEventCourseStatus");
+    hle_override(MAIN_ADDR(0x14f3980), get_event_course_count, "mod: Ninji event count");
+    hle_override(MAIN_ADDR(0x14f3770), get_event_courses, "mod: Ninji events");
     if (getenv("RECOMP_MOD_TRACE")) {
         for (size_t i = 0; i < sizeof traced / sizeof *traced; i++)
             hle_override(MAIN_ADDR(traced[i].off), trace_state, traced[i].name);

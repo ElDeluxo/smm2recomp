@@ -45,6 +45,7 @@ static volatile int broken_d = -1;       // a corrupt course left the run of thi
 static volatile uint64_t broken_tap;     // the Challenge Modes button was tapped (after a corrupt course) then
 static volatile int tab_target = -1;     // a difficulty to select with L / R
 static volatile int tab_presses;
+static volatile bool tab_moved;          // L / R were pressed (or the handler used): the focus is on the tab bar
 static volatile uint64_t menu_page, menu_seen;
 static volatile uint64_t back_since, disappear_seen;  // B to Course World asked (hundred_flow_exit); the menu's
                                                       // Disappear last ran  // the Endless menu page and the frame it was last in Disp
@@ -190,9 +191,10 @@ static void *driver(void *arg) {
                 tab_target = -1, tab_presses = 0, drv_since = now;
                 mod_shot("tab", 60), mod_shot("tab", 95);
             } else if (tab_presses >= 12) {
-                pending_tab = tab_target, tab_target = -1, tab_presses = 0;
+                pending_tab = tab_target, tab_target = -1, tab_presses = 0, tab_moved = true;
             } else if (t >= 30) {
                 b = cur < tab_target ? BTN_R : BTN_L;
+                tab_moved = true;
                 if (t >= 38) tab_presses++, drv_since = now;
             }
             g_test_buttons = b;
@@ -203,11 +205,23 @@ static void *driver(void *arg) {
         case DRV_NEW_GAME:  // (the tab is set first, on the game thread) New Game, then the confirm window's Yes.
                             // With a saved run the focus starts on Continue, right of New Game [obs]
             if (pending_tab >= 0) { drv_since = now; break; }
+            static uint64_t asked_at;  // (once per New Game: whether the menu shows Continue, so the confirm comes)
+            if (asked_at != drv_since && t < 30) {
+                extern int endless_menu_offers_continue(int d);
+                int mc = endless_menu_offers_continue(run_d);
+                asked_at = drv_since;
+                if (mc >= 0 && (mc != 0) != over_save) {
+                    MLOG("bridge: the menu %s Continue: New Game %s its confirm window\n", mc ? "shows" : "doesn't show",
+                         mc ? "with" : "without");
+                    over_save = mc != 0;
+                }
+            }
             // "Previous save data will be overwritten. Continue?" opens on No, Yes is right of it [obs, flow agent]:
             // Right then A, repeated in case the window comes late (on the map Right does nothing and A is Play)
             // (after L / R the focus is on the tab bar [obs]: Down brings it to the buttons; twice, in case the
-            // first falls into the tab change)
-            if ((t >= 40 && t < 48) || (t >= 70 && t < 78)) b = BTN_DOWN;
+            // first falls into the tab change. Without L / R it is on the buttons already, and Down would take it
+            // to the Back button: A then left for Course World, and the map's Play presses opened the Mii outfit.)
+            if (tab_moved && ((t >= 40 && t < 48) || (t >= 70 && t < 78))) b = BTN_DOWN;
             else if (over_save && t >= 100 && t < 108) b = BTN_LEFT;
             else if (t >= 130 && t < 138) b = BTN_A;
             else if (over_save && t >= 300 && t < 780) {
@@ -218,7 +232,7 @@ static void *driver(void *arg) {
             break;
         case DRV_CONTINUE:  // (the tab is set first) Continue: the focused button when a run is saved [obs]
             if (pending_tab >= 0) { drv_since = now; break; }
-            if ((t >= 40 && t < 48) || (t >= 70 && t < 78)) b = BTN_DOWN;
+            if (tab_moved && ((t >= 40 && t < 48) || (t >= 70 && t < 78))) b = BTN_DOWN;  // (as New Game)
             else if (t >= 130 && t < 138) b = BTN_A;
             else if (t > 160) set_drv(DRV_PLAY);
             break;
@@ -380,7 +394,7 @@ static void menu_disp(Cpu *c) {
     opening_since = 0;
     if (drv == DRV_BROKEN && broken_d >= 0 && broken_tap > drv_since) {  // (back after a corrupt course)
         LOG("[mod] bridge: back on the Endless menu after the corrupt course: Continue\n");
-        tab_target = broken_d, broken_d = -1, over_save = false;
+        tab_target = broken_d, broken_d = -1, over_save = false, tab_moved = false;
         set_drv(DRV_CONTINUE);
     }
     // (re)entering the menu with no run going: Challenge Modes opens on the mode used last
@@ -640,11 +654,20 @@ static void play_exec(Cpu *c) {
     // A course loaded underneath the flow's map waits at its first play frame until the flow's card is up
     // (hundred_flow_ready_to_start), so it doesn't run hidden.
     static bool holding;
+    static uint64_t held_since;
     if (started_pending && run_d >= 0 && mod_hundred_rules() && test_difficulty() < 0 && !hundred_flow_ready_to_start()) {
-        if (!holding) holding = true, LOG("[mod] bridge: the course waits for the flow's card\n");
-        return;
+        if (!holding) holding = true, held_since = renderer_present_count(), LOG("[mod] bridge: the course waits for the flow's card\n");
+        if (renderer_present_count() - held_since < 600) return;
+        // (10 s: never in a good run; owner, 2026-10-22, once stayed black after a miss) say why, and let it go
+        char d[256];
+        hundred_flow_describe(d, sizeof d);
+        LOG("[mod] bridge: the course waited 10 s for the flow: let go (flow: %s)\n", d);
+        started_pending = false;
+        if (test_difficulty() < 0) hundred_flow_course_started();
     }
     if (holding) holding = false, LOG("[mod] bridge: the course starts\n");
+    extern void quick_retry_play_state(void);  // (quick_retry.c: the course is playing again after a miss)
+    quick_retry_play_state();
     if (started_pending) course_started("play state");
     guest_call_orig(c, PLAY_EXEC);
 }
@@ -767,7 +790,7 @@ bool hundred_run_start(int difficulty, bool resume_saved) {
     pthread_once(&once, driver_start);
     endless_prepare_run(difficulty, resume_saved);
     run_d = difficulty;
-    tab_target = difficulty, tab_presses = 0;
+    tab_target = difficulty, tab_presses = 0, tab_moved = false;
     suspending = paused = false;
     set_drv(resume_saved ? DRV_CONTINUE : DRV_NEW_GAME);
     mod_shot("menu", 60), mod_shot("menu", 330);
@@ -860,6 +883,7 @@ void hundred_mode_switch(void) {  // ZL / ZR / the tap on the flow's select: SMM
 
 // (the flow's: whether a course may start playing; this stand-in, for builds without it, says yes)
 __attribute__((weak)) bool hundred_flow_ready_to_start(void) { return true; }
+__attribute__((weak)) void hundred_flow_describe(char *out, size_t n) { snprintf(out, n, "no flow"); }
 
 // The Endless menu's Disappear state (index 5 of its machine; exec main+0x1a24d30): the menu closes towards Course
 // World (a course start goes through CourseIn / InFade instead).

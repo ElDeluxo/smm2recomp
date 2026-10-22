@@ -23,6 +23,19 @@ WEAK const char *game_romfs_overlay(void) { return NULL; }
 typedef struct { const char *label, *desc; bool *value; bool def; } GameModToggle;
 WEAK int game_mod_toggles(const GameModToggle **out) { *out = NULL; return 0; }
 WEAK void game_mod_toggles_changed(void) {}
+// ... and effects to try right now (the Mods tab's "Try it now" rows): a mod effect on demand, e.g. a power-up or a
+// costume for the current player. available() greys a row out (no course, a run that keeps records); trigger(choice)
+// asks for it (called on the UI thread: the mod applies it on the game's); choices (nchoices > 0) pick what, e.g.
+// which costume. None by default.
+typedef struct {
+    const char *label, *desc;
+    bool (*available)(void);
+    void (*trigger)(int choice);
+    const char *choice_label;
+    const char *const *choices;
+    int nchoices;
+} GameModTrigger;
+WEAK int game_mod_triggers(const GameModTrigger **out) { *out = NULL; return 0; }
 
 // ---- once per frame on the game's main thread (runtime/hle/input.c), and per presented frame (renderers)
 WEAK void warp_game_tick(Cpu *c) { (void)c; }

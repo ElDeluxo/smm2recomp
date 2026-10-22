@@ -32,7 +32,11 @@ void lay_play_ex(Lay *l, const char *anim, int tick, float from, float to, bool 
     snprintf(t.name, sizeof t.name, "%s", anim);
     for (int i = 0; i < l->ntr; i++)
         if (!strcmp(l->tr[i].name, anim)) { l->tr[i] = t; return; }
-    if (l->ntr < 48) l->tr[l->ntr++] = t;
+    if (l->ntr < LAY_TRACKS) l->tr[l->ntr++] = t;
+    else {
+        static int nwarn;
+        if (nwarn++ < 4) fprintf(stderr, "[smm1ui] layout full: %s not played (%d animations)\n", anim, l->ntr);
+    }
 }
 void lay_play(Lay *l, const char *anim, int tick) { lay_play_ex(l, anim, tick, 0, -1, false, 1); }
 void lay_play_loop(Lay *l, const char *anim, int tick) { lay_play_ex(l, anim, tick, 0, -1, true, 1); }

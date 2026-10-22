@@ -340,6 +340,17 @@ void endless_apply_mode(void) {
     }
 }
 
+// Whether SMM2's Endless menu shows Continue for difficulty d, from the menu's copy of the record: a run that can go
+// on (+0x04 state 1 or 2) with lives (+0x30) and a history, i.e. a course cleared (+0x2c) [inf: a run with lives
+// and no clear shows New Game alone, research/specs/endless-challenge.md 1.2]. -1: no copy yet.
+int endless_menu_offers_continue(int d) {
+    uint64_t cache = g64(UI_CACHE);
+    if (d < 0 || d > 3 || !cache || !g64(cache + 0x15e598) || (uint32_t)d >= g32(cache + 0x15e590)) return -1;
+    uint64_t r = g64(cache + 0x15e598) + 0x38ull * (uint32_t)d;
+    uint32_t state = g32(r + 0x04);
+    return (state == 1 || state == 2) && g8(r + 0x30) != 0 && g32(r + 0x2c) != 0;
+}
+
 // ---- the next course, known before the game asks for it (the flow's start card shows it, as SMM1's does): the
 // server's queue only moves on a result, so asking for its head now gives what the game's own search gets later.
 
@@ -381,6 +392,33 @@ void endless_prefetch(int d) {
 
 // A run the flow starts (hundred_run_start): a new one has the start lives at once (the status the start card reads
 // before the game's New Game request is answered); a continued one has the server's.
+// A continued run's credits: the courses cleared before (the server's history of the run, with names and makers) in
+// place of what this session saw, so the ending lists the whole run after a Save & Quit or a restart.
+static void *credits_thread(void *arg) {
+    int d = (int)(intptr_t)arg;
+    char path[96];
+    snprintf(path, sizeof path, "/api/endless/%s/history?ruleset=%s", DIFF[d], RULESET());
+    int st;
+    Json *j = srv_call("GET", path, NULL, &st);
+    Json *list = json_get(j, "history");
+    if (list) {
+        pthread_mutex_lock(&state_lock);
+        runs[d].ncredits = 0;
+        for (size_t i = 0; i < json_len(list) && runs[d].ncredits < 32; i++) {
+            Json *e = json_at(list, i);
+            if (strcmp(json_str(json_get(e, "result"), ""), "clear")) continue;
+            struct hundred_credit *c = &runs[d].credits[runs[d].ncredits++];
+            snprintf(c->name, sizeof c->name, "%s", json_str(json_get(e, "name"), "?"));
+            snprintf(c->maker, sizeof c->maker, "%s", json_str(json_get(e, "maker"), ""));
+            snprintf(c->code, sizeof c->code, "%s", json_str(json_get(e, "code"), ""));
+        }
+        MLOG("credits of the continued run (%s): %d courses\n", DIFF[d], runs[d].ncredits);
+        pthread_mutex_unlock(&state_lock);
+    }
+    json_free(j);
+    return NULL;
+}
+
 void endless_prepare_run(int d, bool resume) {
     if (d < 0 || d > 3) return;
     static const uint32_t totals[4] = {8, 16, 16, 6};
@@ -391,7 +429,11 @@ void endless_prepare_run(int d, bool resume) {
     }
     runs[d].current = 0;
     pthread_mutex_unlock(&state_lock);
-    if (resume) endless_prefetch(d);
+    if (resume) {
+        endless_prefetch(d);
+        pthread_t th;
+        if (pthread_create(&th, NULL, credits_thread, (void *)(intptr_t)d) == 0) pthread_detach(th);
+    }
 }
 
 // ---- InitEndlessMode: New Game
@@ -828,6 +870,20 @@ WRAPPER(start_course, 0x14ecf30) {
         finish(c, no, ok, 2);
         return;
     }
+    // co-op: the game asks this for any player's miss (its Endless code knows one player); SMM2's local multiplayer
+    // rule is that the course is only lost when every player is down (owner, 2026-10-21): while one stands, no life
+    if (coop_in_course()) {
+        int up = coop_players_standing();
+        if (up > 0) {
+            pthread_mutex_lock(&state_lock);
+            uint32_t lives = runs[d].lives, clears = runs[d].clears;
+            pthread_mutex_unlock(&state_lock);
+            set_play(c, no, d, lives, clears);
+            LOG("[mod] co-op: a player is down on %s, %d still standing: no life lost (lives %u)\n", code, up, lives);
+            finish(c, no, true, 2);
+            return;
+        }
+    }
     char path[64], body[160];
     snprintf(path, sizeof path, "/api/endless/%s/result?ruleset=%s", DIFF[d], RULESET());
     snprintf(body, sizeof body, "{\"code\":\"%s\",\"result\":\"%s\"}", code,
@@ -984,6 +1040,21 @@ bool endless_has_course(uint64_t id) {  // world.c: is this course the one an En
     pthread_mutex_lock(&state_lock);
     bool v = false;
     for (int d = 0; d < 4; d++) v |= id && (runs[d].current == id || runs[d].started == id || runs[d].last_done == id);
+    pthread_mutex_unlock(&state_lock);
+    return v;
+}
+
+// hooks.c (co-op): the style of the course a run is on (style_index: 0 SMB1 .. 4 3D World), -1 for no run's course,
+// -2 for one whose style wasn't served with it
+int endless_course_style(void) {
+    pthread_mutex_lock(&state_lock);
+    int v = -1;
+    for (int d = 0; d < 4 && v == -1; d++)
+        if (runs[d].current) {
+            v = -2;
+            for (int i = 0; i < ncourse_names; i++)
+                if (course_names[i].id == runs[d].current) v = course_names[i].style;
+        }
     pthread_mutex_unlock(&state_lock);
     return v;
 }

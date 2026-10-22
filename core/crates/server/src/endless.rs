@@ -525,11 +525,19 @@ pub(crate) fn route(
             json_resp(200, v)
         }),
         _ => store.endless_history(who, d, want).map(|h| {
-            json_resp(
-                200,
-                json!({ "difficulty": name,
-                        "history": h.iter().map(HistoryEntry::to_json).collect::<Vec<_>>() }),
-            )
+            // each course's name and maker too, where the server holds it (a continued 100 Mario run's credits)
+            let history: Vec<Value> = h
+                .iter()
+                .map(|e| {
+                    let mut v = e.to_json();
+                    if let Some(m) = store.get(&e.code) {
+                        v["name"] = json!(m.name);
+                        v["maker"] = json!(m.maker);
+                    }
+                    v
+                })
+                .collect();
+            json_resp(200, json!({ "difficulty": name, "history": history }))
         }),
     };
     Some(out.unwrap_or_else(store_err))
@@ -875,6 +883,12 @@ mod tests {
         assert_eq!(
             (h[1]["result"].as_str(), h[1]["code"].as_str()),
             (Some("skip"), Some(batch[1].as_str()))
+        );
+        // with each course's name and maker (a continued run's credits)
+        let m = store.get(&batch[1]).unwrap();
+        assert_eq!(
+            (h[1]["name"].as_str(), h[1]["maker"].as_str()),
+            (Some(m.name.as_str()), Some(m.maker.as_str()))
         );
         // suspend and status
         let (st, v) = call(&store, "POST", "/api/endless/easy/suspend", me, "");

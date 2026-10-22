@@ -100,7 +100,7 @@ class CheckFileTests(unittest.TestCase):
         self.assertTrue(check_file(self.write("walk.bin", b"TRC1" + b"\x00" * 32)))
 
     def test_recomp_private_and_generated_paths_blocked(self):
-        for sub in ("recomp/private", "recomp/generated"):
+        for sub in ("recomp/private", "recomp/generated", "recomp/mods-generated/smm1-ui-v6"):
             d = self.dir / sub
             d.mkdir(parents=True)
             p = d / "fn.c"

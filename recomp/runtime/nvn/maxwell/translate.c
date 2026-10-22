@@ -1181,6 +1181,20 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         const char *x = NA(F(R(a)), bits(w, 43, 1), bits(w, 7, 1)), *y = NA(F(B(true)), bits(w, 6, 1), bits(w, 44, 1));
         char cmp[512];
         fcmp_expr(cmp, (int)bits(w, 48, 4), x, y);
+        // 3D World's character layer composite (fragment program 72711e4500 on the title course, the same code in
+        // every 3D World course): "is Mario in front of the scene here?" compares the scene's depth, linearised
+        // through a reciprocal, with Mario's own depth from his half-float layer. Behind Mario the two are nearly the
+        // same depth, and the iPad's M5 GPU landed on the "behind" side in random pixels: the course showed through
+        // him in cyan specks (owner, 2026-10-20). A 0.1 % margin keeps those pixels his; 0.1 % and 1 % both cleared it
+        // on the iPad, and anything really behind a wall is far more than 0.1 % further. Recognised by the compare
+        // itself and the multiply-add and reciprocal that make its operand (the words before it in the group).
+        if (w == 0x5bb1838000470947ull && pc >= 0x18) {
+            uint64_t w8, w18;
+            memcpy(&w8, c->code + pc - 0x10, 8);
+            memcpy(&w18, c->code + pc - 0x18, 8);
+            if (w8 == 0x51a1048c01e70809ull && w18 == 0x5080000000470808ull)
+                snprintf(cmp, sizeof cmp, "(%s < %s + abs(%s) * 0.001f)", x, y, y);
+        }
         int p = (int)bits(w, 3, 3), q = (int)bits(w, 0, 3), bo = (int)bits(w, 45, 2);
         const char *pc_ = P((int)bits(w, 39, 3), bits(w, 42, 1));
         if (p != PT) { c->pred_used[p] = 1; sp(&c->body, "    { bool cmp = %s; bool pp = %s;\n      p%d = cmp %s pp;\n", cmp, pc_, p, bool_op(bo)); }
@@ -2198,6 +2212,7 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
     static int annotate = -1;
     if (annotate < 0) annotate = getenv("LARECOMP_SAVE_MSL") != NULL;
     c->branchy = any_branch;
+    c->code = code;  // (emit_insn looks at neighbouring words for a few patterns)
     for (size_t i = 0; i < end && !c->fail; i++) {
         if (i % 4 == 0) continue;
         uint32_t pc = (uint32_t)(i * 8);

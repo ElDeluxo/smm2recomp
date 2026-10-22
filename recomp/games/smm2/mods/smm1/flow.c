@@ -343,6 +343,7 @@ static void on_result(int outcome) {
         }
         break;
     case HUNDRED_MISS:  // SMM2's retry; with no life left, SMM2's GAME OVER scene, then Course World [obs]
+        LOGF("miss: %d lives, flow state %d -> %s\n", F.st.lives, F.state, F.st.lives > 0 ? "playing" : "closed");
         if (F.st.lives > 0) F.state = S_PLAYING;
         else {
             close_scenes();
@@ -502,6 +503,12 @@ static void shots_tick(void) {
         if (g_scene_tick == g_shot_at[i]) shot(g_shot_what[i]);
 }
 
+void hundred_flow_describe(char *out, size_t n) {  // (logs: the run side waiting on the flow, the black watchdog)
+    snprintf(out, n, "state %d, veil %.2f -> %.2f, opacity %.2f -> %.2f, then %d, wipe %d, covered %d, card up %d, "
+             "may start %d, full %d, queue %d", F.state, X.veil, X.veil_to, X.op, X.op_to, X.then, WP.anim, F.covered,
+             F.card_up, F.may_start, F.full, g_nq);
+}
+
 // one tick: input, the queue, the current screen
 static void tick(unsigned buttons) {
     handle_queue();
@@ -512,6 +519,17 @@ static void tick(unsigned buttons) {
     shots_tick();
     if (F.covered && F.ov.tick - F.cover_at > 300) F.covered = false, X.veil_to = 0;  // (no select came: let go)
     fades_tick();
+    {  // watchdog (owner, 2026-10-22: once, after a miss, black stayed over the course): during a course the flow's
+       // black never lasts 10 s; if it does, say why and lift it
+        static int black;
+        black = F.state == S_PLAYING && (X.veil_to >= 1 || X.veil >= 1) ? black + 1 : 0;
+        if (black == 600) {
+            char d[256];
+            hundred_flow_describe(d, sizeof d);
+            LOGF("black over the course for 10 s: lifted (%s)\n", d);
+            X.veil = X.veil_to = 0, X.then = T_NONE, F.covered = false;
+        }
+    }
     if (X.then) in.pressed = 0, F.tap = false;  // (a fade out under way: its screen takes nothing more)
     bool resume = false;
     switch (F.state) {
@@ -851,6 +869,8 @@ const uint8_t *game_overlay_image(int *w, int *h, int *full, uint64_t *seq) {
     const uint8_t *img = any && g_has_front ? g_front : NULL;
     *w = W, *h = H, *full = g_front_full, *seq = g_front_seq;
     pthread_mutex_unlock(&g_img);
+    if (!img) return smw_goal_image(w, h, full, seq);  // (nothing of the flow's on screen, e.g. a run's course: the
+                                                       // SMW goal wipe's circle there too, or none)
     return img;
 }
 #endif

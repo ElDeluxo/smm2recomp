@@ -336,8 +336,29 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
   (2026-10-21): a silent hactool failure now says "hactool stopped without a message", with the exit code
   decoded (access violation, missing DLL and so on), and no longer blames the keys; the exit code goes to the
   setup log. ⏳ Needs the owner to run hactool once by hand on Windows, or the new message from v0.2.1.
-- ⬜ **3D World rendering on the iPad (owner's screenshot, 2026-10-20; 3D World ground course, Metal):**
-  - ⬜ Mario's model has a grainy, speckled look across his face and overalls, like noise or broken dithering.
+- 🔄 **3D World rendering on the iPad (owner's screenshot, 2026-10-20; 3D World ground course, Metal):**
+  - 🔄 Mario's model has a grainy, speckled look across his face and overalls, like noise or broken dithering.
+    **Found and fixed 2026-10-22 (Mac; iPad still to see):** reproduced on the Mac in windows whose render scale
+    leaves the game's targets at fractional sizes: spots at 1.075, 1.43 and 1.45, none at 1.2, 1.25, 1.4, 1.5,
+    1.6, 1.8, 2 (the iPad renders at 1.43). The earlier "smooth at 1.43 on the Mac" check had the image scaled down
+    to a small window, which hid them. The automatic render scale now goes down to a multiple of 0.2 on each axis
+    (`runtime/nvn/output_scale.c`), so 1920x1080, 1600x900 and their halves and quarters all land on whole pixels;
+    the same windows are then clean. Explicit test scales (`LARECOMP_SCALE`) stay as given.
+    **The iPad's own speckle is a different bug and is still there** (checked on the iPad 2026-10-22: it now renders
+    at 1.4, the heavy cyan speckle remains). Narrowed down with per-draw dumps (`LARECOMP_DEBUG_EACH_DRAW=1` plus the
+    new `LARECOMP_DEBUG_DRAW_FS=<fs,...>` filter, iPad vs Mac, `SMM2_SEED=4`, title frame 2386, 2752x2064): Mario's
+    colour layer is drawn the same on both (only a pixel or two of pose difference), and the scene has a Mario-shaped
+    hole until the composite draw with fragment program 72711e4500 (draw ~529 of the frame) lays the character layer
+    over it; the speckle is in the scene right after that. Next: dump the iPad's image after that draw (the run was
+    paused at that point), then the translated shader of 72711e4500 and what it reads (the RG16F depth layer).
+    2026-10-22, later: the composite (72711e4500, `LARECOMP_SAVE_MSL=1` saves it) samples the character depth layer
+    and discards where it reads exactly 1.0 (nothing drawn), then compares the scene's linearised depth (through a
+    MUFU reciprocal) with Mario's own (`r9 < -r4`). Behind Mario the two are nearly equal, so the compare sits on a
+    knife edge: a precision difference on the M5 would flip it pixel by pixel, as the speckle does. Ruled out on the
+    iPad: depth textures sampled without filtering (an experiment, no change; removed). In progress: precise
+    reciprocal / rsqrt for MUFU (`LARECOMP_PRECISE_MUFU`, stashed as `git stash` "iPad 3D World: ..."; it compiles on
+    the Mac; the iPad run reached no screenshot in its 150 s, likely recompiling every shader, so not yet seen).
+    The iPad still has that test build and a `recomp-test.env` on it.
     It's not how he looks on the console. Compare the same frame with Ryujinx; suspects are his shading or AO
     pass and texture or sampler state on the iPad's GPU. The Vulkan NaN blur at his eyes (line 98) may be related.
     Checked 2026-10-21: on the Mac, Mario on the 3D World title is smooth at render scale 1.0 and at 1.43 (the
@@ -348,13 +369,19 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     is covered in cyan / blue speckle, and the same frame on the Mac is clean. The scenery and the Koopa match. The
     speckle pattern changes from run to run. Ruled out on the iPad: BC decoding (`RECOMP_BC_SOFT=1`: same
     speckle) and Maxwell's FMZ multiply (now translated as the hardware does it, 0 x anything = 0; same speckle).
-    Next test, built but not yet run (the iPad dropped the connection): `LARECOMP_ZERO_TEXTURES=1` clears every new
-    colour texture to zero, every mip level and slice. Metal leaves new textures undefined: zeros on the Mac, leftovers
-    on iOS. If the speckle goes, a texture the game expects zeroed (e.g. unrendered probe mips) is the cause.
+    Also ruled out on the iPad (2026-10-21, `recomp-test.env` switches): zero-cleared new textures
+    (`LARECOMP_ZERO_TEXTURES=1`, the frame stays byte-identical), IEEE maths in the shaders (`LARECOMP_SAFE_MATH=1`),
+    mip levels (`LARECOMP_LOD_MAX=0`: the scenery changes, Mario's speckle doesn't). Positions are already invariant.
+    The frame is deterministic. The speckle shows what's behind Mario (sky, water), so his pixels are dropped. Lead:
+    3D World Mario is drawn into a character layer (RG11B10F + RG16F with his view depth, cleared to 1.0), then a
+    composite discards where that depth says "nothing" or loses to the scene depth (bring-up notes "Linux arm64").
+    Lavapipe shows NaNs in the same composite (his eyes). Next: an Xcode GPU capture on the iPad (needs it local,
+    not over Tailscale) of the character layer's RG16F target and the composite's discard.
   - ⬜ The water in the background looks a bit too shiny. The 3D World liquid surfaces already differ most from
     Ryujinx (castle lava 2.28 % px > 24), so check specular and reflection on liquids.
 
-- ⬜ **Vulkan fixes found by the SM35 port (2026-10-21, not yet in SMM2):** (1) shader global memory is one storage
+- 🔄 **Vulkan fixes found by the SM35 port (2026-10-21; (1) ported on branch `b5-dev`, compiles, Metal output
+  unchanged, not yet run on a Vulkan device):** (1) shader global memory is one storage
   buffer over the 3.2 GB heap, but a GPU only reaches `maxStorageBufferRange` of it (128 MB on lavapipe and Adreno,
   1-2 GB on some desktop GPUs; reads past that give 0): SM35 uses bufferDeviceAddress where available
   (sm35recomp e292dce). (2) without host memory import (Android emulator, many phones) global memory reads give 0:
@@ -362,11 +389,111 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
   adb pushed into Android/data/<pkg>: SM35 falls back to the internal folder (a5e5395). Likely behind SMM2's
   Vulkan-only differences (3D World Mario on lavapipe); port when Windows / Linux / Android get attention.
 
+### GitHub issues (triaged 2026-10-22; owner: no replies needed, fix what they reveal)
+Release times (UTC, 2026-10-21): v0.3.0 06:51, v0.3.1 09:23, v0.3.2 12:58. #9 (prod.keys legal): the owner's, no action.
+Setup failures first, since they block new players:
+- ✅ (v0.4.1) **"hactool stopped without a message (exit code 1)" on the cnmt NCA** (#10, #17, a comment on #7;
+  "no output" in v0.2.1: #4, #6). hactool did say why, but its message mentions keys ("Invalid NCA header! Are keys
+  correct?", "Key (...) must be 32 hex digits!"), and `masked()` drops every line with "key" in it, so setup called
+  it a crash. Now: a header key that doesn't fit says so (`KEYS`, also in sysdata.py), and our hactool build skips a
+  key file line it can't read (a known key whose value is the wrong length, a title key listed twice) instead of
+  exiting on it, without printing the value (`tools/build_hactool.sh`; checked with a broken key file on macOS and
+  the Windows build under Wine). Emulators' key files often have such a line, which is why "it works in Ryujinx".
+- ✅ (v0.4.1) **Setup copied and linked its own last result onto itself** when the chosen folder held the data
+  folder (on Windows the program's folder is the data folder): the scan found `extracted/exefs` and
+  `extracted/romfs` as sources. It now skips setup's own output. Likely #11 ("keep the game files out of the
+  program's folder" fixed it for two players); its crash after setup still needs a log.
+- ✅ (v0.4.1) **Windows: "vkCmdBeginRendering not found in vulkan-1.dll" before anything shows** (#15): the exe
+  imported 17 Vulkan 1.2 / 1.3 commands (and VMA two more), which an older Vulkan loader doesn't have, so Windows
+  refused to start it. They're now fetched from the device (`vk.h` `VK_LATE_FUNCS`, VMA's dynamic functions); the
+  cross-built exe imports no 1.2 / 1.3 command. A driver without Vulkan 1.3 still can't run it, but now says so.
+- 🔄 **"The game code couldn't be prepared" with disk space free** (#5, #12): the generator failed. Its main module
+  peaks at ~3.2 GB of memory with the sdk one beside it, and the launcher started up to (RAM − 2) compilers of
+  ~1 GB each at the same time. Now (RAM − 6), a MemoryError is named, and the hint says disk space *and* memory.
+  Needs the reporter's `smm2recomp.log` (the generator's last line is in it) to confirm.
+- 🔄 **Crash after setup** (#11, v0.3.2): see the self-copy fix above; needs `smm2recomp.log` if it still happens.
+- ⬜ **Firmware 20.0.0+ "shared fonts not found" / "No system titles could be read"** (#16; 18.0.0 works with the
+  same keys): not a hactool limit, since the owner's firmware 21.0.0 sets up fine on v0.4.0. Needs the setup log and
+  where the firmware came from (Ryujinx install, Eden, a firmware zip).
+- ✅ **Course World bounces to the title, "create a Mii"** (#14, #13's second half): fixed in v0.4.0.
+- ✅ **Applying the update crashed (access violation)** (#7, v0.3.1): fixed in v0.3.2.
+- ⬜ **Steam Deck runs slowly** (#13, v0.3.2): needs the frame rate and render scale; try a lower render scale.
+- ✅ **PR #8 merged** (2026-10-22, x86-64-v2 baseline, gamebuild.c builds v3 where the CPU has AVX2; in v0.4.1).
+  Follow-up, minor: the game code's id comes from the v2 flags, so a data folder moved from an AVX2 machine to an
+  older CPU keeps its v3 build (illegal instruction). Put the chosen level in the id when it matters.
+- ✅ **100 Mario run start: the Peach-carried-away demo** (owner, 2026-10-22: "on Normal the animation seems to be
+  missing; Easy showed it"): the SMM1 layout player kept at most 48 animations per layout and dropped any more
+  without a word. A world map on the select screen holds its dots, Mario, the castles and the beat bounce on Course
+  World's music, so on the 16-dot maps (Normal, Expert) the run's Telop and MoveKuribo never started: no banner,
+  no Goombas, Peach already in Bowser's castle. Now 160, with a log line if it ever fills. Checked in game for all
+  four difficulties (select -> New Game, music bounce on): banner, Goombas carrying Peach, Peach on the castle.
+  Offline it had always played (no music there, so no bounce). Super Expert's banner text ran past the window
+  (680 wide in a 600 box): SMM1 draws message text in the system font (`FontInfo.byml`: MessageFont is CafeStd),
+  narrower than our bitmap stand-in, so a line wider than its box is now narrowed to fit (`lyt_player.c`). Not
+  compared in Cemu this round.
+- ✅ **100 Mario ending, each difficulty** (owner, 2026-10-22: "Normal didn't show the Peach animation; Easy did"):
+  Peach's and Toad's looping wait pattern stopped on its last key after one loop (the rescue draws it on the
+  scene's clock), so NSMBU / 3D World Peach froze after 39 frames, SMW's blink after its first, while Easy's Toad
+  (80 frames) still moved for longer. `bfres_texpat_at` now wraps looping patterns. Checked offline
+  (`test_smm1ui --flow ending:<d>:0:<style>`) for all four difficulties x five styles: Toad on Easy, Peach on the
+  rest, the Thank-you line by difficulty (Easy row 1, Normal 2, Expert / Super Expert 3), the credits roll; in game
+  (Normal, NSMBU) Peach and her line at 60 fps. Music is chosen by difficulty and style as in the spec (not
+  listened to). Not compared in Cemu this round.
+
+### Owner's v0.4.2 reports (2026-10-22: "100 Mario is working great" apart from these)
+- 🔄 **A rare 100 Mario hang after a death** (once): after the lives card the fade back into the course never came;
+  the game ran on at 60 fps and the menu opened. Not reproduced (a lava course, misses with quick level return on
+  and off: each came back). Two ways it could stick are now caught, said and undone: the bridge holding the course
+  for the flow (`hundred_flow_ready_to_start`) longer than 10 s, and the flow's black over a course longer than
+  10 s (`[hundred] black over the course`); both log the flow's whole state (`hundred_flow_describe`), and each
+  miss logs the lives and the flow's state. If it comes back, the log says which.
+- ⬜ **Course World "Hot" is always the same courses, from 2020**: check what our server and TGRCode's upstream
+  return for Hot (sort, date window, caching); fix ours if it's ours.
+- ⬜ **Course lists freeze at each new page**: prefetch ahead (a bigger batch from the server / TGRCode, pages
+  served from it, refilled in the background), within TGRCode's rate limit.
+- ⬜ **Thumbnails missing in some cases**: find which (server course, TGRCode, missing picture, format) and fix.
+
+### Next features (owner's order, 2026-10-22)
+1. 🔄 Co-op in Endless / 100 Mario (see the entry under Future): Mods-tab switch built; spawn, controllers and the
+   shared-lives rule checked in game; left: a clear by either player, the ending with all players, a real second pad
+2. ⬜ Lanky Mario (SMM1's Weird Mushroom) as an SMM1 mod switch, off by default
+   - with it: **mod triggers** (owner, 2026-10-22): an overlay-menu section with a button per triggerable mod effect
+     (Lanky Mario now, a chosen costume now, later others), for the current player in a course, greyed out
+     elsewhere; a small registry in the mods code (name, available(), trigger()). A try-it-out helper kept apart from
+     the normal game: off in 100 Mario / Endless runs (no records). The costume trigger comes with item 4
+3. ⬜ Mid-air shell jumps (finish, with the test course)
+4. ⬜ Mystery Mushroom costumes: a hit removes the costume, the taunt, the reward window, more than one per course
+5. ⬜ Edit any course: the d-pad onto Make, the upload credit, Edit on the course card / Endless
+6. ⬜ Course World thumbnails: check whether they already work; fix only if not
+7. ⬜ Super Worlds
+8. ✅ Disable the buttons that don't work yet (2026-10-22, checked in game): every Course World entry works or answers
+   the way SMM2 does when a service is off. Ninji Speedruns showed "A communication error occurred": its two
+   requests (event count main+0x14f3980, event list +0x14f3770) are now answered empty, so it shows SMM2's own "No
+   active speedruns / No courses found". Super Worlds and Network Play's modes already say SMM2's "This service is
+   not active right now" (the application config's switches); Leaderboards opens (empty until our server ranks).
+9. ⬜ Online multiplayer via Nextendo (branch `nextendo`): the gen.py jump-table change + regen + retest, the iOS
+   compile, a live sign-in, Network Play, then merge once verified. The SMM2 client ID is in the owner's notes. Live tests:
+   one device per internet connection; the account needs a verified e-mail and a linked Discord
+10. ⬜ iPhone layout (the notch-safe L / ZL: verify)
+11. ⬜ Exact sound timing (owner: seems fine now; only if cheap)
+
 ### Future (owner's backlog, not scheduled)
 - 🔄 **120 fps output by frame generation** (owner, 2026-10-19): built 2026-10-20 (Video tab, `frame_gen`,
   off by default; our own interpolation for Metal and Vulkan, not MetalFX's; game logic stays 60 Hz). Owner on
   the iPad: "doesn't look amazing at this stage". Left: picture quality, the iPad's shown-frames count, a real
   120 Hz display. Spec: `docs/superpowers/specs/2026-10-20-frame-generation-design.md`
+- ✅ **Quick level return** (owner, 2026-10-21; built 2026-10-21): a Mods-tab switch, off by default. After a miss the
+  game's own miss, lives card and restart are fast-forwarded unseen, so lives still count and nothing changes when
+  it's off. Coursebot 1.6 s instead of ~4.6, 100 Mario 2.3 s instead of 9.7, test play's return to the editor about
+  0.5 s. Owner: skip the lives card, and apply it in test play. `recomp/docs/mods.md`, DECISIONS 2026-10-21
+- ✅ **100 Mario New Game on SMM2's menu** (2026-10-21): the bridge's presses could back out to Course World (then
+  the map's Play presses opened the Mii outfit editor) when the run had no clears yet or the difficulty needed no
+  change. It now reads whether SMM2's menu shows Continue (the menu's record: lives and a clear). Checked both ways
+- ✅ **Setup from NSPs on every OS** (testers' Windows reports, 2026-10-21): applying the 3.0.3 update was broken
+  everywhere. The base RomFS was handed over in the wrong coordinates, and a memcpy overlap in hactool crashed it on
+  Windows. Fixed; the result is byte-identical to a known-good 3.0.3 extraction (macOS, and the Windows hactool
+  under Wine). An open report: one tester's firmware step reads no NCA at all ("117 NCAs unreadable"). The owner's
+  firmware works under Wine, so that's their keys or a newer firmware
 - 🔄 **Local multiplayer input, players 1-4** (owner, 2026-10-20; built 2026-10-21): every further controller is
   the next player, Npad No. 2..4, through the same bindings (`runtime/hle/input.c`). Player 1 keeps the keyboard,
   the on-screen controller and the first controller. `GetNpadState(s)` and `GetNpadStyleSet` report players 2-4
@@ -375,11 +502,71 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
   `LARECOMP_INPUT2` scripts a player 2 for tests. Checked in game (macOS, scripted player 2): a downloaded course's
   Play Together shows Mario and Luigi on the card, and in the course Luigi runs on player 2's input while Mario
   stands. Left: real second / third / fourth controllers (none here), and controllers connected mid-game.
-- ⬜ **Endless / 100 Mario in local co-op** (owner, 2026-10-20; needs the item above): challenge runs played
-  together on one device. SMM2's Endless and SMM1's 100 Mario are single-player, so this is a mod, off by
-  default: start each challenge course the way Play Together does, and decide the rules (shared or separate
-  lives, a clear when any player reaches the goal, whose form the ending shows). `mods/endless.c` keeps one
-  run per difficulty today. Not designed yet.
+  2026-10-22: a Controls-tab switch "Controllers start at player 2" (`pads_from_p2` in `smm2.ini`, off by default):
+  the keyboard and the on-screen controls are player 1 and every controller is the next player, so a keyboard and
+  one controller (the owner's PS5 pad) play two-player. Changing it lets go of every controller and takes them again
+  under the new rule. Seen in the menu; with real controllers: not yet tried
+- 🔄 **Endless / 100 Mario in local co-op** (owner, 2026-10-20; rules decided 2026-10-21: as SMM2's local
+  multiplayer does, lives shared, a life lost when all players are down, cleared when anyone reaches the goal).
+  Groundwork 2026-10-21:
+  - Play Together is the Coursebot's course start main+0x16e3d60 (scene change reason 6). It reads the player count
+    from `*(main+0x2a66498) + 0x494` (2 in a real Play Together course, 0 on the title course) and a per-player
+    character list (+0x330).
+  - The course set-up (main+0x16dfe..) takes that count only when a mode field (`[x24 + 0x880] -> +0x28 -> +0x18`)
+    is 1; retries keep the last course's count; anything else, Endless included, stores one player (main+0x16dffb4).
+  - A hook point there (`patches.py`, `hooks.c`; `RECOMP_COOP_TEST=<n>`) writes n players. In a 100 Mario course
+    with a scripted player 2 the count reads 2 in the course, but only Mario spawns: the second player needs more
+    than the count. 2026-10-22: the set-up's two per-player records (0x100 bytes each, at +0x18) are byte for byte
+    the same as a real Play Together course's, so the data isn't what's missing: Endless's play scene doesn't create
+    a second player actor. Next: find where the play scene creates players (Ghidra project copy:
+    /Volumes/SSD/smm-work/ghidra/agents/edit-smm2, script research/decomp/smw-goal/scripts/Multi.java; JAVA_HOME is
+    Homebrew's openjdk@21). Not in v0.4.0.
+  - 2026-10-22, the spawn found (function profile `LARECOMP_FNPROF` of a Play Together course start against a 100
+    Mario one, then `LARECOMP_FNPROF_BT` callers): players are created by the play scene's set-up (main+0x16c2c70,
+    called from the scene manager main+0x178ed80) in a loop at main+0x16cd600 over a list (`[x25 + 0x28]` entries
+    at `[x25 + 0x30]`, each made through main+0xe443c0 -> ... -> the player constructor main+0x1587d10): one entry
+    in 100 Mario, two in Play Together. Right after, main+0x16cd670 compares a count (`[main+0x2c01cf0] + 0x98`)
+    with a 4-bit "players present" mask (`+0x54`): likely the multiplayer session. Next: where that list is filled
+    (and whether the session's mask must hold the second player), then fill it for co-op.
+  - 2026-10-22, correction and the real spot: the list at `[*(main+0x2a6bcd0)] + 0x28 / +0x30` is the course's two
+    areas (main and sub-area: always two entries, 0x188 bytes each, made in the play scene set-up main+0x16aac20),
+    not players. Players are actors (profile "Player", main+0x2a56388) created by main+0xe581d0, which loops over a
+    player count (w22, player index in w23) chosen by the play mode `[*(main+0x2a6bcd0)] + 0xe0`: 1 takes the course
+    set-up's count (`[*(main+0x2a66fb8)] + 0x40`; 2 in one mode), 2 the online session's (`[*(main+0x2c01cf0)] +
+    0x98`), anything else exactly one player. A hook point on that mode load (main+0xe59614) forces 1 under
+    `RECOMP_COOP_TEST` to test spawning player 2 in Endless.
+  - 2026-10-22, **Luigi in a 100 Mario course, on player 2's controller** (test only, `RECOMP_COOP_TEST=2` with
+    `LARECOMP_INPUT2`): two hook points. (1) The course's play mode, stored by the player spawn at main+0xe58328
+    (`[*(main+0x2a6bcd0)] + 0xe0`: 0 one player, as in Endless and the title course; 1 local multiplayer, as in Play
+    Together; 2 online), is set to 1 with the set-up count 2: Luigi spawns next to Mario and each player is on their
+    own controller (checked both ways: player 1 moves only Mario, player 2 only Luigi).
+    (2) The controllers' poll (sead's Npad device, main+0x263d90) reads Npads 0 .. `[x0 + 0x28]`; Endless leaves it
+    at 1, now 2 (hook at +0x263db0), so the game reads player 2's controller and Luigi walks and jumps on it.
+    SMM2's own lives card already shows Mario and Luigi side by side.
+  - 2026-10-22, **the Mods-tab switch** "Co-op in Endless and 100 Mario" (`coop`, `RECOMP_COOP`; off by default;
+    `mods/coop.c`, DECISIONS): with it on and two or more players' controllers connected, an Endless / 100 Mario
+    course is started in local multiplayer (3D World courses stay single player: SMM2 has no multiplayer there).
+    **Shared lives checked in game** (a one-course test server with a lava course, both players scripted): one
+    player down (state 3 at Endless's miss request) costs nothing while the other stands; both down costs one life
+    (100 -> 99 -> 98) and SMM2's retry brings both back. Left: a clear by either player, the ending with all
+    players, a real second controller.
+  - Owner, 2026-10-22: the 100 Mario ending shows all the players in the rescue scene if that's reasonable, else
+    whoever cleared the last course; the lives card shows each player ("give that a shot").
+- ✅ **User report (2026-10-22, platform not stated, maybe Windows): Course World says "make an ID" and goes back;
+  only Story mode is unlocked.** Fixed 2026-10-22: reproduced with an empty data folder on the Mac. Without an
+  `smm2mods.ini` the desktop builds left the online mod off (only iOS turned it on), so Course World ran SMM2's own
+  sign-in ("let's create a Mii and a name"), waited and fell back to the title. Every platform now defaults to the
+  online mod with TGRCode courses through the built-in server (`games/smm2/mods/settings.c`); the same empty folder
+  then enters Course World's first-visit pages with the default Mii "Player". A new save offers Story Mode, Course
+  World and Coursebot from the start, so "only Story" was this bounce. Report text: The owner doesn't see it on the iPad. Likely a fresh-save / first-run case rather
+  than an OS one: a new player meets SMM2's first-time setup (maker profile / Mii / user creation, Course World's
+  ID step), and the am / mii / acc answers may end it at once. Check by reproducing with an empty save / data folder
+  first; also check what a new save unlocks. Not started (paused; the owner sets the order).
+  A second report, likely the same bug (Windows or Mac): "click Course World, it goes in and immediately back to the
+  main screen". When reproducing with an empty save, also check: which version they're on (v0.3.0 had no built-in
+  server, though that showed "communication error"); the `courses=` / server settings a fresh data folder gets; and
+  whether Course World's sign-in (our offline answer) fails without a saved account. If it isn't fixed by v0.4.0,
+  the release notes should ask for the version and `smm2recomp.log`.
 - 🔄 **iPhone: on-screen L and ZL sit behind the notch** (owner, 2026-10-20, iPhone 12 mini; built 2026-10-21: the
   controls are offset by the window's left / right safe-area insets, `SDL_GetWindowSafeArea`, updated on safe-area
   and resize events and on touches; not yet seen on the iPhone): the touch
@@ -392,13 +579,23 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
   its jump are likely code (Block.rpx). Notes in `research/specs/smm1-extras-recomp-notes.md` (private). Confirm from the SMM1 files what it is: its
   model and animations, whether it changes the jump or physics, and how it turns up in courses. Then add it behind
   its own switch, next to the Mystery Mushroom costumes (`mods/costume.c`). Not started.
-- ⬜ **Rename the app** (owner, 2026-10-20): desktop (macOS app / menu bar, Windows, Linux, release packages)
-  maybe "Super Mario Maker 2", mobile (iOS / Android home screen, which cuts names past ~12 characters) something
-  shorter such as "SMMaker 2", instead of "SMM2 Recomp" everywhere. Not final: the full name is Nintendo's
-  trademark and the repo and releases are public. Set in `recomp/games/smm2/game.mk` and the packaging scripts
-  (`recomp/tools/make_ios_app.sh`, `bundle_macos.sh`, `make_android_apk.sh`, `package.sh`, `package_lib.sh`) and
-  `.github/workflows/release.yml`; on iOS the short name is `CFBundleDisplayName`. Decide whether bundle IDs, the
-  data folder and release file names change too (changing the iOS bundle ID loses the installed app's data).
+- ✅ **Rename the app** (owner, 2026-10-20; decided 2026-10-21): "Super Mario Maker 2" on desktop (window title,
+  setup screen, macOS app "Super Mario Maker 2.app", Linux menu entry), "SMMaker 2" on iOS and Android home screens
+  (game.mk `GAME_TITLE` / `GAME_MOBILE_TITLE`). Bundle IDs, data folders, exe names and package file names stay, so
+  saves and scripts carry over. From the release after v0.3.1.
+
+### Possible features (not planned)
+- **OpenCourse World as a course source** (owner, 2026-10-22; moved here the same day, "a possible feature for the future"): https://opencourse.world/ selectable as one of the
+  course server options (next to our own server and TGRCode, in the Mods tab's course source setting). Looked at
+  2026-10-22: OCW is a replacement online service for SMM2 3.0.2 / 3.0.3 on Switch (Atmosphere) and Ryujinx. The
+  player signs in (Discord etc.), accepts its EULA, and downloads a mod package plus a personal auth token for the SD
+  card; the game's own online code then talks to OCW's server. Its web API (server.opencourse.world/api/...) is
+  public for course metadata (latest, uncleared, makers, Ninji leaderboards, one-screen thumbnails) but has no web
+  download of course data. So the way in is the game's own network stack (backend local-nex, the Nextendo groundwork)
+  pointed at OCW with the player's token, not a TGRCode-style HTTP source. Needs the owner's OCW account to build and
+  test.
+- **Platform extras** (owner, 2026-10-22: backlog, don't start): a Linux AppImage, a notarised macOS app, a web
+  build.
 
 | Platform | Builds | Boots to title | Plays courses | Frames match Ryujinx | Input replays in sync |
 |---|---|---|---|---|---|

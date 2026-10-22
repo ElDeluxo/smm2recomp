@@ -41,6 +41,27 @@ static void retry_rollback(void) {
 void smm2_mod_after(Cpu *c, uint64_t addr) {
     extern bool costume_after(Cpu *c, uint64_t addr);  // (costume.c: its own hook points)
     if (costume_after(c, addr)) return;
+    if (addr == MAIN_ADDR(0x263db0)) {  // co-op (coop.c): the controllers' poll reads Npads 0 .. w8 ([x0 + 0x28])
+        int n = coop_in_course() ? coop_players() : 0;
+        if (n > 1 && (uint32_t)c->x[8] < (uint32_t)n) {
+            c->x[8] = (uint32_t)n;
+            s32(c->x[0] + 0x28, (uint32_t)n);
+        }
+        return;
+    }
+    if (addr == MAIN_ADDR(0xe58328)) {  // co-op (coop.c): the course's play mode, stored at [x19 + 0xe0] (w8)
+        int n = coop_players(), style = n > 1 ? endless_course_style() : -1;
+        bool on = n > 1 && (uint32_t)c->x[8] == 0 && style >= 0 && style != 4;  // (3D World: no multiplayer in SMM2)
+        if (n > 1 && style == 4) LOG("[mod] co-op: a 3D World course is played alone (no multiplayer in that style)\n");
+        if (on) {
+            uint64_t cnt = g64(MAIN_ADDR(0x2a66fb8));
+            s32(c->x[19] + 0xe0, 1);  // local multiplayer
+            if (cnt) s32(cnt + 0x40, (uint32_t)n);
+            LOG("[mod] co-op: %d players in this course\n", n);
+        }
+        coop_course(on);
+        return;
+    }
     if (!mod_hundred_rules()) return;
     switch (addr - MAIN_ADDR(0)) {
     case 0x15877b0:  // strb w9, [x8, #0x48]: "skipped during the miss demo"

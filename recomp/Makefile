@@ -104,6 +104,8 @@ LLD      := $(if $(CROSS_CC),,-fuse-ld=lld)  # (zig links with its own lld)
 PLATFORM_SRC := runtime/platform/$(if $(IOS),macos,$(patsubst android,linux,$(PLATFORM))).c  # (iOS: the macOS layer, TARGET_OS_IPHONE inside; Android: the Linux one, __ANDROID__ inside)
 IMGUI    := third_party/imgui
 GENFLAGS := -O1 -fno-strict-aliasing -Wno-return-type -Wno-unused-label -fvisibility=hidden -Iruntime
+# the name players see: the game's, a shorter one on phones and tablets (game.mk GAME_MOBILE_TITLE)
+GAME_TITLE := $(if $(filter ios iossim android,$(PLATFORM)),$(or $(GAME_MOBILE_TITLE),$(GAME_TITLE)),$(GAME_TITLE))
 GAMEDEFS := -DGAME_TITLE_ID=$(GAME_TITLE_ID)ull -DGAME_ID='"$(GAME_ID)"' -DGAME_TITLE='"$(GAME_TITLE)"' -DGAME_BUNDLE_ID='"$(GAME_BUNDLE_ID)"' \
             -DGAME_DISPLAY_VERSION='"$(GAME_DISPLAY_VERSION)"'
 
@@ -190,7 +192,7 @@ else ifeq ($(PLATFORM),linux)
 EXE      := $(B)/$(GAME_ID)recomp
 DEPINC   := $(if $(DEPS),-I$(DEPS)/include)
 ifeq ($(ARCH),x86_64)
-GENARCH  ?= $(if $(CROSS_CC),-mcpu=x86_64_v3,-march=x86-64-v3)  # AVX2 + FMA for the lifted FP/SIMD code (checked at startup; zig: -mcpu)
+GENARCH  ?= $(if $(CROSS_CC),-mcpu=x86_64_v2,-march=x86-64-v2)  # baseline for the lifted FP/SIMD code (gamebuild.c upgrades to v3 where the CPU has AVX2/FMA/BMI2; startup only requires v2)
 endif
 GENFLAGS += $(GENARCH) -fPIC
 OSFLAGS  := -Wno-format
@@ -208,7 +210,7 @@ else
 EXE      := $(B)/$(GAME_ID)recomp.exe
 DEPINC   := $(if $(DEPS),-I$(DEPS)/include)
 OSFLAGS  := -D_FILE_OFFSET_BITS=64 -D_POSIX_THREAD_SAFE_FUNCTIONS -D_CRT_RAND_S -DWIN32_LEAN_AND_MEAN -DNOMINMAX
-GENARCH  ?= $(if $(CROSS_CC),-mcpu=x86_64_v3,-march=x86-64-v3)
+GENARCH  ?= $(if $(CROSS_CC),-mcpu=x86_64_v2,-march=x86-64-v2)  # (baseline; gamebuild.c upgrades to v3 where available)
 GENFLAGS += -D_FILE_OFFSET_BITS=64 $(GENARCH)
 LDFLAGS  := $(LLD) -Wl,--stack,16777216 $(if $(DEPS),-L$(DEPS)/lib) -lSDL3 $(FFMPEG_LIBS) \
             -lvulkan-1 -lwinmm -lole32 -lshell32 -lcomdlg32 -luuid -lshaderc_shared -lws2_32 -lbcrypt
@@ -420,7 +422,8 @@ app-macos:
 # The course server inside the app (core/crates/embed) for this target, with cargo (no debug info: it would add ~80 MB
 # to each package)
 EMBED_ENV := $(if $(ZTARGET),ZIG="$(abspath $(ZIG))" ZIGCC_TARGET=$(ZTARGET) \
-             CC_$(subst -,_,$(EMBED_TRIPLE))="$(CURDIR)/tools/zigcc.sh" AR_$(subst -,_,$(EMBED_TRIPLE))="$(CURDIR)/tools/zigar.sh")
+             CC_$(subst -,_,$(EMBED_TRIPLE))="$(CURDIR)/tools/zigcc.sh" AR_$(subst -,_,$(EMBED_TRIPLE))="$(CURDIR)/tools/zigar.sh" \
+             $(if $(filter windows,$(PLATFORM)),CARGO_ENCODED_RUSTFLAGS="-Cdlltool=$(CURDIR)/tools/zigdlltool.sh"))
 embed-server:
 	$(if $(EMBED_TRIPLE),,$(error embed-server: no Rust target for $(TARGET)))
 	cd ../core && rustup target add $(EMBED_TRIPLE) >/dev/null 2>&1; $(EMBED_ENV) CARGO_PROFILE_RELEASE_DEBUG=0 cargo build -p mmk-embed --release --target $(EMBED_TRIPLE)

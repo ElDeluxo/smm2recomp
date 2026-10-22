@@ -1,4 +1,5 @@
 // NVN objects, builders, and state objects (everything except command recording).
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -732,10 +733,27 @@ static void display_pace(int interval) {
     next = (next > now ? next : now) + (uint64_t)interval * vsync;
 }
 
+// Frames the game runs without waiting for the display and without a window image, while a mod fast-forwards
+// (games/smm2/mods/quick_retry.c: a miss's animation and the restart): the frame's GPU work and the per-frame work of
+// the renderers still run. It counts down by one per frame, so a mod that loses track can't leave it on.
+_Atomic int g_present_hidden;
+bool g_frame_hidden;  // (this present's: the backends read it)
+
 NVN(nvnQueuePresentTexture) {
     NvnWindow *w = HOST(NvnWindow, A(1));
     int i = (int)A(2);
-    display_pace(w->interval);
+    int hidden = atomic_load(&g_present_hidden);
+    g_frame_hidden = hidden > 0;
+    if (g_frame_hidden) {
+        atomic_compare_exchange_strong(&g_present_hidden, &hidden, hidden - 1);
+        // (a game's host-drawn screens tick once per presented frame, from the menu layer: they go on ticking, unseen)
+        extern const uint8_t *game_overlay_image(int *w, int *h, int *full, uint64_t *seq);
+        int ow, oh, of;
+        uint64_t os;
+        (void)game_overlay_image(&ow, &oh, &of, &os);
+    } else {
+        display_pace(w->interval);
+    }
     if (i >= 0 && i < w->num) backend_present(HOST(NvnTexture, w->textures[i]));
 }
 

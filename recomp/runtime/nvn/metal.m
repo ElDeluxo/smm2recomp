@@ -1191,7 +1191,8 @@ void backend_present(NvnTexture *t) {
     renderer_submit();  // same queue: the present pass runs after the frame's work
     TexBackend *b = t->backend;
     if (b) b->presented = true;
-    @autoreleasepool {
+    extern bool g_frame_hidden;  // (objects.c: a mod's fast-forward, no window image)
+    if (!g_frame_hidden) @autoreleasepool {
         uint64_t nd0 = SDL_GetTicksNS();
         id<CAMetalDrawable> drawable = [layer nextDrawable];
         uint64_t nd = SDL_GetTicksNS() - nd0;

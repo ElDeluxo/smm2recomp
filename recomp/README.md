@@ -58,7 +58,7 @@ button-glyph font (a desktop font such as DejaVu Sans or Liberation Sans is no s
 
 ## Building (Linux)
 
-Linux runs on Vulkan: x86-64 (with AVX2: Intel Haswell / AMD Zen or newer) or arm64, a Vulkan 1.3 driver (Mesa
+Linux runs on Vulkan: x86-64 (x86-64-v2 baseline, x86-64-v3/AVX2 used when available: Intel Haswell / AMD Zen or newer) or arm64, a Vulkan 1.3 driver (Mesa
 RADV / ANV / NVK, NVIDIA's; Mesa's software lavapipe works, slowly), SDL3 3.2 or newer, the Vulkan loader and shaderc.
 The game code is portable C: on arm64 it is the same generated code as macOS (`generated/smm2`, FP/SIMD as inline
 asm), on x86-64 the portable-C lowering (`generated/smm2-c`, `--simd c`).
@@ -133,7 +133,7 @@ and only says so, with a link; the overlay menu's Mods tab has the switch ("Chec
 
 | Package | Made by | Contents | Size (v0.1.0-test) |
 |---|---|---|---|
-| `SMM2Recomp-macos-arm64.zip` | `make GAME=smm2 app-macos` (`tools/bundle_macos.sh`) | `SMM2Recomp.app`: the runtime (macOS 15+, SDL3 built for it by `tools/build_deps_macos.sh`), Resources: python, tools, gamelib-src, zig, hactool; signed ad hoc or with `RECOMP_MACOS_IDENTITY` | 96 MB (320 MB) |
+| `SMM2Recomp-macos-arm64.zip` | `make GAME=smm2 app-macos` (`tools/bundle_macos.sh`) | `Super Mario Maker 2.app`: the runtime (macOS 15+, SDL3 built for it by `tools/build_deps_macos.sh`), Resources: python, tools, gamelib-src, zig, hactool; signed ad hoc or with `RECOMP_MACOS_IDENTITY` | 96 MB (320 MB) |
 | `SMM2Recomp-windows-x86_64.zip` | `make TARGET=windows-x86_64 GAME=smm2 DEPS=... package` (`tools/package.sh`) | `smm2recomp.exe`, SDL3 / libiconv / shaderc DLLs, the same tools | 113 MB (425 MB) |
 | `SMM2Recomp-linux-x86_64.tar.gz`, `-linux-aarch64.tar.gz` | `make TARGET=linux-<arch> GAME=smm2 DEPS=... package` | `smm2recomp`, `lib/libshaderc.so.1`, the same tools | 113 MB (373 MB), 104 MB (341 MB) |
 

@@ -1766,3 +1766,46 @@ shows one generated frame between each pair of real frames on displays of 100 Hz
 object and camera transforms) was judged far too invasive.
 **Would change:** engine-side motion vectors (would allow MetalFX's interpolator or FSR 3), or rates above 120
 (the passes already take a phase `t`).
+
+## 2026-10-21 — Quick level return: fast-forward the game's own miss, nothing skipped in its logic
+
+**Decision:** a Mods-tab switch, "Quick level return" (`quick_retry` in `smm2mods.ini`, `RECOMP_QUICK_RETRY`),
+off by default. After a miss, the frames from the death fanfare to the restarted course run as fast as the
+machine can and aren't shown (`runtime/nvn/objects.c` `g_present_hidden`): no display pacing, no window image,
+but each frame's GPU work, the renderers' per-frame work and the 100 Mario flow's tick still run.
+- **The game does everything itself**: the miss, the lost life, the lives card, the course set up again. Nothing in
+  its logic is skipped or patched, so lives count as before (100 Mario and Endless: a miss still costs one), clears,
+  checkpoints, Start Over and the skip rules don't change, and with the switch off not one instruction of the game
+  runs differently (the hooks only return).
+- **The end of the fast-forward**: in Endless and 100 Mario the Endless scene's play state running again (after
+  the lives card, which the owner wanted skipped; up to 900 frames); elsewhere (Course World, Coursebot, test play)
+  the first player update after the course is built again (a stretch of frames with no player), each player update
+  extending it by 60 frames up to 360, so it lapses by itself where no player comes (test play's miss returns to the
+  Course Maker). The screen never stays still for long.
+- **Measured** (M-series Mac): a Coursebot course's miss to playing again 1.6 s (SMM2 ~4.6 s); 100 Mario 2.3 s
+  (SMM2 9.7 s, the lives card included); the fast-forward runs at about 270 frames a second.
+- **Applies in the Course Maker's test play too** (owner, 2026-10-21).
+- The death fanfare is heard only for as long as the fast-forward lasts; the next course music cuts it.
+**Why:** the owner asked for a quick retry mod (2026-10-21), off by default and exactly SMM2 when off. Patching
+SMM2's miss sequence (states, timers, the card) would mean changing game logic in several places per mode; running
+the same frames faster changes nothing the game can see except wall time.
+**Would change:** a restart that has to be quicker than the machine can run the miss frames (the reload itself, about
+0.7 s on an M-series Mac, isn't shortened), or the owner wanting the fanfare kept.
+
+## 2026-10-22 — Co-op in Endless / 100 Mario: run the course in SMM2's own local multiplayer mode
+
+**Decision:** a Mods-tab switch, "Co-op in Endless and 100 Mario" (`coop` in `smm2mods.ini`, `RECOMP_COOP`), off by
+default. With it on and more than one player's controller connected, an Endless / 100 Mario course is started in
+SMM2's local multiplayer play mode, the one Play Together uses, with as many players as there are controllers (up to
+four). Three small changes do it (`mods/coop.c`, `hooks.c`, `patches.py`):
+- the course's play mode (`[*0x2a6bcd0 + 0xe0]`: 0 one player, 1 local multiplayer, 2 online), stored by the player
+  spawn, becomes 1 in an Endless course, with the set-up's player count (`[*0x2a66fb8 + 0x40]`) set: SMM2 spawns the
+  players and gives each their own controller, as in Play Together;
+- the controllers' poll reads as many Npads as there are players (Endless leaves it at one);
+- Endless's miss request, which the game sends for any player's miss, costs a life only when no player is left
+  standing (state 3 is down, bit 5 of +0x48c a bubble).
+**Why:** the owner's rules (2026-10-21) are SMM2's local multiplayer ones: shared lives, a life lost when all players
+are down, a clear when anyone reaches the goal. SMM2 already has all of that for Play Together; switching the mode it
+runs the course in reuses it instead of writing multiplayer into Endless. Off, every hook returns at once.
+**Would change:** SMM2's multiplayer rules diverging from the owner's in play (e.g. a bubble rule that isn't wanted),
+or 3D World courses (SMM2 has no multiplayer in that style: those stay single player).

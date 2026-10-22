@@ -245,6 +245,15 @@ HACTOOL_CRASHES = {0xC0000005: 'it crashed: access violation', 0xC00000FD: 'it c
                    0xC0000135: 'a DLL it needs is missing', 0xC0000139: 'a DLL it needs is the wrong version',
                    0xC0000142: 'it could not start', 0xC000007B: 'it is built for another kind of Windows',
                    0xC0000409: 'it crashed: buffer overrun', 0xC0000374: 'it crashed: heap corruption'}
+# ... and the signals that stop it on Linux and macOS (a negative return code)
+HACTOOL_SIGNALS = {11: 'it crashed: segmentation fault', 6: 'it crashed: abort',
+                   7: 'it crashed: bus error (the file or its drive went away while it was read?)',
+                   4: 'it crashed: illegal instruction (a CPU it wasn\'t built for?)', 9: 'it was killed (out of memory?)',
+                   8: 'it crashed: arithmetic error'}
+
+
+BAD_KEYS_HINT = ('Choose the prod.keys dumped from your own console with a current Lockpick_RCM: it must have the keys '
+                 'for this game\'s version. The prod.keys of an emulator that runs the game will also do.')
 
 
 class Hactool:
@@ -266,17 +275,21 @@ class Hactool:
             # (hactool's own wording, masked: never key values)
             tail = [ln for ln in masked(out).splitlines() if ln.strip()][-3:]
             say('log', f'hactool {" ".join(masked(a) for a in args)}: exit code {r.returncode}')
+            if 'Invalid NCA header' in out:
+                # ("... Are keys correct?": masked() drops it as a line about keys, which made it look like a crash)
+                raise SetupError('KEYS', f'{what} failed: prod.keys doesn\'t open its files (the header key is '
+                                 'missing or wrong)', BAD_KEYS_HINT)
             if not tail:
                 # hactool said nothing at all: it didn't start or it crashed, which isn't the keys' fault
                 code = r.returncode & 0xFFFFFFFF
-                why = HACTOOL_CRASHES.get(code, f'exit code {r.returncode} ({code:#x})')
+                why = (HACTOOL_SIGNALS.get(-r.returncode, f'it was stopped by signal {-r.returncode}')
+                       if r.returncode < 0 else HACTOOL_CRASHES.get(code, f'exit code {r.returncode} ({code:#x})'))
                 raise SetupError('HACTOOL_CRASH', f'{what} failed: hactool stopped without a message ({why})',
                                  'Please report this with the setup log. Meanwhile you can extract the game '
                                  'yourself (an emulator\'s "Extract ExeFS / RomFS" of the updated game) and choose '
                                  'the folders instead of the NSP / XCI.')
-            raise SetupError('HACTOOL', f'{what} failed: {" / ".join(tail)}',
-                             'Check that prod.keys is from your console and has the keys for this game\'s version '
-                             '(dump them again with a current Lockpick_RCM), and that the file is complete.')
+            raise SetupError('HACTOOL', f'{what} failed: {" / ".join(tail)}', BAD_KEYS_HINT +
+                             ' Check also that the file is complete.')
         return out
 
 
@@ -420,9 +433,12 @@ def extract_containers(files, hac, stage):
     exefs, romfs = os.path.join(stage, 'exefs'), os.path.join(stage, 'romfs')
     for d in (exefs, romfs):
         shutil.rmtree(d, ignore_errors=True)
+    # The base is its whole decrypted RomFS section (-r --section1), hash levels and all, not the bare RomFS image
+    # (--romfs): the update's relocation table addresses the base in section offsets (3.0.3's: the RomFS data
+    # starts 0x588000 into the section), and hactool's --baseromfs reads them as they are.
     raw = os.path.join(stage, 'base.romfs')
     say('step', 'Extracting the game files')
-    hactool_watched(hac, raw, bsize, 0.05, 0.3, *tk, '-t', 'nca', f'--romfs={raw}', nca, what='Extracting the game')
+    hactool_watched(hac, raw, bsize, 0.05, 0.3, *tk, '-t', 'nca', '-r', f'--section1={raw}', nca, what='Extracting the game')
     os.remove(nca)
     if not os.path.isfile(raw) or os.path.getsize(raw) < (1 << 30):
         raise SetupError('DECRYPT', 'The game couldn\'t be decrypted',
@@ -449,12 +465,16 @@ def extract_containers(files, hac, stage):
 CONTAINER_EXT = ('.nsp', '.xci')
 
 
-def scan_sources(sources):
+def scan_sources(sources, out=None):
     """Extracted ExeFS / RomFS folders and NSP / XCI files in what the player chose (files, or folders searched a few
-    levels down)."""
+    levels down). Setup's own output (out) is skipped: a chosen folder that holds it (on Windows the program's folder
+    is the data folder) would otherwise have its last setup copied and linked onto itself."""
     exefs, romfs, containers = [], [], []
+    own = os.path.realpath(out) if out else None
 
     def walk(d, depth):
+        if own and os.path.realpath(d) == own:
+            return
         if is_exefs(d):
             exefs.append(d)
         if is_romfs(d):
@@ -497,7 +517,7 @@ def scan_sources(sources):
 
 def setup_from_sources(sources, out, keys, hactool, check_hashes=True):
     say('step', 'Looking at the game files')
-    exefs, romfs, containers = scan_sources(sources)
+    exefs, romfs, containers = scan_sources(sources, out)
     good = [d for d in exefs if exefs_version(d) == '3.0.3']
     stage = os.path.join(out, '.extract')
     extracted = None

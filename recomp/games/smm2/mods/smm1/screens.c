@@ -421,6 +421,9 @@ Intro *intro_new(int entry, int d, const CardInfo *info, int cleared, bool had_c
     if ((entry == ENTRY_NEW || entry == ENTRY_RESUME) && handoff && handoff->d == d && handoff->maps[d]) {
         s->map = handoff->maps[d], handoff->maps[d] = NULL;
         s->title = handoff->title, handoff->title = NULL;
+        // (the select's clock goes on: the map's and the title's animations were started on it, e.g. the tab's InL /
+        // InR; from 0 they'd be read before their start, the map off screen and the title mid-slide)
+        s->tick = handoff->tick;
     } else
         s->map = wm_new(d);
     WorldMap *m = s->map;

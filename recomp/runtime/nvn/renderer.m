@@ -40,6 +40,18 @@ static NvnTexture *snap_tex[8];
 static bool snap_ok[8];
 static uint64_t op_counts[CMD_COUNT];
 bool g_debug_frame;
+static bool debug_draw_fs_match(uint64_t fs) {  // LARECOMP_DEBUG_DRAW_FS (unset: every draw)
+    const char *e = getenv("LARECOMP_DEBUG_DRAW_FS");
+    if (!e || !*e) return true;
+    for (const char *p = e; *p;) {
+        char *end;
+        unsigned long long v = strtoull(p, &end, 16);
+        if (end == p) break;
+        if (v == fs) return true;
+        p = *end == ',' ? end + 1 : end;
+    }
+    return false;
+}
 void renderer_save_texture(id<MTLTexture> tex, const char *path);
 void renderer_save_texture_alpha(id<MTLTexture> tex, const char *path);
 static char stats_text[320];
@@ -1770,6 +1782,10 @@ static void resolve_feedback(Prog *pr) {
                 d.sampleCount = src.sampleCount;
                 d.usage = MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView;
                 d.storageMode = MTLStorageModePrivate;
+                // (a snapshot of a depth buffer is sampled through an ordinary texture2d, as the guest's own depth
+                // textures are: uncompressed like them, metal.m. The compressed default gave 3D World's character
+                // composite slightly-off depths on the iPad M5, so its depth test flipped pixel by pixel: speckle)
+                if (renderer_format_is_depth(t->format)) d.allowGPUOptimizedContents = NO;
                 dst = [dev newTextureWithDescriptor:d];
                 copies[key] = dst;
             }
@@ -2997,7 +3013,9 @@ static void draw(CmdRec *r, bool indexed) {
     }
     }  // runs
     stat_draws++;
-    if (g_debug_frame && ENV("LARECOMP_DEBUG_EACH_DRAW")) {  // (debug) the target after every draw: pass_NNN.png
+    // (debug) the target after every draw: pass_NNN.png; LARECOMP_DEBUG_DRAW_FS=<hex>[,<hex>...]: only after draws
+    // with those fragment programs (guest code addresses, as the draw log prints them)
+    if (g_debug_frame && ENV("LARECOMP_DEBUG_EACH_DRAW") && debug_draw_fs_match(st.program ? st.program->stages[1].code_addr : 0)) {
         LOG("[draw] ^ saved as pass_%03d\n", debug_pass_no);
         end_pass();
         st.rt_dirty = true;

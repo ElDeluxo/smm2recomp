@@ -187,7 +187,10 @@ SMM2's window of a downloaded course has only Play, Play Together and Delete, so
   empty My Courses slot works, and the typed name now arrives intact ("Edited Copy"; the swkbd UTF-16 fix). The
   d-pad cursor still goes Play → Delete → the list tabs, skipping Make. The game's enable call (main+0x761190) only
   sets the button's enabled bytes (+0x3a / +0xbc in its two lists) and a bit in a pane controller's mask (+0x218 →
-  +0x14b0), so the cursor's targets come from somewhere else (not found yet). On that run SMM2's current course was
+  +0x14b0), so the cursor's targets come from somewhere else (not found yet). 2026-10-21: the controller's
+  +0x18 is a list of cursors (one per input index), each pointing at the button it's on (+0x10); disabling a focused
+  button only detaches the cursor (main+0x74dad0), and enabling attaches nothing. So the d-pad's neighbours are kept
+  elsewhere still (likely per window, built when the list's buttons are set up) [?]. On that run SMM2's current course was
   slot 2, not the download, so the Course Maker took the download from storage, not the reset copy. The copy and the
   editor's Save / Load card show the yellow arrow mark. Upload is greyed until a clear check, which is SMM2's normal
   rule.
@@ -529,6 +532,56 @@ tab's "Muncher hit box (SMM1)" switch, `muncher_smm1_hitbox=0/1` in `smm2mods.in
   on, he reaches the floor at -0.7 and +0.8 and dies at the others, pushed out 2 px later than without the mod. Big
   Munchers and enemies on Munchers weren't run.
 - Research (private): `research/specs/objects/57-muncher.md` (section "Hit box").
+
+## Quick level return (`games/smm2/mods/quick_retry.c`)
+
+After a miss the course starts again (at its start or the checkpoint) much sooner. Off by default: the Mods tab's
+"Quick level return" switch, `quick_retry=0/1` in `smm2mods.ini`, or `RECOMP_QUICK_RETRY=0/1` (wins over the ini).
+It applies immediately.
+
+- **How:** the game plays its own miss (the lost life, the lives card, the course set up again). The frames from
+  the death fanfare until the restarted course run as fast as the machine can and aren't shown
+  (`runtime/nvn/objects.c` `g_present_hidden`): no display pacing and no window image, but each frame's GPU work,
+  the renderers' per-frame work and the 100 Mario flow's tick still run. Nothing in the game's logic is changed.
+  Lives count as before (100 Mario and Endless: a miss still costs one), and so do clears, checkpoints and skips.
+  Off, the hooks only return.
+- **Start:** the death fanfare (music state 7: `costume.c` `down_fanfare`, main+0x17a4bc0).
+- **End:** in Endless and 100 Mario, the Endless scene's play state running again (`bridge.c` `play_exec`,
+  main+0x1bb9440), up to 900 frames. Elsewhere, the first player update after frames without one (`trace.c`), each
+  update extending the fast-forward by 60 frames, up to 360. Where no player comes (test play's miss goes back to
+  the Course Maker) it lapses by itself.
+- **Measured** (M-series Mac, muted test runs), miss to playing again:
+
+  | | SMM2 | Quick level return |
+  |---|---|---|
+  | Coursebot course | ~4.6 s | 1.6 s |
+  | 100 Mario (lives card included) | 9.7 s | 2.3 s |
+
+  Test play's miss went back to the Course Maker about 0.5 s after the miss. About 0.7 s of each restart is the
+  course's reload, which the fast-forward can't shorten. With the switch off, the same 100 Mario run missed at the
+  same point, took SMM2's 9.7 s, and never ran above 60 fps.
+- **Test:** a one-course server holding `testcourses/3W_water.course`, the 100 Mario recipe above with
+  `courses=server` (a copy of `smm2mods.ini` through `RECOMP_MOD_INI`), `RECOMP_HUNDRED_INPUT="5950:A:8,6150:A:8,6350:A:8"`
+  for the flow's map, and right held from frame 6700: Mario misses at frame ~9780. `LARECOMP_FPS_INTERVAL=0.25`
+  shows the fast-forward's rate. Don't save frames during it: the PNG writes slow every frame down.
+
+## Co-op in Endless and 100 Mario (`games/smm2/mods/coop.c`)
+
+A Mods-tab switch, off by default (`coop=0/1` in `smm2mods.ini`, `RECOMP_COOP=0/1`). With it on and two or more
+players' controllers connected (Settings > Controls: every further controller is the next player; "Controllers
+start at player 2" makes the keyboard / on-screen controls player 1), each Endless Challenge and 100 Mario course
+is played the way Play Together plays: Mario, Luigi, Toad and Toadette, each on their own controller.
+
+- **Rules** (owner, 2026-10-21): SMM2's local multiplayer ones. A player who is down comes back in a bubble while
+  another stands; a life is lost only when every player is down; anyone reaching the goal clears the course. The
+  lives card shows every player.
+- **3D World courses** are played alone (SMM2 has no multiplayer in that style).
+- **How**: the course's play mode (`[*0x2a6bcd0 + 0xe0]`) is made SMM2's local multiplayer one where the player spawn
+  stores it, with the set-up's player count; the controllers' poll reads as many controllers as there are players;
+  Endless's miss request, sent for any player's miss, costs a life only when no player stands. Hook points in
+  `patches.py`, handlers in `hooks.c`; DECISIONS 2026-10-22.
+- **Tests**: `RECOMP_COOP_TEST=<n>` plays as if n players were connected; `LARECOMP_INPUT2` scripts player 2.
+  The log says `co-op: <n> players in this course`, and at each miss request every player's state.
 
 ## The game's own network stack (backend local-nex): groundwork for Nextendo and a local NEX server
 

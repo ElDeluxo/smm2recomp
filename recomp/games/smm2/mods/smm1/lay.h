@@ -11,10 +11,14 @@ typedef struct {
     float speed;
 } LayTrack;
 
+// (a world map has many at once: its dots, Mario, the castles, the beat bounce on Course World's music; 48 filled up
+// on the 16-dot maps, and the run's opening demo, Telop and the Goombas carrying Peach, no longer started)
+#define LAY_TRACKS 160
+
 typedef struct Lay {
     LInst *in;
     LRes *res;
-    LayTrack tr[48];
+    LayTrack tr[LAY_TRACKS];
     int ntr;
 } Lay;
 

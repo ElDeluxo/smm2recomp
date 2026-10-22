@@ -609,7 +609,8 @@ static void *job_thread(void *) {
             return NULL;
         }
         int cores = SDL_GetNumLogicalCPUCores(), ram_gb = SDL_GetSystemRAM() / 1024;
-        int jobs = cores < ram_gb - 2 ? cores : ram_gb - 2;  // (a compiler takes up to ~1 GB)
+        // (a compiler takes up to ~1 GB, and the generators, which run meanwhile, ~4 GB together)
+        int jobs = cores < ram_gb - 6 ? cores : ram_gb - 6;
         if (getenv("RECOMP_BUILD_JOBS") && atoi(getenv("RECOMP_BUILD_JOBS")) > 0) jobs = atoi(getenv("RECOMP_BUILD_JOBS"));
         GameBuildOpts o = {build_progress, jobs > 1 ? jobs : 1};
         char w[512] = "";
@@ -617,7 +618,7 @@ static void *job_thread(void *) {
         if (!gamebuild_run(root.c_str(), &o, w, sizeof w)) {
             if (g_cancel) return NULL;
             fail(2, std::string("The game code didn't build: ") + w,
-                 "Make sure there are about 4 GB free, then try again. If it keeps happening, report it on GitHub "
+                 "Make sure there are about 4 GB of disk space and 4 GB of memory free, then try again. If it keeps happening, report it on GitHub "
                  "with the log.", std::string(rt_data_root()) + SEP "smm2recomp.log");
             return NULL;
         }

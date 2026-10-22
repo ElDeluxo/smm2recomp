@@ -19,9 +19,6 @@
 #include <string.h>
 #include <pthread.h>
 #include <sys/stat.h>
-#if defined(__APPLE__)
-#include <TargetConditionals.h>
-#endif
 
 #include "mod.h"
 #include "hybrid.h"
@@ -51,11 +48,12 @@ void mod_settings_load(void) {
     done = 1;
     snprintf(g_mod.server, sizeof g_mod.server, "http://127.0.0.1:8080");
     snprintf(g_mod.ruleset, sizeof g_mod.ruleset, "hundred");
-    snprintf(g_mod.courses, sizeof g_mod.courses, "server");
-#if defined(__APPLE__) && TARGET_OS_IOS
-    g_mod.hundred = true;  // (iOS: online with courses from TGRCode unless the ini says otherwise)
+    // Online (Course World, Challenge Modes) with courses from TGRCode through the built-in server unless the ini says
+    // otherwise, on every platform: without an smm2mods.ini (a new player's data folder) the desktop builds used to
+    // leave the mod off, and Course World then ran SMM2's own sign-in, asked for a Mii and fell back to the title
+    // (user reports, 2026-10-22; iOS had these defaults already)
+    g_mod.hundred = true;
     snprintf(g_mod.courses, sizeof g_mod.courses, "tgrcode");
-#endif
     g_mod.timeout_ms = 8000;
     FILE *f = fopen(getenv("RECOMP_MOD_INI") ? getenv("RECOMP_MOD_INI") : "smm2mods.ini", "r");
     if (f) {
@@ -230,22 +228,29 @@ static void mod_toggles_changed(void) {
 }
 
 // The tab: the switches above (when there is something to switch), then the SMM1 extras' (smm1_extras.c: one per SMM1
-// feature, always there), then the SMW goal wipe's (smw_goal.c) and the Muncher hit box's (muncher_hitbox.c).
+// feature, always there), then the SMW goal wipe's (smw_goal.c), the Muncher hit box's (muncher_hitbox.c), quick level return's
+// (quick_retry.c) and co-op's (coop.c).
 int smm1_extras_toggles(GameModToggle *out, int room);
 void smm1_extras_toggles_changed(void);
 int smw_goal_toggles(GameModToggle *out, int room);
 void smw_goal_toggles_changed(void);
 int muncher_hitbox_toggles(GameModToggle *out, int room);
 void muncher_hitbox_toggles_changed(void);
+int quick_retry_toggles(GameModToggle *out, int room);
+void quick_retry_toggles_changed(void);
+int coop_toggles(GameModToggle *out, int room);
+void coop_toggles_changed(void);
 static int own_shown;  // (the tab showed the switches above: apply them on a change)
 int game_mod_toggles(const GameModToggle **out) {
-    static GameModToggle all[16];
+    static GameModToggle all[24];
     const GameModToggle *own;
     int n = own_shown = mod_toggles(&own);
     for (int i = 0; i < n; i++) all[i] = own[i];
     n += smm1_extras_toggles(all + n, (int)(sizeof all / sizeof *all) - n);
     n += smw_goal_toggles(all + n, (int)(sizeof all / sizeof *all) - n);
     n += muncher_hitbox_toggles(all + n, (int)(sizeof all / sizeof *all) - n);
+    n += quick_retry_toggles(all + n, (int)(sizeof all / sizeof *all) - n);
+    n += coop_toggles(all + n, (int)(sizeof all / sizeof *all) - n);
     *out = n ? all : NULL;
     return n;
 }
@@ -255,6 +260,8 @@ void game_mod_toggles_changed(void) {
     smm1_extras_toggles_changed();
     smw_goal_toggles_changed();
     muncher_hitbox_toggles_changed();
+    quick_retry_toggles_changed();
+    coop_toggles_changed();
 }
 
 // Overrides are registered before the game's first instruction runs (dispatch reads them on every first call). Each

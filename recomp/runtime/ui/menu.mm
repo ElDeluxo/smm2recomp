@@ -481,6 +481,8 @@ static bool choice(const char *label, int *value, const char *const *names, int 
     return changed;
 }
 
+extern "C" void input_pads_reassign(void);  // runtime/hle/input.c
+
 static bool toggle(const char *label, bool *v) {
     const char *names[] = {"Off", "On"};
     int i = *v;
@@ -586,6 +588,15 @@ static void tab_audio(void) {
 typedef struct { const char *label, *desc; bool *value; bool def; } GameModToggle;
 extern "C" int game_mod_toggles(const GameModToggle **out);
 extern "C" void game_mod_toggles_changed(void);
+typedef struct {
+    const char *label, *desc;
+    bool (*available)(void);
+    void (*trigger)(int choice);
+    const char *choice_label;
+    const char *const *choices;
+    int nchoices;
+} GameModTrigger;  // (runtime/game_hooks.c)
+extern "C" int game_mod_triggers(const GameModTrigger **out);
 extern "C" bool launcher_has_settings(void);   // runtime/ui/launcher.mm: the Mods tab's app section (desktop)
 extern "C" bool launcher_settings_rows(void);
 extern "C" bool online_rows_available(void);   // runtime/ui/online_rows.mm: the Online section (backend, Nextendo account)
@@ -602,6 +613,21 @@ static void tab_mods(void) {
         changed |= opt_toggle(t[i].label, t[i].value, t[i].def, t[i].desc);
     }
     if (changed) game_mod_toggles_changed();
+    // effects to try now (game_mod_triggers): a choice row (e.g. which costume) above its button where it has choices
+    const GameModTrigger *tr;
+    int nt = game_mod_triggers(&tr);
+    static int choice[16];
+    for (int i = 0; i < nt && i < 16; i++) {
+        if (i == 0) opt_section("Try it now");
+        bool on = !tr[i].available || tr[i].available();
+        if (tr[i].nchoices > 0) {
+            if (!on) opt_disable_next();
+            opt_choice(tr[i].choice_label ? tr[i].choice_label : tr[i].label, &choice[i], tr[i].choices,
+                       tr[i].nchoices, 0, tr[i].desc);
+        }
+        if (!on) opt_disable_next();
+        if (opt_button(tr[i].label, tr[i].desc) && on && tr[i].trigger) tr[i].trigger(choice[i]);
+    }
     launcher_settings_rows();  // the app's own: updates, game files
     opt_end();
 }
@@ -665,6 +691,13 @@ static void tab_about(void) {
          "screen, then Play.");
     ImGui::Spacing();
     header("Controls");
+    if (opt_toggle("Controllers start at player 2", &g_settings.pads_from_p2, false,
+                   "The keyboard and the on-screen controls are player 1, and every controller is the next player "
+                   "(player 2, 3, 4), for local multiplayer with a keyboard and one controller. Off: the first "
+                   "controller is player 1's too.")) {
+        settings_save();
+        input_pads_reassign();
+    }
     controls_bindings_draw(ImGui::GetFontSize() / 34);
     ImGui::Spacing();
     header("Menu");
@@ -752,7 +785,9 @@ static void tabs_body(float scale, bool in_game, void (*prelaunch)(float)) {
     static const char *names[] = {"Video", "Audio", "Mods", "", "", "", "", "", "Controls", "Quit"};
     static const int order[] = {8, 0, 1, 2, 9};  // Controls, Video, Audio, Mods, Quit
     const GameModToggle *mods;
-    bool have_mods = game_mod_toggles(&mods) > 0 || launcher_has_settings() || online_rows_available();
+    const GameModTrigger *triggers;
+    bool have_mods = game_mod_toggles(&mods) > 0 || game_mod_triggers(&triggers) > 0 || launcher_has_settings() ||
+                     online_rows_available();
     for (int i : order)  // (Quit: in game only; Mods: when the game has some)
         if ((i != 9 || !prelaunch) && (i != 2 || have_mods)) tabs[ntabs++] = {names[i], i, true};
     int cur = 0;  // g_tab / g_tab_request hold ids

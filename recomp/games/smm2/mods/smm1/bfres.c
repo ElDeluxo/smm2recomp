@@ -332,6 +332,9 @@ static void read_texpat(const B *b, size_t o, BTexPat *p) {
 }
 
 const char *bfres_texpat_at(const BTexPat *p, const char *mat, float frame) {
+    // (a looping pattern from any frame on: the rescue's Peach / Toad play theirs on the scene's clock, and stopped
+    // on the last key after one loop)
+    if (p && p->loop && p->frames > 0) frame = fmodf(frame, (float)p->frames);
     for (int i = 0; p && i < p->nmat; i++) {
         const BMatPat *mp = &p->mat[i];
         if (strcmp(mp->mat, mat)) continue;

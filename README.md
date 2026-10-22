@@ -28,11 +28,11 @@ checks it, recompiles the game code on your computer, and then runs it.
 
    | System | Package | Also needs |
    |---|---|---|
-   | Windows 10 / 11, x64 | `SMM2Recomp-windows-x86_64.zip` | a CPU with AVX2, a Vulkan 1.3 graphics driver ([docs/windows.md](docs/windows.md)) |
-   | Linux, x64 or arm64 | `SMM2Recomp-linux-x86_64.tar.gz`, `-linux-aarch64.tar.gz` | SDL3 3.2+ and a Vulkan 1.3 driver from your distribution (Debian 13, Ubuntu 25.04, Fedora 41, Arch or newer); x64: AVX2 |
-   | macOS 15+, Apple silicon | `SMM2Recomp-macos-arm64.zip` (`SMM2Recomp.app`) | nothing; the app isn't notarized: right-click > Open the first time (macOS then checks the whole app once, which can take a few minutes) |
+   | Windows 10 / 11, x64 | `SMM2Recomp-windows-x86_64.zip` | a CPU with x86-64-v2 (AVX2 used when available), a Vulkan 1.3 graphics driver ([docs/windows.md](docs/windows.md)) |
+   | Linux, x64 or arm64 | `SMM2Recomp-linux-x86_64.tar.gz`, `-linux-aarch64.tar.gz` | SDL3 3.2+ and a Vulkan 1.3 driver from your distribution (Debian 13, Ubuntu 25.04, Fedora 41, Arch or newer); x64: x86-64-v2 (AVX2 used when available) |
+   | macOS 15+, Apple silicon | `SMM2Recomp-macos-arm64.zip` (`Super Mario Maker 2.app`) | nothing; the app isn't notarized: right-click > Open the first time (macOS then checks the whole app once, which can take a few minutes) |
 
-2. **Unpack it and start it** (`smm2recomp.exe`, `./smm2recomp` or `SMM2Recomp.app`). Windows
+2. **Unpack it and start it** (`smm2recomp.exe`, `./smm2recomp` or `Super Mario Maker 2.app`). Windows
    keeps everything in the unpacked folder, so put it somewhere writable.
 3. **Point it at your dump.** The setup screen asks for:
    - **Super Mario Maker 2 with the 3.0.3 update:** the game's NSP or XCI and the update's NSP,
@@ -45,6 +45,16 @@ checks it, recompiles the game code on your computer, and then runs it.
 4. **Set up and play.** The first time it extracts and lays out your files, copies the fonts and
    recompiles the game code with the bundled compiler: a few minutes to half an hour. Then the
    game starts, and later starts go straight to it.
+
+**If something goes wrong,** please open an [issue](https://github.com/smm2recomp/smm2recomp/issues)
+and attach the log files from the program's data folder: `smm2recomp.log` (the program) and
+`logs/setup.log` (the setup's steps). Neither contains key values. The data folder is:
+
+| System | Data folder |
+|---|---|
+| Windows | the unpacked folder, next to `smm2recomp.exe` |
+| Linux | `~/.local/share/smm2recomp` (or `$XDG_DATA_HOME/smm2recomp`) |
+| macOS | `~/Library/Application Support/org.smcraft.smm2recomp` |
 
 The setup screen tells you when a newer release is out and links to it; nothing is downloaded by
 itself. Android and iOS / iPadOS have no download: they're built yourself from source

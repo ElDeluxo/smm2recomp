@@ -16,6 +16,33 @@
 #include <vk_mem_alloc.h>  // (Debian / Ubuntu libvulkan-memory-allocator-dev)
 #endif
 
+// The Vulkan 1.2 / 1.3 commands, fetched from the device when it is made (device.c) instead of imported: a Vulkan
+// loader older than that (an old vulkan-1.dll) lacks them, and Windows then wouldn't start the program at all.
+#define VK_LATE_FUNCS(X) X(CmdBeginRendering) X(CmdEndRendering) X(CmdPipelineBarrier2) X(CmdSetCullMode) \
+    X(CmdSetDepthBiasEnable) X(CmdSetDepthCompareOp) X(CmdSetDepthTestEnable) X(CmdSetDepthWriteEnable) \
+    X(CmdSetFrontFace) X(CmdSetPrimitiveRestartEnable) X(CmdSetPrimitiveTopology) X(CmdSetStencilOp) \
+    X(CmdSetStencilTestEnable) X(CmdWriteTimestamp2) X(QueueSubmit2) X(GetSemaphoreCounterValue) X(WaitSemaphores)
+#define X(n) extern PFN_vk##n vkl_##n;
+VK_LATE_FUNCS(X)
+#undef X
+#define vkCmdBeginRendering vkl_CmdBeginRendering
+#define vkCmdEndRendering vkl_CmdEndRendering
+#define vkCmdPipelineBarrier2 vkl_CmdPipelineBarrier2
+#define vkCmdSetCullMode vkl_CmdSetCullMode
+#define vkCmdSetDepthBiasEnable vkl_CmdSetDepthBiasEnable
+#define vkCmdSetDepthCompareOp vkl_CmdSetDepthCompareOp
+#define vkCmdSetDepthTestEnable vkl_CmdSetDepthTestEnable
+#define vkCmdSetDepthWriteEnable vkl_CmdSetDepthWriteEnable
+#define vkCmdSetFrontFace vkl_CmdSetFrontFace
+#define vkCmdSetPrimitiveRestartEnable vkl_CmdSetPrimitiveRestartEnable
+#define vkCmdSetPrimitiveTopology vkl_CmdSetPrimitiveTopology
+#define vkCmdSetStencilOp vkl_CmdSetStencilOp
+#define vkCmdSetStencilTestEnable vkl_CmdSetStencilTestEnable
+#define vkCmdWriteTimestamp2 vkl_CmdWriteTimestamp2
+#define vkQueueSubmit2 vkl_QueueSubmit2
+#define vkGetSemaphoreCounterValue vkl_GetSemaphoreCounterValue
+#define vkWaitSemaphores vkl_WaitSemaphores
+
 #include "../nvn.h"
 #include "../maxwell/shader.h"
 
