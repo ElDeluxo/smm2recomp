@@ -81,7 +81,8 @@ void world_search(Cpu *c, uint64_t no, uint32_t type) {
     const char *sort = "popular", *player_list = NULL;
     bool by_maker = false, none = false;
     switch (type) {
-    case 0: case 5: break;                                      // pick up, terms ranking: popular
+    case 0: sort = "hot"; break;                                // pick up (Hot): popular, the latest uploads first
+    case 5: break;                                              // terms ranking: popular
     case 1: want_band = g32(no + NO_SEARCH_DIFF); break;        // popular, by difficulty
     case 2: sort = "new"; break;                                // new
     case 4:                                                     // detailed search

@@ -1,9 +1,9 @@
-//! Course World's Popular and New lists from an upstream source ([`crate::upstream`]): the source's
-//! live lists, kept here and served page by page in place of the server's own sorting of the
-//! courses it holds, which follow them (and are all there is until the source has answered, or
-//! when it fails). The fetcher fills the lists and refreshes them; every page asked for tells it,
-//! so a stale list is refreshed in the background and one read near its end is extended ahead of
-//! the player.
+//! Course World's Popular, Hot and New lists from an upstream source ([`crate::upstream`]): the
+//! source's live lists, kept here and served page by page in place of the server's own sorting of
+//! the courses it holds, which follow them (and are all there is until the source has answered, or
+//! when it fails). The source has no hot list: Hot is Popular's courses, the latest uploads first.
+//! The fetcher fills the lists and refreshes them; every page asked for tells it, so a stale list
+//! is refreshed in the background and one read near its end is extended ahead of the player.
 //!
 //! A listed course the server doesn't hold is answered from the list (`GET /api/courses/<code>`),
 //! its thumbnails are fetched like a held upstream course's, and its data is fetched and imported
@@ -26,19 +26,44 @@ pub enum Kind {
 impl Kind {
     pub const ALL: [Kind; 2] = [Kind::Popular, Kind::New];
 
-    /// The list a `sort=` of `/api/courses` reads.
-    pub fn of_sort(sort: &str) -> Option<Kind> {
-        match sort {
-            "popular" => Some(Kind::Popular),
-            "new" => Some(Kind::New),
-            _ => None,
-        }
-    }
-
     fn index(self) -> usize {
         self as usize
     }
 }
+
+/// How a list is served (a `sort=` of `/api/courses`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum View {
+    Popular,
+    /// Popular's courses, the latest uploads first (SMM2's Hot Courses).
+    Hot,
+    New,
+}
+
+impl View {
+    pub fn of_sort(sort: &str) -> Option<View> {
+        match sort {
+            "popular" => Some(View::Popular),
+            "hot" => Some(View::Hot),
+            "new" => Some(View::New),
+            _ => None,
+        }
+    }
+
+    pub fn kind(self) -> Kind {
+        match self {
+            View::Popular | View::Hot => Kind::Popular,
+            View::New => Kind::New,
+        }
+    }
+}
+
+/// Pictures fetched before any page is asked for: the first courses of Hot and New (the game shows
+/// five at a time), then of Popular (its tab shows one difficulty of the four mixed).
+const PREWARM: [(View, usize); 3] = [(View::Hot, 8), (View::New, 8), (View::Popular, 32)];
+
+/// A page asked for this long ago still has its pictures fetched ahead of the background work.
+const BROWSING: Duration = Duration::from_secs(120);
 
 /// A course on a list, with the source's difficulty class (0 Easy … 3 Super Expert) if it gave one.
 #[derive(Clone, Debug, PartialEq)]
@@ -91,10 +116,11 @@ struct List {
 
 /// The last page a client asked for (its thumbnails are fetched ahead).
 struct Page {
-    kind: Kind,
+    view: View,
     style: Option<String>,
     offset: usize,
     limit: usize,
+    asked: Instant,
 }
 
 #[derive(Default)]
@@ -122,6 +148,15 @@ impl Lists {
             .iter()
             .enumerate()
             .filter(move |(_, c)| style.is_none_or(|s| c.meta.style == s))
+    }
+
+    /// [`Self::of_style`] in the order `view` serves them (Hot: the latest uploads first).
+    fn ordered<'a>(&'a self, view: View, style: Option<&'a str>) -> Vec<(usize, &'a Listed)> {
+        let mut v: Vec<(usize, &Listed)> = self.of_style(view.kind(), style).collect();
+        if view == View::Hot {
+            v.sort_by_key(|(_, c)| std::cmp::Reverse(c.meta.uploaded));
+        }
+        v
     }
 }
 
@@ -216,17 +251,18 @@ impl Store {
         }
     }
 
-    /// A page of Popular or New (`/api/courses?sort=popular|new` without a text search): the
-    /// upstream list's courses, then the ones held (Popular: by likes; New: all of them by upload
-    /// time, the list's among them). None: no upstream lists.
+    /// A page of Popular, Hot or New (`/api/courses?sort=popular|hot|new` without a text search):
+    /// the upstream list's courses, then the ones held (Popular, Hot: by likes; New: all of them by
+    /// upload time, the list's among them). None: no upstream lists.
     pub fn list_page(
         &self,
-        kind: Kind,
+        view: View,
         style: Option<&str>,
         offset: usize,
         limit: usize,
     ) -> Option<Vec<Value>> {
         let tell = self.lists_wanted.get()?;
+        let kind = view.kind();
         let sort = if kind == Kind::Popular {
             "popular"
         } else {
@@ -237,7 +273,8 @@ impl Store {
         let page = {
             let mut g = self.lists.lock().unwrap();
             let listed: Vec<(usize, Listed)> = g
-                .of_style(kind, style)
+                .ordered(view, style)
+                .into_iter()
                 .map(|(i, c)| (i, c.clone()))
                 .collect();
             let codes: HashSet<&str> = listed.iter().map(|(_, c)| c.meta.code.as_str()).collect();
@@ -258,9 +295,12 @@ impl Store {
             }
             let page: Vec<(Option<usize>, Listed)> =
                 all.into_iter().skip(offset).take(limit).collect();
-            // how far into the whole list this page reached (past its end: all of it)
+            // how far into the whole list this page reached (past its end: all of it; Hot, not in
+            // the list's order: as far as the page goes)
             let reached = if listed.len() <= offset + limit {
                 g.lists[kind.index()].courses.len()
+            } else if view == View::Hot {
+                offset + limit
             } else {
                 page.iter()
                     .filter_map(|(i, _)| *i)
@@ -271,10 +311,11 @@ impl Store {
             st.asked = Some(Instant::now());
             st.depth = st.depth.max(reached);
             g.page = Some(Page {
-                kind,
+                view,
                 style: style.map(str::to_string),
                 offset,
                 limit,
+                asked: Instant::now(),
             });
             page
         };
@@ -282,26 +323,53 @@ impl Store {
         Some(page.iter().map(|(_, c)| c.to_json()).collect())
     }
 
-    /// Listed upstream courses whose pictures aren't held, in list order from the last page asked
-    /// for to the end of the page after it (at most `limit`).
+    /// Listed upstream courses whose pictures aren't held, in the order served from the last page
+    /// asked for to the end of the page after it; before any page is asked for, the first ones of
+    /// each list ([`PREWARM`]). At most `limit`.
     pub fn list_thumbnails_ahead(&self, limit: usize) -> Vec<String> {
         let codes: Vec<String> = {
             let g = self.lists.lock().unwrap();
-            let Some(p) = &g.page else {
-                return Vec::new();
-            };
-            g.of_style(p.kind, p.style.as_deref())
-                .skip(p.offset)
-                .take(p.limit * 2)
-                .filter(|(_, c)| c.meta.upstream)
-                .map(|(_, c)| c.meta.code.clone())
-                .collect()
+            let upstream = |c: &&Listed| c.meta.upstream;
+            match &g.page {
+                Some(p) => g
+                    .ordered(p.view, p.style.as_deref())
+                    .into_iter()
+                    .map(|(_, c)| c)
+                    .skip(p.offset)
+                    .take(p.limit * 2)
+                    .filter(upstream)
+                    .map(|c| c.meta.code.clone())
+                    .collect(),
+                None => PREWARM
+                    .iter()
+                    .flat_map(|&(view, n)| {
+                        g.ordered(view, None)
+                            .into_iter()
+                            .map(|(_, c)| c)
+                            .take(n)
+                            .filter(upstream)
+                            .map(|c| c.meta.code.clone())
+                            .collect::<Vec<_>>()
+                    })
+                    .collect(),
+            }
         };
         codes
             .into_iter()
             .filter(|c| !self.has_thumbnail(c, false))
             .take(limit)
             .collect()
+    }
+
+    /// Whether a client is looking at the lists (a page asked for in the last two minutes, or none
+    /// yet: the first pictures of each are fetched for it): their pictures go before background work.
+    pub fn browsing(&self) -> bool {
+        self.lists
+            .lock()
+            .unwrap()
+            .page
+            .as_ref()
+            .is_none_or(|p| p.asked.elapsed() < BROWSING)
     }
 
     /// A course's data. A listed course the store doesn't hold is fetched from the source and

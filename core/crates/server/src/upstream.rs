@@ -12,18 +12,26 @@
 //!
 //! Thumbnails (a course's picture and its whole-course map, for Course World) come from the source
 //! too, one request at a time like the rest: first the ones a client asked for and the server
-//! doesn't hold (ahead of a course import under way), then, while the fetcher has nothing else to
-//! do, the ones of every course held. Both kinds are kept on disk.
+//! doesn't hold (the latest burst of requests first: the pictures on the player's screen; ahead of
+//! a course import under way, and served while background requests wait their turn), then, while
+//! the fetcher has nothing else to do, the ones of every course held. Both kinds are kept on disk.
+//!
+//! The source answers "busy" (HTTP 429, without a Retry-After) after a couple of requests close
+//! together, and allows about one every few seconds: after a busy answer nothing is asked for a
+//! while (longer for each in a row), and what was asked for is asked again then.
 //!
 //! Course World's Popular and New come from the source's live lists ([`crate::lists`]): filled at
 //! the start, filled again when a client asks for one that has gone stale (Popular: a mix of the
 //! four difficulties' lists; New: the latest courses merged into the ones seen before), and
 //! Popular extended in the background while the pages asked for near its end. A listed course's
-//! data is fetched when a client asks for it, ahead of everything but a request under way; while
-//! idle, the fetcher fetches the pictures of the page a client looks at and the page after it,
-//! before the held courses'. A list the source fails to give is asked for again later (the one
-//! held meanwhile, or the server's own courses, are served).
+//! data is fetched when a client asks for it, ahead of everything but a request under way. The
+//! pictures of the page a client looks at and the page after it (before any page is asked for: the
+//! first ones of each list) are fetched while idle, and between the background imports while the
+//! client looks at the lists, so they are there when the game asks; then the held courses'. A list
+//! the source fails to give is asked for again later (the one held meanwhile, or the server's own
+//! courses, are served).
 
+use std::cmp::Reverse;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
@@ -205,9 +213,10 @@ pub enum Keys {
 pub struct Options {
     /// Between two requests to the source.
     pub interval: Duration,
-    /// After a "busy" answer without a Retry-After: this, doubling per retry (at most 2 min).
+    /// After a "busy" answer without a Retry-After, nothing is asked for this long, doubling per
+    /// busy answer in a row (at most a minute).
     pub backoff: Duration,
-    /// Retries of a busy request.
+    /// Retries of a busy background request.
     pub retries: u32,
     /// Between two searches for the same difficulty.
     pub cooldown: Duration,
@@ -239,7 +248,7 @@ impl Default for Options {
     fn default() -> Self {
         Self {
             interval: Duration::from_secs(3),
-            backoff: Duration::from_secs(15),
+            backoff: Duration::from_secs(4), // (TGRCode: the next one goes through 3-5 s later)
             retries: 4,
             cooldown: Duration::from_secs(60),
             batch: 10,
@@ -284,11 +293,7 @@ pub fn start(store: Arc<Store>, source: Box<dyn Source>, keys: Keys, opts: Optio
     let queue = f.wanted_thumbnails.clone();
     let wake = tx.clone();
     store.on_thumbnail(move |code, entire| {
-        let mut q = queue.lock().unwrap();
-        let t = (code.to_string(), entire);
-        q.retain(|x| *x != t);
-        q.push_front(t); // (newest first: what the player looks at now)
-        drop(q);
+        queue.lock().unwrap().ask(code, entire);
         let _ = wake.lock().unwrap().send(Job::Wake);
     });
     if lists {
@@ -314,6 +319,11 @@ pub fn start(store: Arc<Store>, source: Box<dyn Source>, keys: Keys, opts: Optio
             if f.serve_urgent(&store) {
                 continue;
             }
+            if f.clients_waiting() {
+                // (the source is busy: asked again when it's its turn)
+                f.wait_turn(&store, Duration::ZERO);
+                continue;
+            }
             let job = match rx.try_recv() {
                 Ok(j) => Some(j),
                 Err(mpsc::TryRecvError::Empty)
@@ -335,6 +345,75 @@ pub fn start(store: Arc<Store>, source: Box<dyn Source>, keys: Keys, opts: Optio
     });
 }
 
+/// Requests this close together are one burst (a page's pictures, asked for one after another).
+const BURST: Duration = Duration::from_millis(250);
+
+/// A thumbnail a client asked for, (code, entire), and its place in the queue.
+struct Want {
+    key: (String, bool),
+    burst: u64,
+    seq: i64,
+}
+
+/// Thumbnails clients asked for: the latest burst first, in the order asked within it; the ones
+/// asked for again (a client now waits for them) ahead of the rest of their burst.
+#[derive(Default)]
+struct Wanted {
+    items: Vec<Want>,
+    burst: u64,
+    seq: i64,
+    last: Option<Instant>,
+}
+
+impl Wanted {
+    fn ask(&mut self, code: &str, entire: bool) {
+        if self.last.is_none_or(|t| t.elapsed() > BURST) {
+            self.burst += 1;
+        }
+        self.last = Some(Instant::now());
+        self.seq += 1;
+        let key = (code.to_string(), entire);
+        match self.items.iter_mut().find(|w| w.key == key) {
+            Some(w) => {
+                w.burst = self.burst;
+                w.seq = self.seq - (1 << 40);
+            }
+            None => self.items.push(Want {
+                key,
+                burst: self.burst,
+                seq: self.seq,
+            }),
+        }
+    }
+
+    fn next(&mut self) -> Option<Want> {
+        let i = (0..self.items.len())
+            .max_by_key(|&i| (self.items[i].burst, Reverse(self.items[i].seq)))?;
+        Some(self.items.swap_remove(i))
+    }
+
+    /// One the source was busy for, in its place (unless asked for again meanwhile).
+    fn put_back(&mut self, w: Want) {
+        if !self.items.iter().any(|x| x.key == w.key) {
+            self.items.push(w);
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+}
+
+/// What became of a thumbnail asked for.
+#[derive(Debug, PartialEq)]
+enum Fetched {
+    Got,
+    /// The source has none (not asked for again).
+    Missing,
+    /// The source was busy (asked for again after its pause).
+    Busy,
+}
+
 struct Fetcher {
     source: Box<dyn Source>,
     keys: Keys,
@@ -342,8 +421,12 @@ struct Fetcher {
     opts: Options,
     searched: [Option<Instant>; 4],
     last_request: Option<Instant>,
-    /// Thumbnails clients asked for, (code, entire), the latest first.
-    wanted_thumbnails: Arc<Mutex<std::collections::VecDeque<(String, bool)>>>,
+    /// After a busy answer: nothing asked before then, and the pause (doubling per busy answer in a
+    /// row).
+    busy_until: Option<Instant>,
+    busy_pause: Duration,
+    /// Thumbnails clients asked for.
+    wanted_thumbnails: Arc<Mutex<Wanted>>,
     /// Thumbnails the source didn't give (not asked for again in the background).
     no_thumbnail: HashSet<(String, bool)>,
     /// Listed courses a client asked for the data of, in order.
@@ -355,6 +438,8 @@ struct Fetcher {
     list_backoff: [Duration; 2],
     /// Popular's last extension brought nothing new (none more until it's filled again).
     popular_exhausted: bool,
+    /// Popular's first fill stopped part way (filled again when its retry comes).
+    popular_partial: bool,
 }
 
 impl Fetcher {
@@ -370,6 +455,8 @@ impl Fetcher {
             opts,
             searched: [None; 4],
             last_request: None,
+            busy_until: None,
+            busy_pause: Duration::ZERO,
             wanted_thumbnails: Default::default(),
             no_thumbnail: HashSet::new(),
             wanted_courses: Default::default(),
@@ -377,94 +464,162 @@ impl Fetcher {
             list_retry: [None; 2],
             list_backoff: [Duration::ZERO; 2],
             popular_exhausted: false,
+            popular_partial: false,
         }
     }
 
-    /// One request to the source, at least `interval` after the one before.
+    /// When a request `interval` after the one before may go (the source not busy).
+    fn turn(&self, interval: Duration) -> Instant {
+        let now = Instant::now();
+        let paced = self.last_request.map_or(now, |t| t + interval);
+        self.busy_until.map_or(paced, |b| b.max(paced))
+    }
+
+    fn busy(&self) -> bool {
+        self.busy_until.is_some_and(|t| Instant::now() < t)
+    }
+
+    /// Whether a client waits for a listed course's data or a thumbnail.
+    fn clients_waiting(&self) -> bool {
+        !self.wanted_thumbnails.lock().unwrap().is_empty()
+            || !self.wanted_courses.lock().unwrap().is_empty()
+    }
+
+    /// One request to the source, at least `interval` after the one before and after the source's
+    /// pause; a busy answer starts a pause.
     fn request<T>(
         &mut self,
         interval: Duration,
         req: impl FnOnce(&mut dyn Source) -> Result<T, SourceError>,
     ) -> Result<T, SourceError> {
-        if let Some(t) = self.last_request {
-            let left = interval.saturating_sub(t.elapsed());
-            if !left.is_zero() {
-                std::thread::sleep(left);
-            }
+        let left = self
+            .turn(interval)
+            .saturating_duration_since(Instant::now());
+        if !left.is_zero() {
+            std::thread::sleep(left);
         }
         let r = req(&mut *self.source);
         self.last_request = Some(Instant::now());
+        match &r {
+            Err(SourceError::Busy(after)) => {
+                let pause = match after {
+                    Some(a) => (*a).min(Duration::from_secs(120)),
+                    None => {
+                        self.busy_pause = (self.busy_pause * 2)
+                            .max(self.opts.backoff)
+                            .min(Duration::from_secs(60));
+                        self.busy_pause
+                    }
+                };
+                self.busy_until = Some(Instant::now() + pause);
+                eprintln!(
+                    "[upstream] the source is busy: nothing asked for {:.1} s",
+                    pause.as_secs_f32()
+                );
+            }
+            _ => self.busy_pause = Duration::ZERO,
+        }
         r
     }
 
-    /// One thumbnail into the store (a busy source: asked once more after its wait, if short).
-    fn fetch_thumbnail(&mut self, store: &Store, code: &str, entire: bool) -> bool {
+    /// Until a background request's turn (`interval` after the one before, the source not busy),
+    /// serving what clients wait for meanwhile.
+    fn wait_turn(&mut self, store: &Store, interval: Duration) {
+        loop {
+            let serve_at = self
+                .clients_waiting()
+                .then(|| self.turn(self.opts.thumbnail_interval));
+            let at = self.turn(interval);
+            let now = Instant::now(); // (after the turns: one with nothing to wait for is now)
+            if serve_at.is_some_and(|t| now >= t) {
+                self.serve_waiting(store);
+                continue;
+            }
+            let wake = match serve_at {
+                None if now >= at => return,
+                None => at,
+                // (clients first, even when the background request's turn has come)
+                Some(t) if now >= at => t,
+                Some(t) => t.min(at),
+            };
+            let left = wake.saturating_duration_since(now);
+            std::thread::sleep(left.clamp(Duration::from_millis(1), Duration::from_millis(50)));
+        }
+    }
+
+    /// One thumbnail into the store.
+    fn fetch_thumbnail(&mut self, store: &Store, code: &str, entire: bool) -> Fetched {
         let raw = code.replace('-', "");
         let interval = self.opts.thumbnail_interval;
-        let mut r = self.request(interval, |s| s.thumbnail(&raw, entire));
-        if let Err(SourceError::Busy(after)) = &r {
-            let w = after.unwrap_or(self.opts.backoff);
-            if w <= Duration::from_secs(20) {
-                std::thread::sleep(w);
-                r = self.request(interval, |s| s.thumbnail(&raw, entire));
-            }
-        }
-        match r {
-            Ok(b) if store.put_thumbnail(code, entire, &b).is_ok() => true,
+        match self.request(interval, |s| s.thumbnail(&raw, entire)) {
+            Ok(b) if store.put_thumbnail(code, entire, &b).is_ok() => Fetched::Got,
             Ok(_) => {
                 eprintln!("[upstream] thumbnail {code}: not a JPEG");
-                false
+                Fetched::Missing
             }
+            Err(SourceError::Busy(_)) => Fetched::Busy,
             Err(e) => {
                 eprintln!("[upstream] thumbnail {code}: {e}");
-                false
+                Fetched::Missing
             }
         }
     }
 
-    /// The thumbnails clients are waiting for.
+    /// The thumbnails clients are waiting for (while the source isn't busy).
     fn serve_thumbnails(&mut self, store: &Store) {
-        loop {
-            let next = self.wanted_thumbnails.lock().unwrap().pop_front();
-            let Some((code, entire)) = next else { return };
-            if !store.has_thumbnail(&code, entire)
-                && !self.no_thumbnail.contains(&(code.clone(), entire))
-                && !self.fetch_thumbnail(store, &code, entire)
-            {
-                self.no_thumbnail.insert((code, entire));
+        while !self.busy() {
+            let next = self.wanted_thumbnails.lock().unwrap().next();
+            let Some(w) = next else { return };
+            let (code, entire) = (w.key.0.clone(), w.key.1);
+            if store.has_thumbnail(&code, entire) || self.no_thumbnail.contains(&w.key) {
+                continue;
+            }
+            match self.fetch_thumbnail(store, &code, entire) {
+                Fetched::Got => {}
+                Fetched::Missing => {
+                    self.no_thumbnail.insert(w.key);
+                }
+                Fetched::Busy => self.wanted_thumbnails.lock().unwrap().put_back(w),
             }
         }
     }
 
-    /// One thumbnail of a held upstream course that the store doesn't have yet; false: none left.
-    fn warm_thumbnail(&mut self, store: &Store) -> bool {
-        let next = store
-            .missing_thumbnails(self.no_thumbnail.len() + 1)
-            .into_iter()
-            .find(|t| !self.no_thumbnail.contains(t));
-        let Some((code, entire)) = next else {
-            return false;
+    /// A background thumbnail, in its turn; false: none (`next` gives the candidates, at most
+    /// `limit`).
+    fn warm(&mut self, store: &Store, next: impl Fn(&Store, usize) -> Vec<(String, bool)>) -> bool {
+        let pick = |f: &Self| {
+            next(store, f.no_thumbnail.len() + 1)
+                .into_iter()
+                .find(|t| !f.no_thumbnail.contains(t))
         };
-        if !self.fetch_thumbnail(store, &code, entire) {
+        if pick(self).is_none() {
+            return false;
+        }
+        self.wait_turn(store, self.opts.thumbnail_interval);
+        // (what clients waited for may have been it)
+        let Some((code, entire)) = pick(self) else {
+            return true;
+        };
+        if self.fetch_thumbnail(store, &code, entire) == Fetched::Missing {
             self.no_thumbnail.insert((code, entire));
         }
         true
     }
 
-    /// One thumbnail of the page a client looks at (or the page after it) that the store doesn't
-    /// have yet; false: none left.
+    /// One thumbnail of a held upstream course that the store doesn't have yet; false: none left.
+    fn warm_thumbnail(&mut self, store: &Store) -> bool {
+        self.warm(store, |s, n| s.missing_thumbnails(n))
+    }
+
+    /// One thumbnail of the page a client looks at (or the page after it; before any, of the
+    /// lists' first courses) that the store doesn't have yet; false: none left.
     fn warm_listed(&mut self, store: &Store) -> bool {
-        let next = store
-            .list_thumbnails_ahead(self.no_thumbnail.len() + 1)
-            .into_iter()
-            .find(|c| !self.no_thumbnail.contains(&(c.clone(), false)));
-        let Some(code) = next else {
-            return false;
-        };
-        if !self.fetch_thumbnail(store, &code, false) {
-            self.no_thumbnail.insert((code, false));
-        }
-        true
+        self.warm(store, |s, n| {
+            s.list_thumbnails_ahead(n)
+                .into_iter()
+                .map(|c| (c, false))
+                .collect()
+        })
     }
 
     /// What clients wait for: the data of listed courses, then thumbnails.
@@ -484,9 +639,10 @@ impl Fetcher {
         updated
     }
 
-    /// The listed courses clients asked for the data of, each fetched and imported.
+    /// The listed courses clients asked for the data of, each fetched and imported (while the
+    /// source isn't busy).
     fn import_wanted(&mut self, store: &Store) {
-        loop {
+        while !self.busy() {
             let next = self.wanted_courses.lock().unwrap().pop_front();
             let Some(code) = next else { return };
             let failed = self
@@ -501,15 +657,12 @@ impl Fetcher {
             };
             let raw = code.replace('-', "");
             let interval = self.opts.thumbnail_interval;
-            let mut r = self.request(interval, |s| s.course(&raw));
-            if let Err(SourceError::Busy(after)) = &r {
-                let w = after.unwrap_or(self.opts.backoff);
-                if w <= Duration::from_secs(20) {
-                    std::thread::sleep(w);
-                    r = self.request(interval, |s| s.course(&raw));
+            let imported = match self.request(interval, |s| s.course(&raw)) {
+                Err(SourceError::Busy(_)) => {
+                    // (asked again after the pause)
+                    self.wanted_courses.lock().unwrap().push_front(code);
+                    return;
                 }
-            }
-            let imported = match r {
                 Ok(file) => match self.body(&file) {
                     Some(body) => store
                         .import(&body, listed.meta)
@@ -544,6 +697,7 @@ impl Fetcher {
             };
             let refill = match s.fetched {
                 None => self.opts.prime || s.asked.is_some(),
+                Some(_) if kind == Kind::Popular && self.popular_partial => true,
                 Some(f) => s.asked.is_some_and(|a| a > f) && f.elapsed() >= stale,
             };
             if refill {
@@ -568,7 +722,7 @@ impl Fetcher {
         store: &Store,
         req: impl FnOnce(&mut dyn Source) -> Result<Vec<Value>, SourceError>,
     ) -> Result<Vec<Value>, SourceError> {
-        self.serve_waiting(store);
+        self.wait_turn(store, self.opts.interval);
         self.request(self.opts.interval, req)
     }
 
@@ -623,6 +777,9 @@ impl Fetcher {
                     if more {
                         store.extend_list(Kind::Popular, interleave(&per));
                     }
+                    if first && !more {
+                        self.popular_partial = true;
+                    }
                     return Err(e);
                 }
             };
@@ -648,6 +805,7 @@ impl Fetcher {
         } else {
             store.set_list(Kind::Popular, interleave(&per));
             self.popular_exhausted = false;
+            self.popular_partial = false;
             eprintln!("[upstream] Popular: {got} courses");
         }
         Ok(())
@@ -667,23 +825,22 @@ impl Fetcher {
         Ok(())
     }
 
-    /// One request, paced, retried while the source says it's busy; what clients wait for and a
-    /// list that's due go first.
+    /// One background request, paced, retried while the source says it's busy (after its pause);
+    /// what clients wait for, a list that's due and, while a client looks at the lists, one of
+    /// their pictures go first.
     fn call<T>(
         &mut self,
         store: &Store,
         mut req: impl FnMut(&mut dyn Source) -> Result<T, SourceError>,
     ) -> Result<T, SourceError> {
-        let mut wait = self.opts.backoff;
         for attempt in 0..=self.opts.retries {
             self.serve_urgent(store);
+            if store.browsing() {
+                self.warm_listed(store);
+            }
+            self.wait_turn(store, self.opts.interval);
             match self.request(self.opts.interval, &mut req) {
-                Err(SourceError::Busy(after)) if attempt < self.opts.retries => {
-                    let w = after.unwrap_or(wait).min(Duration::from_secs(120));
-                    eprintln!("[upstream] the source is busy: again in {} s", w.as_secs());
-                    std::thread::sleep(w);
-                    wait = (wait * 2).min(Duration::from_secs(120));
-                }
+                Err(SourceError::Busy(_)) if attempt < self.opts.retries => {}
                 r => return r,
             }
         }
@@ -900,15 +1057,23 @@ mod tests {
         /// List searches, and whether they fail.
         list_searches: Arc<std::sync::atomic::AtomicUsize>,
         fail_lists: Arc<std::sync::atomic::AtomicBool>,
+        /// List searches from this one on fail.
+        fail_from: Arc<std::sync::atomic::AtomicUsize>,
         /// A course download takes this long.
         delay: Duration,
+        /// Thumbnail requests answered "busy" before they go through; the codes asked for.
+        thumb_busy: u32,
+        thumbs: Arc<Mutex<Vec<String>>>,
     }
 
     impl Fake {
         fn list_search(&mut self) -> Result<(), SourceError> {
-            self.list_searches
+            let n = self
+                .list_searches
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            if self.fail_lists.load(std::sync::atomic::Ordering::SeqCst) {
+            if self.fail_lists.load(std::sync::atomic::Ordering::SeqCst)
+                || n >= self.fail_from.load(std::sync::atomic::Ordering::SeqCst)
+            {
                 return Err(SourceError::Failed("HTTP 502".into()));
             }
             Ok(())
@@ -937,6 +1102,11 @@ mod tests {
         }
 
         fn thumbnail(&mut self, code: &str, entire: bool) -> Result<Vec<u8>, SourceError> {
+            self.thumbs.lock().unwrap().push(code.to_string());
+            if self.thumb_busy > 0 {
+                self.thumb_busy -= 1;
+                return Err(SourceError::Busy(None));
+            }
             // one course has both pictures, the other only its map
             match (code, entire) {
                 ("N24N99PNF", _) | ("PDCYMMWDF", true) => {
@@ -988,7 +1158,10 @@ mod tests {
             new: Vec::new(),
             list_searches: Default::default(),
             fail_lists: Default::default(),
+            fail_from: Arc::new(usize::MAX.into()),
             delay: Duration::ZERO,
+            thumb_busy: 0,
+            thumbs: Default::default(),
         };
         (f, searches)
     }
@@ -1147,12 +1320,12 @@ mod tests {
             .wanted_thumbnails
             .lock()
             .unwrap()
-            .push_back(("PDC-YMM-WDF".into(), true));
+            .ask("PDC-YMM-WDF", true);
         fetch
             .wanted_thumbnails
             .lock()
             .unwrap()
-            .push_back(("PDC-YMM-WDF".into(), false));
+            .ask("PDC-YMM-WDF", false);
         fetch.serve_thumbnails(&store);
         assert!(store.has_thumbnail("PDC-YMM-WDF", true));
         assert!(
@@ -1365,6 +1538,36 @@ mod tests {
     }
 
     #[test]
+    fn a_first_fill_of_popular_that_stops_part_way_is_done_again() {
+        let store = Store::open(tmp("partial")).unwrap();
+        let (mut f, _) = fake(false);
+        f.popular = popular_records(4);
+        let fail_from = f.fail_from.clone();
+        fail_from.store(2, std::sync::atomic::Ordering::SeqCst); // (Expert's search fails)
+        let opts = Options {
+            prime: true,
+            ..quick()
+        };
+        let mut fetch = Fetcher::new(Box::new(f), Keys::Table(Box::new(table())), opts);
+        store.on_lists(|| {});
+        while fetch.serve_urgent(&store) {}
+        assert_eq!(store.list_status(Kind::Popular).len, 6); // (3 a search)
+        // its retry: all four difficulties
+        fail_from.store(usize::MAX, std::sync::atomic::Ordering::SeqCst);
+        fetch.list_retry = [None; 2];
+        assert_eq!(fetch.list_work(&store), Some((Kind::Popular, false)));
+        while fetch.serve_urgent(&store) {}
+        assert_eq!(fetch.list_work(&store), None);
+        let list = courses(&store, "/api/courses?sort=popular&limit=100");
+        for d in 0..4 {
+            assert!(
+                list.iter()
+                    .any(|c| band(c["difficulty"].as_u64().unwrap()) == d)
+            );
+        }
+    }
+
+    #[test]
     fn a_listed_course_is_fetched_when_its_data_is_asked_for() {
         let store = Arc::new(Store::open(tmp("ondemand")).unwrap());
         let (mut f, _) = fake(false);
@@ -1433,18 +1636,182 @@ mod tests {
         let mut fetch = Fetcher::new(Box::new(f), Keys::Table(Box::new(table())), opts);
         store.on_lists(|| {});
         while fetch.serve_urgent(&store) {}
-        assert!(!fetch.warm_listed(&store), "no page asked for yet");
-        courses(&store, "/api/courses?sort=popular&offset=0&limit=1");
+        assert!(
+            store.browsing(),
+            "no page asked for yet: the lists' first pictures"
+        );
         let mut rounds = 0;
         while fetch.warm_listed(&store) {
             rounds += 1;
             assert!(rounds < 10);
         }
-        // (the page and the one after it; the source has no picture of the second course)
+        // (the source has no picture of the second course)
         assert_eq!(rounds, 2);
         assert!(store.has_thumbnail("N24-N99-PNF", false));
         assert!(!store.has_thumbnail("PDC-YMM-WDF", false));
         assert!(store.get("N24-N99-PNF").is_none(), "pictures only");
+    }
+
+    /// A list of `n` courses L0000000… (uploaded `t0 + i * step`).
+    fn listed(n: usize, t0: u64, step: i64) -> Vec<Listed> {
+        (0..n)
+            .map(|i| {
+                let up = (t0 as i64 + i as i64 * step) as u64;
+                listed_of(&listed_record(&format!("L{i:08}"), 1, up), None).unwrap()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn pictures_ahead_follow_the_page_looked_at_in_its_order() {
+        let store = Store::open(tmp("aheadorder")).unwrap();
+        store.on_lists(|| {});
+        // the oldest uploads first: Hot serves them the other way round
+        store.set_list(Kind::Popular, listed(10, 1_600_000_000, 1000));
+        store.set_list(Kind::New, listed(3, 1_700_000_000, 0));
+        // before any page: the first ones of Hot, New, Popular
+        let first = store.list_thumbnails_ahead(100);
+        assert_eq!(&first[..2], ["L00-000-009", "L00-000-008"]);
+        assert!(first.contains(&"L00-000-000".to_string()));
+        // a page of Hot: it and the next one, newest first
+        courses(&store, "/api/courses?sort=hot&offset=2&limit=2");
+        assert_eq!(
+            store.list_thumbnails_ahead(100),
+            ["L00-000-007", "L00-000-006", "L00-000-005", "L00-000-004"]
+        );
+        store
+            .put_thumbnail("L00-000-006", false, &[0xFF, 0xD8, 0xFF, 0xD9])
+            .unwrap();
+        assert_eq!(
+            store.list_thumbnails_ahead(2),
+            ["L00-000-007", "L00-000-005"]
+        );
+        assert!(store.browsing());
+    }
+
+    #[test]
+    fn hot_is_popular_newest_first_then_the_courses_held_by_likes() {
+        let store = Store::open(tmp("hot")).unwrap();
+        let played = store.upload(&course_body("M1"), "me").unwrap();
+        let other = store.upload(&course_body("M3"), "me").unwrap();
+        store.record(&played.code, "play").unwrap();
+        // no upstream lists: the courses held, by likes
+        assert_eq!(
+            codes(&courses(&store, "/api/courses?sort=hot")),
+            [played.code.clone(), other.code.clone()]
+        );
+        store.on_lists(|| {});
+        let mut list = listed(4, 1_600_000_000, 0);
+        for (c, up) in list.iter_mut().zip([
+            1_560_000_000u64,
+            1_700_000_000,
+            1_600_000_000,
+            1_650_000_000,
+        ]) {
+            c.meta.uploaded = up;
+        }
+        store.set_list(Kind::Popular, list);
+        assert_eq!(
+            codes(&courses(&store, "/api/courses?sort=hot&limit=100")),
+            [
+                "L00-000-001",
+                "L00-000-003",
+                "L00-000-002",
+                "L00-000-000",
+                &played.code,
+                &other.code
+            ]
+        );
+        // Popular keeps the source's order; paging
+        assert_eq!(
+            codes(&courses(&store, "/api/courses?sort=popular&limit=2")),
+            ["L00-000-000", "L00-000-001"]
+        );
+        assert_eq!(
+            codes(&courses(&store, "/api/courses?sort=hot&offset=3&limit=2")),
+            ["L00-000-000", &played.code]
+        );
+        // a text search: the courses held only
+        assert_eq!(
+            codes(&courses(&store, "/api/courses?sort=hot&q=me")),
+            [played.code.clone(), other.code.clone()]
+        );
+    }
+
+    #[test]
+    fn thumbnails_asked_for_go_latest_burst_first_in_the_order_asked() {
+        let mut w = Wanted::default();
+        for c in ["A", "B", "C"] {
+            w.ask(c, false);
+        }
+        w.ask("A", false); // (a client now waits for it)
+        std::thread::sleep(BURST + Duration::from_millis(50));
+        for c in ["D", "E", "F"] {
+            w.ask(c, false);
+        }
+        w.ask("F", false);
+        w.ask("E", false);
+        let order: Vec<String> = std::iter::from_fn(|| w.next().map(|x| x.key.0)).collect();
+        assert_eq!(order, ["F", "E", "D", "A", "B", "C"]);
+    }
+
+    #[test]
+    fn a_busy_source_pauses_and_the_thumbnail_is_asked_again() {
+        let store = Store::open(tmp("thumbbusy")).unwrap();
+        let (f, _) = fake(false);
+        let asked = f.thumbs.clone();
+        let opts = Options {
+            backoff: Duration::from_millis(300),
+            ..quick()
+        };
+        let mut fetch = Fetcher::new(Box::new(f), Keys::Table(Box::new(table())), opts);
+        fetch.wanted(&store, Difficulty::Normal);
+        let (mut f, _) = fake(false);
+        f.thumb_busy = 2;
+        f.thumbs = asked.clone();
+        fetch.source = Box::new(f);
+        fetch
+            .wanted_thumbnails
+            .lock()
+            .unwrap()
+            .ask("N24-N99-PNF", false);
+        let t0 = Instant::now();
+        fetch.serve_waiting(&store);
+        // busy: kept for later, not taken for missing
+        assert!(fetch.busy() && fetch.clients_waiting());
+        assert!(fetch.no_thumbnail.is_empty());
+        fetch.wait_turn(&store, Duration::ZERO);
+        assert!(store.has_thumbnail("N24-N99-PNF", false));
+        // (paused 300 ms, then 600 ms: twice as long for a second busy answer in a row)
+        assert!(
+            t0.elapsed() >= Duration::from_millis(900),
+            "{:?}",
+            t0.elapsed()
+        );
+        assert_eq!(asked.lock().unwrap().len(), 3);
+        assert_eq!(fetch.busy_pause, Duration::ZERO);
+    }
+
+    #[test]
+    fn a_background_request_waiting_its_turn_lets_a_waited_thumbnail_go_first() {
+        let store = Store::open(tmp("turn")).unwrap();
+        let (f, _) = fake(false);
+        let opts = Options {
+            interval: Duration::from_secs(1),
+            ..quick()
+        };
+        let mut fetch = Fetcher::new(Box::new(f), Keys::Table(Box::new(table())), opts);
+        fetch.wanted(&store, Difficulty::Normal);
+        fetch.last_request = Some(Instant::now());
+        fetch
+            .wanted_thumbnails
+            .lock()
+            .unwrap()
+            .ask("N24-N99-PNF", false);
+        let t0 = Instant::now();
+        fetch.wait_turn(&store, Duration::from_secs(1));
+        assert!(store.has_thumbnail("N24-N99-PNF", false));
+        assert!(t0.elapsed() >= Duration::from_millis(900), "then its turn");
     }
 
     #[test]

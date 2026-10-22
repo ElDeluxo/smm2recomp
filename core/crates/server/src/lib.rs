@@ -6,7 +6,7 @@
 //! | method | path | does |
 //! |---|---|---|
 //! | POST | `/api/courses` (body: course data; header `X-Maker`) | upload → `{code, …}` |
-//! | GET | `/api/courses?q=&style=&sort=new\|popular\|hard&limit=&offset=` | search; with an upstream source, `popular` and `new` (no `q`) are its live lists first (`lists`) |
+//! | GET | `/api/courses?q=&style=&sort=new\|popular\|hot\|hard&limit=&offset=` | search (`hot`: as `popular`); with an upstream source, `popular`, `hot` (Popular's latest uploads first) and `new` (no `q`) are its live lists first (`lists`) |
 //! | GET | `/api/courses/<code>` | metadata (of a held or an upstream-listed course) |
 //! | GET | `/api/courses/<code>/data` (`?wait_ms=`, at most 20000) | course data (bytes); an upstream-listed course the server doesn't hold is fetched and imported, waited for up to `wait_ms` (default 7000; 404 meanwhile) |
 //! | GET | `/api/courses/<code>/thumbnail`, `/entire_thumbnail` (`?wait_ms=`, at most 20000) | the course's picture and its whole-course map (JPEG); one of an upstream course the server doesn't hold yet is fetched from the source, waited for up to `wait_ms` (404 meanwhile) |
@@ -1089,7 +1089,7 @@ impl Store {
             .cloned()
             .collect();
         match sort {
-            "popular" => v.sort_by_key(|m| std::cmp::Reverse((m.likes, m.plays))),
+            "popular" | "hot" => v.sort_by_key(|m| std::cmp::Reverse((m.likes, m.plays))),
             "hard" => v.sort_by_key(|m| std::cmp::Reverse(m.difficulty())),
             _ => v.sort_by_key(|m| std::cmp::Reverse(m.uploaded)),
         }
@@ -1346,10 +1346,10 @@ pub fn handle(
             let text = q.get("q").map(String::as_str).unwrap_or("");
             let style = q.get("style").map(String::as_str);
             let sort = q.get("sort").map(String::as_str).unwrap_or("new");
-            // Popular and New: the upstream lists, when the server has them
-            let listed = lists::Kind::of_sort(sort)
+            // Popular, Hot and New: the upstream lists, when the server has them
+            let listed = lists::View::of_sort(sort)
                 .filter(|_| text.is_empty())
-                .and_then(|k| store.list_page(k, style, n("offset", 0), n("limit", 30)));
+                .and_then(|v| store.list_page(v, style, n("offset", 0), n("limit", 30)));
             let courses = listed.unwrap_or_else(|| {
                 store
                     .search(text, style, sort, n("offset", 0), n("limit", 30))

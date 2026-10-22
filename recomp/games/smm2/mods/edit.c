@@ -438,8 +438,9 @@ static void relation_get(Cpu *c) {
     s32(no + 0x60, 0);
     netobj_unlock(c);
     // (outside the lock: HTTP; the buffers are this request's.) The ones the server holds first; then, for the
-    // others (which it is now fetching), a few seconds in all, more for a course being downloaded; whatever hasn't
-    // come by then shows the game's placeholder this time.
+    // others (which it is now fetching, in this order), a few seconds in all, more for a course being downloaded,
+    // and after that one more look for each (one may have come meanwhile); whatever hasn't come by then shows the
+    // game's placeholder this time.
     bool got[8] = {0};
     uint32_t ngot = 0;
     for (uint32_t i = 0; i < n; i++) ngot += got[i] = server_thumbnail(c, ids[i], false, outs_of[i], THUMB_BLOCK, 0);
@@ -448,7 +449,7 @@ static void relation_get(Cpu *c) {
         if (got[i]) continue;
         int left = (int)((int64_t)deadline - (int64_t)time(NULL)) * 1000;
         int wait = ids[i] == downloading ? 7000 : left > 0 ? left : 0;
-        if (wait) ngot += got[i] = server_thumbnail(c, ids[i], false, outs_of[i], THUMB_BLOCK, wait);
+        ngot += got[i] = server_thumbnail(c, ids[i], false, outs_of[i], THUMB_BLOCK, wait);
         if (got[i]) continue;
         if (ids[i] == downloading && make_thumbnail(c, outs_of[i]))
             MLOG("thumbnail for course %llu: a stand-in\n", (unsigned long long)ids[i]);
