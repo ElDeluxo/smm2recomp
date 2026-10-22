@@ -602,6 +602,27 @@ static void flip_uv(const float in[4][2], int flip, float out[4][2]) {
     const int *m = map[flip >= 0 && flip <= 5 ? flip : 0];
     for (int i = 0; i < 4; i++) out[i][0] = in[m[i]][0], out[i][1] = in[m[i]][1];
 }
+// A four-frame window's frame texcoords (nw::lyt's Window frame drawing [inf: the NW4R/NW4F layout library's
+// GetLT/RT/LB/RBTexCoord]): the frame's corner vertex (anchor: 0 LT, 1 RT, 2 LB, 3 RB) takes its flipped unit
+// coordinate, and the texture runs on from there by the strip's size in texels, toward the opposite corner (clamped
+// past the texture's edge: the corner's edge texels stretch along the strip). Mirroring the strip's texcoords about
+// their middle instead put a flipped bottom frame's corner at the wrong end: the reward window's lower-right frame
+// (Cmn_CMListWindow_01, RB flipped) was cut off.
+static void frame4_uv(int anchor, int flip, float pw, float ph, float tw, float th, float out[4][2]) {
+    static const float fc[6][4][2] = {
+        {{0, 0}, {1, 0}, {0, 1}, {1, 1}}, {{1, 0}, {0, 0}, {1, 1}, {0, 1}}, {{0, 1}, {1, 1}, {0, 0}, {1, 0}},
+        {{0, 1}, {0, 0}, {1, 1}, {1, 0}}, {{1, 1}, {0, 1}, {1, 0}, {0, 0}}, {{1, 0}, {1, 1}, {0, 0}, {0, 1}}};
+    static const int idx[6][2] = {{0, 1}, {0, 1}, {0, 1}, {1, 0}, {0, 1}, {1, 0}};  // (90 / 270: x runs along v)
+    int f = flip >= 0 && flip <= 5 ? flip : 0, opp = 3 - anchor;
+    const float (*cd)[2] = fc[f];
+    int px = idx[f][0], py = idx[f][1];  // the texcoord component along the screen's x, along its y
+    float dx = pw / (px == 0 ? tw : th), dy = ph / (py == 1 ? th : tw);
+    for (int i = 0; i < 4; i++) {
+        bool same_col = (i & 1) == (anchor & 1), same_row = (i >> 1) == (anchor >> 1);
+        out[i][px] = cd[anchor][px] + (same_col ? 0 : dx * (cd[opp][px] > cd[anchor][px] ? 1 : -1));
+        out[i][py] = cd[anchor][py] + (same_row ? 0 : dy * (cd[opp][py] > cd[anchor][py] ? 1 : -1));
+    }
+}
 static void uv_rect(float u0, float v0, float u1, float v1, float out[4][2]) {
     out[0][0] = u0, out[0][1] = v0, out[1][0] = u1, out[1][1] = v0, out[2][0] = u0, out[2][1] = v1, out[3][0] = u1, out[3][1] = v1;
 }
@@ -658,18 +679,15 @@ static void window(Ctx *c, const LWnd *w, const float r[4], const Mtx *mtx, cons
                 quad(c, m, 0, NULL, parts[k].rc, mtx, (const uint8_t (*)[4])fcol, (const float (*)[2])fuv, out);
             }
         } else if (w->nframes == 4) {
-            float tw0, th0, tw1, th1, tw2, th2, tw3, th3;
-            tex_size(c, w->fmat[0], &tw0, &th0), tex_size(c, w->fmat[1], &tw1, &th1);
-            tex_size(c, w->fmat[2], &tw2, &th2), tex_size(c, w->fmat[3], &tw3, &th3);
-            struct { float rc[4], u[4]; } q4[4] = {
-                {{l, t, ww - fr, ft}, {0, 0, (ww - fr) / tw0, 1}},
-                {{l + ww - fr, t, fr, wh - fb}, {0, 0, 1, (wh - fb) / th1}},
-                {{l, t - ft, fl, wh - ft}, {0, 1 - (wh - ft) / th2, 1, 1}},
-                {{l + fl, t - wh + fb, ww - fl, fb}, {1 - (ww - fl) / tw3, 0, 1, 1}}};
+            // each frame a strip from its corner (LT the top, RT the right side, LB the left side, RB the bottom),
+            // its texture anchored at that corner (frame4_uv: a flipped frame too)
+            float q4[4][4] = {{l, t, ww - fr, ft}, {l + ww - fr, t, fr, wh - fb}, {l, t - ft, fl, wh - ft},
+                              {l + fl, t - wh + fb, ww - fl, fb}};
             for (int k = 0; k < 4; k++) {
-                uv_rect(q4[k].u[0], q4[k].u[1], q4[k].u[2], q4[k].u[3], uv);
-                flip_uv((const float (*)[2])uv, w->fflip[k], fuv);
-                quad(c, w->fmat[k], 0, NULL, q4[k].rc, mtx, (const uint8_t (*)[4])fcol, (const float (*)[2])fuv, out);
+                float tw, th;
+                tex_size(c, w->fmat[k], &tw, &th);
+                frame4_uv(k, w->fflip[k], q4[k][2], q4[k][3], tw, th, fuv);
+                quad(c, w->fmat[k], 0, NULL, q4[k], mtx, (const uint8_t (*)[4])fcol, (const float (*)[2])fuv, out);
             }
         } else if (w->nframes == 8) {
             float iw = ww - fl - fr, ih = wh - ft - fb;
