@@ -197,12 +197,13 @@ void vk_level_change_check(void) {
     }
 }
 
+// Reshaped output only (as metal.m): at 16:9 render targets keep their contents from frame to frame, as on the Switch
 bool renderer_texture_frame_fresh(NvnTexture *t) {
     static int on = -1;
     if (on < 0) on = getenv("LARECOMP_NO_FRAME_CLEAR") == NULL;
     TexBackend *b = t ? (TexBackend *)t->backend : NULL;
     uint64_t total_frames = renderer_present_count();
-    if (!on || !b || !b->scalable || b->frame_cleared == total_frames + 1) return false;
+    if (!on || !b || !b->scalable || b->sx == b->sy || b->frame_cleared == total_frames + 1) return false;
     b->frame_cleared = total_frames + 1;
     return true;
 }

@@ -183,6 +183,10 @@ static bool draw_item_cursor;           // a fragment texture is the Items page'
 #define RSCALE_BUFFER_INDEX 18
 
 static int debug_pass_no;
+static id<MTLTexture> dbg_pass_tex;  // (debug frame: the current pass's first colour target, for LARECOMP_DEBUG_RAW)
+static uint64_t dbg_pass_addr;
+static id<MTLTexture> view_texture(NvnTexture *t, const NvnTextureView *v, bool has_view, bool render,
+                                   id<MTLBlitCommandEncoder> blit);
 static void end_pass(void) {
     if (enc) {
         [enc endEncoding];
@@ -201,6 +205,22 @@ static void end_pass(void) {
             snprintf(path, sizeof path, "build/pass_%03d_a.png", debug_pass_no++);
             renderer_save_texture_alpha(t, path);
         }
+        // LARECOMP_DEBUG_RAW=<dir>: the texels of the pass's own first target (the level drawn) as they are, for
+        // comparisons with another runtime (the image above is of the next pass's target when the targets change)
+        static const char *raw;
+        static int raw_init;
+        if (!raw_init) { raw_init = 1; raw = getenv("LARECOMP_DEBUG_RAW"); }
+        if (g_debug_frame && raw && dbg_pass_tex) {
+            extern void renderer_save_texture_raw(id<MTLTexture> tex, const char *path);
+            static int nraw;
+            if (cmdbuf) { id<MTLCommandBuffer> c = cmdbuf; cmdbuf = nil; [c commit]; [c waitUntilCompleted]; }
+            char path[512];
+            snprintf(path, sizeof path, "%s/pass_%03d_%lux%lu_%lu_%llx.raw", raw, nraw++, (unsigned long)dbg_pass_tex.width,
+                     (unsigned long)dbg_pass_tex.height, (unsigned long)dbg_pass_tex.pixelFormat,
+                     (unsigned long long)dbg_pass_addr);
+            renderer_save_texture_raw(dbg_pass_tex, path);
+        }
+        dbg_pass_tex = nil;
     }
 }
 
@@ -441,9 +461,8 @@ static MTLPixelFormat view_pixel_format(MTLPixelFormat base, const NvnTextureVie
     return pf;
 }
 
-static id<MTLTexture> view_texture(NvnTexture *t, const NvnTextureView *v, bool has_view, bool render,
-                                   id<MTLBlitCommandEncoder> blit) {
-    id<MTLTexture> base = renderer_texture(t, blit, render);
+// A texture view's levels, layers and format applied to base (t's own Metal texture, or a snapshot copy of it).
+static id<MTLTexture> view_of_base(id<MTLTexture> base, NvnTexture *t, const NvnTextureView *v, bool has_view, bool render) {
     if (!has_view || !v->setmask) return base;
     MTLPixelFormat pf = view_pixel_format(base.pixelFormat, v, true);
     NSUInteger lv0 = (v->setmask & 1) ? v->base_level : 0;
@@ -475,6 +494,11 @@ static id<MTLTexture> view_texture(NvnTexture *t, const NvnTextureView *v, bool 
         if (nfail++ < 10) LOG("[view] FAILED %lu -> %lu (nvn %#x -> %#x)\n", (unsigned long)base.pixelFormat, (unsigned long)pf, t->format, v->format);
     }
     return got;
+}
+
+static id<MTLTexture> view_texture(NvnTexture *t, const NvnTextureView *v, bool has_view, bool render,
+                                   id<MTLBlitCommandEncoder> blit) {
+    return view_of_base(renderer_texture(t, blit, render), t, v, has_view, render);
 }
 
 // ------------------------------------------------------------------ render passes
@@ -521,6 +545,7 @@ static void begin_pass(void) {
         if (rt_dropped(i)) continue;
         id<MTLTexture> tex = view_texture(t, &st.rt.cview[i], st.rt.has_cview[i], true, nil);
         rp.colorAttachments[i].texture = tex;
+        if (i == 0 && g_debug_frame) { dbg_pass_tex = tex; dbg_pass_addr = t->addr; }
         // 3D target: the view's layer is a depth slice (SMM2 fills its colour-correction LUT one slice per target)
         if (tex.textureType == MTLTextureType3D && st.rt.has_cview[i] && (st.rt.cview[i].setmask & 2)) {
             NSUInteger d = tex.depth ? tex.depth : 1, plane = st.rt.cview[i].min_layer;
@@ -763,6 +788,27 @@ static void dump_program(NvnProgram *p) {
         fclose(f);
     }
     n++;
+}
+
+// (debug) LARECOMP_MSL_OVERRIDE=<dir>: a shader's MSL replaced by <dir>/<code address>_vs|fs.metal when that file
+// exists (entry point main0, the translator's resource bindings): A/B tests of one program's maths in a real frame
+static void msl_override(ShaderInfo *si, uint64_t addr, const char *stage) {
+    static const char *dir;
+    static int init;
+    if (!init) { init = 1; dir = getenv("LARECOMP_MSL_OVERRIDE"); }
+    if (!dir || !si || !si->msl) return;
+    char path[512];
+    snprintf(path, sizeof path, "%s/%llx_%s.metal", dir, (unsigned long long)addr, stage);
+    FILE *f = fopen(path, "rb");
+    if (!f) return;
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    char *s = malloc((size_t)n + 1);
+    s[fread(s, 1, (size_t)n, f)] = 0;
+    fclose(f);
+    si->msl = s;  // (the translated source is left: debug only)
+    LOG("[shader] %s %llx: MSL from %s\n", stage, (unsigned long long)addr, path);
 }
 
 // ------------------------------------------------------------------ draw support
@@ -1715,6 +1761,8 @@ static Prog *get_program(NvnProgram *p, ShaderKey *vkey, ShaderKey *fkey) {
         ShaderInfo *vi, *fi, *gi;
         const char *why = maxwell_translate_program_msl(code, cmax, vkey, fkey, &vi, &fi, &gi);
         pr->vi = vi, pr->fi = fi, pr->gi = gi;
+        msl_override(vi, p->stages[0].code_addr, "vs");
+        msl_override(fi, p->stages[1].code_addr, "fs");
         if (why) {
             LOG("[shader] %s (code %llx %llx %llx)\n", why, p->stages[0].code_addr, p->stages[1].code_addr, p->stages[2].code_addr);
             if (vi && !vi->msl) {
@@ -1879,10 +1927,17 @@ static id<MTLTexture> apply_swizzle(id<MTLTexture> tex, NvnTexture *t, const Nvn
 }
 
 // Upload helper: a separate command buffer, committed now so it runs before the current pass.
+static id<MTLTexture> sampled_of_base(id<MTLTexture> base, NvnTexture *t, const NvnTextureView *v, bool has_view, int want_type);
 static id<MTLTexture> sampled_texture(NvnTexture *t, const NvnTextureView *v, bool has_view, int want_type) {
     // uploads (if the CPU-side contents changed) go into their own command buffer, committed before
     // the current one so they land first
-    id<MTLTexture> tex = view_texture(t, v, has_view, false, nil);
+    return sampled_of_base(renderer_texture(t, nil, false), t, v, has_view, want_type);
+}
+
+// The texture a shader samples for t through its view: base (t's Metal texture or a snapshot copy of it, which has
+// the same levels) with the view's levels / layers / format, the swizzle and the shader's texture type applied.
+static id<MTLTexture> sampled_of_base(id<MTLTexture> base, NvnTexture *t, const NvnTextureView *v, bool has_view, int want_type) {
+    id<MTLTexture> tex = view_of_base(base, t, v, has_view, false);
     tex = apply_swizzle(tex, t, v, has_view);
     MTLTextureType want = mtl_type_for(want_type);
 #if TARGET_OS_SIMULATOR
@@ -1983,9 +2038,14 @@ static void resolve_feedback(Prog *pr) {
             end_pass();
             id<MTLTexture> src = renderer_texture(t, nil, true);
             id<MTLTexture> dst = copies[key];
-            if (!dst || dst.width != src.width || dst.height != src.height || dst.pixelFormat != src.pixelFormat) {
+            // (all mip levels: a pass that draws into one level of a texture while sampling another, as SMM2's bloom
+            // chain does from 200x114 down, reads that other level from the snapshot)
+            NSUInteger nlv = src.textureType == MTLTextureType2DMultisample ? 1 : src.mipmapLevelCount;
+            if (!dst || dst.width != src.width || dst.height != src.height || dst.pixelFormat != src.pixelFormat ||
+                dst.mipmapLevelCount != nlv) {
                 MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:src.pixelFormat width:src.width
                                                                                            height:src.height mipmapped:NO];
+                d.mipmapLevelCount = nlv;
                 d.textureType = src.textureType == MTLTextureType2DMultisample ? MTLTextureType2DMultisample : MTLTextureType2D;
                 d.sampleCount = src.sampleCount;
                 d.usage = MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView;
@@ -1998,9 +2058,12 @@ static void resolve_feedback(Prog *pr) {
                 copies[key] = dst;
             }
             id<MTLBlitCommandEncoder> b = [cb() blitCommandEncoder];
-            [b copyFromTexture:src sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0)
-                    sourceSize:MTLSizeMake(src.width, src.height, 1) toTexture:dst destinationSlice:0 destinationLevel:0
-             destinationOrigin:MTLOriginMake(0, 0, 0)];
+            for (NSUInteger lv = 0; lv < nlv; lv++) {
+                NSUInteger w = src.width >> lv, h = src.height >> lv;
+                [b copyFromTexture:src sourceSlice:0 sourceLevel:lv sourceOrigin:MTLOriginMake(0, 0, 0)
+                        sourceSize:MTLSizeMake(w ? w : 1, h ? h : 1, 1) toTexture:dst destinationSlice:0 destinationLevel:lv
+                 destinationOrigin:MTLOriginMake(0, 0, 0)];
+            }
             [b endEncoding];
             feedback_tex[nfeedback] = t;
             feedback_copy[nfeedback++] = dst;
@@ -2043,13 +2106,7 @@ static void bind_textures(int stage, ShaderInfo *si) {
                 tex_wh[stage][i][0] = e->tex->width; tex_wh[stage][i][1] = e->tex->height;
             }
             for (int k = 0; k < nfeedback; k++)
-                if (e->tex == feedback_tex[k]) {
-                    id<MTLTexture> fc = feedback_copy[k];
-                    MTLTextureType want = mtl_type_for(st_->type);
-                    if (fc.textureType != want && want == MTLTextureType2DArray)
-                        fc = [fc newTextureViewWithPixelFormat:fc.pixelFormat textureType:MTLTextureType2DArray levels:NSMakeRange(0, 1) slices:NSMakeRange(0, 1)];
-                    tex = fc;
-                }
+                if (e->tex == feedback_tex[k]) tex = sampled_of_base(feedback_copy[k], e->tex, &e->view, e->has_view, st_->type);
             if (g_debug_frame && e->tex && e->tex->addr >= GUEST_LO && e->tex->addr < GUEST_HI) {
                 uint64_t total = tegra_total_size(&e->tex->layout), nz = 0;
                 const uint8_t *p = (const uint8_t *)(uintptr_t)e->tex->addr;
@@ -2323,13 +2380,7 @@ static void dispatch_compute(uint32_t gx, uint32_t gy, uint32_t gz) {
             if (e->tex) tex = sampled_texture(e->tex, &e->view, e->has_view, st_->type);
             if (e->tex && i < 64) renderer_texture_scale(e->tex, &tex_sc[0][i][0], &tex_sc[0][i][1]);
             for (int k = 0; k < nfeedback; k++)
-                if (e->tex == feedback_tex[k]) {
-                    id<MTLTexture> fc = feedback_copy[k];
-                    MTLTextureType want = mtl_type_for(st_->type);
-                    if (fc.textureType != want && want == MTLTextureType2DArray)
-                        fc = [fc newTextureViewWithPixelFormat:fc.pixelFormat textureType:MTLTextureType2DArray levels:NSMakeRange(0, 1) slices:NSMakeRange(0, 1)];
-                    tex = fc;
-                }
+                if (e->tex == feedback_tex[k]) tex = sampled_of_base(feedback_copy[k], e->tex, &e->view, e->has_view, st_->type);
         }
         if (h && st.spool && tsc < (uint32_t)st.spool->count) smp = sampler_for(&((NvnSamplerDesc *)st.spool->entries)[tsc]);
         [ce setTexture:tex ? tex : dummy_texture(st_->type) atIndex:i];
@@ -2897,8 +2948,7 @@ static void draw(CmdRec *r, bool indexed) {
         float f[3] = {0, 0, 0};
         static int off = -1;  // LARECOMP_NO_DEPTH_BIAS: ignore the game's polygon offset (A/B tests)
         if (off < 0) off = getenv("LARECOMP_NO_DEPTH_BIAS") != NULL;
-        if ((st.poly[3] & 4) && !off) memcpy(f, st.poly_offset, sizeof f);
-        static int nlog;
+        if ((st.poly[3] & 4) && !off) memcpy(f, st.poly_offset, sizeof f);        static int nlog;
         if ((st.poly[3] & 4) && nlog < 3 && getenv("LARECOMP_LOG_BIAS")) { nlog++; LOG("[bias] factor %g units %g clamp %g\n", st.poly_offset[0], st.poly_offset[1], st.poly_offset[2]); }
         if (memcmp(f, last, sizeof f) || enc != last_bias_enc) {
             [enc setDepthBias:f[1] slopeScale:f[0] clamp:f[2]];

@@ -102,6 +102,11 @@ static void shot_at(int64_t k) {
     extern char g_frame_shot_request[256];  // (runtime/nvn: the next presented frame, at its own size)
     snprintf(g_frame_shot_request, sizeof g_frame_shot_request, "%s/recomp_frame_%lld.png", dir ? dir : "build", (long long)k);
     LOG("[trace] frame capture after update %lld -> %s\n", (long long)k, g_frame_shot_request);
+    if (getenv("RECOMP_TRACE_SHOT_DEBUG")) {  // (debug) the captured frame is the debug frame (LARECOMP_DEBUG_*)
+        extern bool g_debug_frame;
+        g_debug_frame = true;
+        LOG("===== debug frame (trace shot %lld) =====\n", (long long)k);
+    }
 }
 
 static void finish(const char *why) {

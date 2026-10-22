@@ -278,15 +278,17 @@ static void level_change_check(void) {
         if (!strncmp(lv, "TelephoneBox", 12) || getenv("LARECOMP_CLEAR_ALL_LEVELS")) g_level_gen++;
     }
 }
-// Scene render targets are cleared to transparent black at their first use in each frame (LARECOMP_NO_FRAME_CLEAR=1
-// disables): pixels a frame never draws (inside pits, around generated rooms) otherwise keep older frames' content
-// and smear (moving enemies over a pit left trails, the pit rim repeated downwards). Verified 2026-10-08 on
-// rando/DevGen3 Tail Cave 07D: clean dark pit, no trails; overworld / dungeon rooms otherwise unchanged.
+// Reshaped output (a window wider or taller than 16:9): scene render targets are cleared to transparent black at
+// their first use in each frame (LARECOMP_NO_FRAME_CLEAR=1 disables), as pixels outside the game's 16:9 drawing
+// would otherwise keep older frames' content and smear (from LASRecomp: moving enemies over a pit left trails).
+// At 16:9 the targets keep their contents as on the Switch: SMM2 draws some translucent layers before the opaque
+// backdrop that fills the rest (NSMBU underwater: light columns over last frame's pixels), and the clear made those
+// pixels darker than the Switch / Ryujinx (WU_water 3,706 px up to 17 levels; without it 32 px, max 3).
 bool renderer_texture_frame_fresh(NvnTexture *t) {
     static int on = -1;
     if (on < 0) on = getenv("LARECOMP_NO_FRAME_CLEAR") == NULL;
     TexBackend *b = t ? (TexBackend *)t->backend : NULL;
-    if (!on || !b || !b->scalable || b->frame_cleared == total_frames + 1) return false;
+    if (!on || !b || !b->scalable || b->sx == b->sy || b->frame_cleared == total_frames + 1) return false;
     b->frame_cleared = total_frames + 1;
     return true;
 }
@@ -1052,6 +1054,39 @@ void renderer_save_texture_alpha(id<MTLTexture> tex, const char *path) {
     free(a);
     LOG("[metal] saved alpha %s (%lux%lu, max %u)\n", path, (unsigned long)w, (unsigned long)h, amax);
 }
+// (debug) a texture's level 0 / slice 0 texels as stored (i32 width, height, MTLPixelFormat, byte count, then the rows,
+// tightly packed): render-target comparisons against another runtime's dumps (LARECOMP_DEBUG_RAW)
+void renderer_save_texture_raw(id<MTLTexture> tex, const char *path) {
+    NSUInteger bpp;
+    switch (tex.pixelFormat) {
+    case MTLPixelFormatR8Unorm: bpp = 1; break;
+    case MTLPixelFormatRG8Unorm: case MTLPixelFormatR16Float: case MTLPixelFormatR16Unorm:
+    case MTLPixelFormatDepth16Unorm: case MTLPixelFormatB5G6R5Unorm: bpp = 2; break;
+    case MTLPixelFormatRGBA8Unorm: case MTLPixelFormatRGBA8Unorm_sRGB: case MTLPixelFormatBGRA8Unorm:
+    case MTLPixelFormatBGRA8Unorm_sRGB: case MTLPixelFormatRGB10A2Unorm: case MTLPixelFormatRG11B10Float:
+    case MTLPixelFormatRG16Float: case MTLPixelFormatRG16Unorm: case MTLPixelFormatR32Float:
+    case MTLPixelFormatDepth32Float: bpp = 4; break;
+    case MTLPixelFormatRGBA16Float: case MTLPixelFormatRGBA16Unorm: case MTLPixelFormatRG32Float: bpp = 8; break;
+    case MTLPixelFormatRGBA32Float: bpp = 16; break;
+    default: LOG("[metal] raw save: format %lu not handled\n", (unsigned long)tex.pixelFormat); return;
+    }
+    NSUInteger w = tex.width, h = tex.height, n = w * h * bpp;
+    id<MTLBuffer> buf = [dev newBufferWithLength:n options:MTLResourceStorageModeShared];
+    id<MTLCommandBuffer> cb = [queue commandBuffer];
+    id<MTLBlitCommandEncoder> b = [cb blitCommandEncoder];
+    [b copyFromTexture:tex sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(w, h, 1)
+              toBuffer:buf destinationOffset:0 destinationBytesPerRow:w * bpp destinationBytesPerImage:n];
+    [b endEncoding];
+    [cb commit];
+    [cb waitUntilCompleted];
+    FILE *f = fopen(path, "wb");
+    if (!f) return;
+    int32_t hdr[4] = {(int32_t)w, (int32_t)h, (int32_t)tex.pixelFormat, (int32_t)n};
+    fwrite(hdr, sizeof hdr, 1, f);
+    fwrite(buf.contents, 1, n, f);
+    fclose(f);
+}
+
 static float g_shot_crop[4] = {0, 0, 1, 1};  // presented crop of the current frame (screenshots match it)
 static bool g_save_upright;  // (set around saves of the window image: test shots under any name)
 void renderer_save_texture(id<MTLTexture> tex, const char *path) {
