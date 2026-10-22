@@ -155,7 +155,19 @@ SMM2's window of a downloaded course has only Play, Play Together and Delete, so
   downloaded course's window the mod shows My Courses' Make (`L_Edit_00`) alone, at the top of the button column where
   My Courses has it (a little smaller: it fits between the header and the stats [inf]), and switches it on
   (main+0x761190) after the info window machine's Appear / Disp (main+0x188c980 / +0x188cb10) each frame; for a My
-  Courses slot everything goes back. Touch reaches it; the d-pad cursor does not yet [obs] (below).
+  Courses slot everything goes back. Touch and the d-pad reach it [obs].
+- **The d-pad.** Each window button has a cursor controller (button +0x218) in the scene's cursor manager
+  (controller +0x18). A controller's +0x1460 holds its neighbour per direction (0 up, 1 down, 2 left, 3 right, then
+  the diagonals; table main+0x23b2030); +0x14a0 / +0x14a4 its place, +0x14a8 / +0x14ac its size, +0x14b0 the cursors
+  allowed on it (the enable call's bit). A move (main+0x74db40) takes the neighbour when it has one in the same
+  manager, and stays put when that neighbour is switched off; only a button with none is matched by place
+  (main+0x74e490). The window sets the shown list's neighbours and empties the others' [obs dump]: My Courses' Make
+  has up = the list tab, down = Upload; the downloaded course's Delete has up = the tab, down = Play. So the
+  downloaded window's Make, with no neighbours and Delete's up taken, was never reached. The mod puts Make at the
+  top of that column, as in My Courses: Make up = the tab (Delete's up before), down = Delete, left / right itself;
+  Delete up = Make, each frame after the window's update. The window restores My Courses' own neighbours itself
+  [obs]. Checked: Play → Delete → Make and back down; My Courses' window unchanged (Play → Name → Upload); A on Make
+  opens the Course Maker [obs].
 - **The press** (UI event 0x130, read in the Downloaded list's cCourseInfoWindow, main+0x16e2db0) sends the list
   to its cToPlay (main+0x16e33c0), which the mod turns into My Courses' Make: the slot is prepared as for Play
   (main+0x16e44e0) and the scene change goes to the Course Maker (reason 3, cRoboToEdit, with the slot's course
@@ -167,10 +179,33 @@ SMM2's window of a downloaded course has only Play, Play Together and Delete, so
   data id, +0x16c maker) is kept in `smm2edit.txt` in the data folder under the copy's creation id. When the copy is
   uploaded, `world.c` posts it as `POST /api/courses?based_on=<code>&based_on_maker=<name>`; the server credits a
   course it holds to its own maker (otherwise the given name), and Course World shows "Based on <code> by <maker>"
-  under the description (`edit_listing_description`). The original's record on the server is not touched.
-- `RECOMP_MOD_EDIT=0` turns it off.
+  under the description (`edit_listing_description`). The original's record on the server is not touched. The
+  maker name is the record's 10 UTF-16 characters (+0x16c, no terminator when the name fills them: the Mii data
+  follows) as UTF-8, percent-encoded.
+- **From Course World's card.** The card (`Nwk_CourseData_00`) has Download, More info, View comments, Report,
+  Play Together and Play; SMM1 had Download in Course World and Edit in the Coursebot, which the Make above now
+  gives. For a course already in the Coursebot, SMM2's Download fetches the course and then says "You cannot save
+  the same course." (the card's download machine, registered in main+0x17774a0: cDownload, cDownloaded, cDisp,
+  cLaterPlay (main+0x1766830: to the Coursebot, reason 0x0D, or 0x0E into My Courses for the player's own course),
+  cNextScene, cSavedAlready (enter main+0x1766bb0, exec main+0x1766c40), cAppletError, cError). The mod makes that
+  dead end the Edit: in cSavedAlready, when the course is in a Downloaded slot (save.dat +0xB930 slot table: byte 0
+  file number, byte 1 bit 0 a filled slot; later.dat record = file number − 0x78, +0x08 data id), it puts the course
+  just fetched (NetObj main+0x2c4b710 +0x1c868), its picture (the thumbnail cache, or the stand-in) and an empty
+  replay block where the Course Maker's loader takes a slot's data (save buffer +0x6C000 / +0xC8000 / +0xE4000;
+  main+0x100e3ba90 copies them for any slot that isn't the current course), makes it the player's own (as above)
+  and requests the Course Maker with that slot (reason 3). Without that preparation the Course Maker opened a blank
+  course [obs]. So: Download, then Download again = Edit. The button still reads "Download" (its text pane is
+  `L_DownloadPlayBtn_00` / `T_Btn_00`; changing it per card needs the card object and ui2d's text setter, not found
+  yet).
+- **Endless / 100 Mario** (designed, not built): SMM1 offers no edit there. SMM2's result screen after a clear
+  (the course-end machine, main+0x1bed050; choices at +0x2a0: Next, the ratings, Quit, comment, tags) could keep the
+  course for later through the same path as the card's Download (cLaterPlay → the Coursebot's "Select Download
+  Location", reason 0x0D, then back to the run): a "Save to Coursebot" there means leaving and re-entering the run
+  scene, which the 100 Mario flow (bridge.c) would have to survive, so it is left for later. Meanwhile a course from a
+  run can be found by its ID in Course World, downloaded and edited.
+- `RECOMP_MOD_EDIT=0` turns it off (the Make button, the card's Edit).
 
-**Where this stands (2026-10-19, WIP, paused):**
+**Where this stands (history, latest last):**
 - [obs] Download from Course World into the Coursebot; the downloaded course's window shows Make; a tap on it opens
   the Course Maker with that course; an edit (a row of ? blocks) saved with Save As into My Courses
   (`course_data_001.bcd`), the download untouched; the saved copy opens in My Courses and plays with the edit.
@@ -205,9 +240,22 @@ SMM2's window of a downloaded course has only Play, Play Together and Delete, so
   (`g_swkbd_entries`, runtime/hle/swkbd.c) carries the record to the new id. A change without a name entry (another
   course loaded) ends the watch. Checked in game: `655ff576 -> 7f8d0ecf`, both in `smm2edit.txt`. The upload itself
   needs a clear check first and hasn't been run in game.
-- Proposed, not built: an Edit on Course World's course card (Download, then straight into the Course Maker when
-  the Coursebot has saved it); in Endless / 100 Mario, "save to Coursebot for later" from SMM2's result screen
-  (SMM1 offers no edit there).
+- 2026-10-22, all three open items, checked in game (built-in server with `RECOMP_EMBED_SERVER=local`, a store
+  holding the instant-goal courses 9TC-5PV-7CG and LRH-R12-R7G; screens private):
+  - The d-pad reaches Make (above); d-pad + A on Make opened the Course Maker with 9TC-5PV-7CG.
+  - The upload credit end to end: download 9TC-5PV-7CG → Make → a coin → Save As ("EditCopy") → Upload → clear
+    check (passed) → the upload notices → `POST /api/courses?based_on=9TC-5PV-7CG&based_on_maker=…` → 201,
+    X62-J6M-J8G; Course World lists it by Player and its card reads "EditCopy / Based on 9TC-5PV-7CG by <its
+    maker>" (the server credits the maker of the course it holds). Fixed on the way: CanPostCourse answered 100 at
+    +0x8e610, which the game reads as "can't upload" ("You can't upload any more courses right now. Please wait a
+    while and try again later."); 0 is "allowed" (the wrapper stores the call's u32 only when its flag is clear,
+    else 0). Maker names went as '?' and ran into the next field; now UTF-8, 10 characters at most.
+  - The card's Edit: Download on 9TC-5PV-7CG (already in the Coursebot) opened the Course Maker with it, the
+    Save / Load menu offering Save As / Load (a new course), Save As into My Courses carried the origin
+    (`f9a44964 -> cfa34afd`).
+- Left: the card's button text ("Edit" for a course in the Coursebot); Endless / 100 Mario "save for later" (design
+  above); an uploaded course's picture (the upload sends only the course; the server has no route for an uploaded
+  course's thumbnail, so Course World shows the stand-in).
 
 Tests: `RECOMP_EDIT_CTL=<file>` (`edit_ctl.c`) reads commands appended to the file while the game runs (`tap x y
 [frames]`, `btn A+B [frames]`, `shot <name>`, `wait <frames>`, `peek <addr> [len]`, `poke <addr> <byte>`, `find <addr>

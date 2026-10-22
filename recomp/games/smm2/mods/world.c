@@ -520,13 +520,17 @@ static void post_comment(Cpu *c) {
 
 // ---- uploads from the Course Maker
 
-// CanPostCourse (60, main+0x14e0d40): allowed; +0x8e610 the number the player may still upload [inf].
+// CanPostCourse (60, main+0x14e0d40): allowed. The wrapper keeps the call's answer at +0x8e610: the call's u32
+// when its flag is clear, 0 when it is set (main+0x14e0d40), and the Coursebot's upload goes on only with 0;
+// anything else is "You can't upload any more courses right now. Please wait a while and try again later." [obs: 100
+// gave that message after a passed clear check, 0 uploads].
 static void can_post_course(Cpu *c) {
     if (!mod_hundred()) { guest_call_orig(c, c->pc); return; }
     uint64_t no = c->x[0];
     netobj_lock(c);
-    s32(no + 0x8e610, 100);
+    s32(no + 0x8e610, 0);
     netobj_unlock(c);
+    MLOG("CanPostCourse: yes\n");
     finish(c, no, true, 0);
 }
 

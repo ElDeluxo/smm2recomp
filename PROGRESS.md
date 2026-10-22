@@ -218,15 +218,19 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     back and bounces onto the wall top; off, it passes under him (16-frame window) and he can't climb; traces equal
     to update 259, reruns byte-identical; `research/evidence/smm1-shell-jump/`; ⬜ an off-case Ryujinx replay with
     shell contacts); ⬜ more from research/specs/smm1-extras*
-  - 🔄 **Edit any course** (`games/smm2/mods/edit.c`, `recomp/docs/mods.md` "Edit any course"; WIP, paused):
+  - 🔄 **Edit any course** (`games/smm2/mods/edit.c`, `recomp/docs/mods.md` "Edit any course"):
     ✅ Course World's Download into the Coursebot against our server (stand-in thumbnail); ✅ SMM2's Make in the
     Coursebot window of a downloaded course (SMM1's Edit placement), the Course Maker opens with the course, an edit
     saved to My Courses and played (screens private); ✅ typed names intact on Save As (re-tested 2026-10-21);
-    ⬜ d-pad cursor onto Make (touch works; the cursor's target list isn't the enable call's, see mods.md),
+    ✅ d-pad cursor onto Make (2026-10-22: the cursor controllers' neighbour links, Make at the top of the column as
+    in My Courses; My Courses' window unchanged),
     ✅ the copy is the player's own (2026-10-21: reset after the Course Maker's reload; saved copy has upload id 0;
     the yellow arrow on cards isn't an upload mark), ✅ the "Based on" record follows Save As (new creation id; checked
-    in game 2026-10-21), ⬜ upload credit in game (server `based_on` done and tested),
-    ⬜ Edit on the course card / Endless (proposed)
+    in game 2026-10-21), ✅ upload credit in game (2026-10-22: download → Make → edit → Save As → clear check →
+    Upload → Course World shows "Based on 9TC-5PV-7CG by <maker>"; fixed CanPostCourse's answer and the maker name),
+    ✅ Edit from Course World's card (2026-10-22: Download on a course already in the Coursebot opens the Course
+    Maker instead of SMM2's "You cannot save the same course."), ⬜ the card's button text "Edit",
+    ⬜ Endless / 100 Mario "save for later" (designed in mods.md, not built), ⬜ an uploaded course's picture
   - 🔄 **Our open-source server everywhere the game would reach Nintendo** (`recomp/docs/mods.md`,
     `games/smm2/mods/world.c`): ✅ Course World's course lists (Hot, Popular, New, detailed search, a
     maker's courses) from `/api/courses`, the course page (likes, plays, clear rate, world record, maker
@@ -469,7 +473,8 @@ Setup failures first, since they block new players:
      100 Mario / Endless runs. The costume trigger comes with item 4
 3. ✅ Mid-air shell jumps (finished 2026-10-22: the test course shows the SMM1 jump on, SMM2 off)
 4. ⬜ Mystery Mushroom costumes: a hit removes the costume, the taunt, the reward window, more than one per course
-5. ⬜ Edit any course: the d-pad onto Make, the upload credit, Edit on the course card / Endless
+5. 🔄 Edit any course: ✅ the d-pad onto Make, ✅ the upload credit, ✅ Edit on the course card (Download again);
+   ⬜ the card's "Edit" text, ⬜ Endless / 100 Mario "save for later" (design in mods.md)
 6. ⬜ Course World thumbnails: check whether they already work; fix only if not
 7. ⬜ Super Worlds
 8. ✅ Disable the buttons that don't work yet (2026-10-22, checked in game): every Course World entry works or answers

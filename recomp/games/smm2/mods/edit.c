@@ -4,7 +4,8 @@
 // "Make" button and sends it down the path My Courses' Make takes: the scene change to the Course Maker (reason 3,
 // cRoboToEdit) with the slot's course number. The Course Maker loads a Coursebot slot the same way whichever list it
 // is in (the loader copies the slot the Coursebot prepared), and its Save goes to My Courses as for any course, so
-// the downloaded copy stays as it was.
+// the downloaded copy stays as it was. The d-pad reaches the Make button as in My Courses (make_reachable), and
+// Course World's card opens the Course Maker the same way for a course already in the Coursebot (card_edit).
 //
 // Addresses are SMM2 v3.0.3, offsets in main.
 #include <stdio.h>
@@ -107,15 +108,34 @@ static uint32_t crc32_of(const uint8_t *p, size_t n) {
     return ~c;
 }
 
-static void utf16_ascii(uint64_t p, char *out, size_t cap) {  // (names: anything past ASCII becomes '?')
+// A UTF-16 name of at most max characters -> UTF-8 (the record's maker name fills its 10 with no terminator when it
+// is 10 long [obs: the Mii data follows]); control characters become spaces (smm2edit.txt is tab-separated lines).
+static void utf16_utf8(uint64_t p, uint32_t max, char *out, size_t cap) {
     size_t n = 0;
-    for (uint32_t i = 0; n + 1 < cap; i++) {
-        uint16_t ch = *(volatile uint16_t *)(uintptr_t)(p + 2 * i);
+    for (uint32_t i = 0; i < max; i++) {
+        uint32_t ch = *(volatile uint16_t *)(uintptr_t)(p + 2 * i);
         if (!ch) break;
-        out[n++] = ch >= 0x20 && ch < 0x7f && ch != '\t' ? (char)ch : '?';
+        if (ch >= 0xd800 && ch < 0xdc00 && i + 1 < max) {  // (a surrogate pair)
+            uint32_t lo = *(volatile uint16_t *)(uintptr_t)(p + 2 * (i + 1));
+            if (lo >= 0xdc00 && lo < 0xe000) ch = 0x10000 + ((ch - 0xd800) << 10) + (lo - 0xdc00), i++;
+        }
+        if (ch < 0x20) ch = ' ';
+        unsigned char b[4];
+        size_t k;
+        if (ch < 0x80) b[0] = (unsigned char)ch, k = 1;
+        else if (ch < 0x800) b[0] = (unsigned char)(0xc0 | ch >> 6), b[1] = (unsigned char)(0x80 | (ch & 0x3f)), k = 2;
+        else if (ch < 0x10000)
+            b[0] = (unsigned char)(0xe0 | ch >> 12), b[1] = (unsigned char)(0x80 | (ch >> 6 & 0x3f)),
+            b[2] = (unsigned char)(0x80 | (ch & 0x3f)), k = 3;
+        else
+            b[0] = (unsigned char)(0xf0 | ch >> 18), b[1] = (unsigned char)(0x80 | (ch >> 12 & 0x3f)),
+            b[2] = (unsigned char)(0x80 | (ch >> 6 & 0x3f)), b[3] = (unsigned char)(0x80 | (ch & 0x3f)), k = 4;
+        if (n + k >= cap) break;
+        memcpy(out + n, b, k), n += k;
     }
     out[n] = 0;
 }
+#define MAKER_NAME_CHARS 10
 
 static void remember_origin(uint32_t creation, const char *code, const char *maker) {
     FILE *f = fopen(EDIT_ORIGINS, "a");
@@ -146,7 +166,7 @@ bool edit_origin(uint32_t creation, char code[16], char maker[48]) {
 // The query an upload of the course (plain body, header at +0) adds: "?based_on=<code>&based_on_maker=<name>" for an
 // edited copy of someone else's course, "" otherwise (world.c, the course upload).
 void edit_upload_query(const uint8_t *course, char *out, size_t cap) {
-    char code[16], maker[48], esc[160];
+    char code[16], maker[48], esc[200];  // (maker: UTF-8, percent-encoded byte by byte)
     out[0] = 0;
     uint32_t creation;
     memcpy(&creation, course + 0x24, 4);
@@ -204,10 +224,13 @@ static void *reset_after_load(void *arg) {
         if (cur && g32(cur) == 1 && !memcmp((const void *)(uintptr_t)(cur + 0xc), "SCDL", 4)) {
             uint64_t hdr = cur + 0x10;
             uint32_t now_id = g32(hdr + 0x24);
-            if (now_id == g_reset.orig_creation && g64(hdr + 0x28) == g_reset.orig_upload) {
+            if ((!g_reset.orig_creation || now_id == g_reset.orig_creation) && g64(hdr + 0x28) == g_reset.orig_upload) {
                 make_own(cur, g_reset.creation);
                 if (!applied++) LOG("[mod] edit: the Course Maker's course made the player's own (creation id %08x)\n",
                                     g_reset.creation);
+            } else if (!applied && now_id == g_reset.creation && !g64(hdr + 0x28)) {
+                applied = 1;  // (the copy came in as prepared: nothing to reset)
+                LOG("[mod] edit: the Course Maker has the copy (creation id %08x)\n", now_id);
             } else if (applied && now_id != tracked) {
                 unsigned n = __atomic_load_n(&g_swkbd_entries, __ATOMIC_RELAXED);
                 if (n == names || g64(hdr + 0x28)) break;  // (another course: the watch ends)
@@ -232,7 +255,7 @@ static void prepare_copy(int32_t slot) {
     char code[12] = "", maker[48] = "";
     uint32_t id = (uint32_t)g64(rec + 0x08);
     if (id) data_id_to_code(id, code);
-    utf16_ascii(rec + 0x16c, maker, sizeof maker);
+    utf16_utf8(rec + 0x16c, MAKER_NAME_CHARS, maker, sizeof maker);
     // a creation id of its own (a new course gets a random one [obs blank course]; the copy keeps it, which makes
     // it the copy's key here)
     static uint32_t seq;
@@ -290,6 +313,32 @@ static void dl_info(Cpu *c) {
         for (int32_t i = 0; i < n; i++) LOG("[mod] edit: UI event %#x\n", g32(g64(g64(ev + 0x720) + 8ull * i)));
     }
     guest_call_orig(c, c->pc);
+}
+
+// ---- Edit from Course World's course card
+//
+// The card's Download (L_DownloadPlayBtn_00 in Nwk_CourseData_00) fetches the course, then the scene goes to the
+// Coursebot to pick a slot (reason 0x0D cNetMainToRoboForSave, or 0x0E into My Courses for the player's own course,
+// main+0x1766830). For a course already in the Coursebot SMM2 says "You cannot save the same course."; there the mod
+// opens the Course Maker with that slot instead (card_edit, below): the same copy and scene change as the Coursebot
+// window's Make. So Download, then Download again, is Edit (SMM1: Download in Course World, Edit in the Coursebot).
+//
+// Which courses are in the Coursebot: save.dat (save buffer +0) keeps a table at +0xB930, 8 bytes per course number,
+// byte 0 the file number, byte 1 bit 0 set for a slot with a course [obs: set for the filled slots, clear for the
+// empty ones]; a Downloaded slot's (course numbers 0x78-0xB3) record in later.dat is file number - 0x78
+// (research/specs/coursebot.md).
+#define SLOT_TABLE 0xb930
+
+static int32_t downloaded_slot(uint32_t data_id) {  // the Downloaded slot holding the course; -1: none
+    uint64_t save = g64(SAVE_MGR) ? g64(g64(SAVE_MGR) + 0x20) : 0;
+    if (!save || !data_id) return -1;
+    for (int32_t n = 0x78; n < 0xb4; n++) {
+        uint32_t file = g8(save + SLOT_TABLE + 8ull * (uint32_t)n);
+        if (file < 0x78 || file >= 0xb4 || !(g8(save + SLOT_TABLE + 8ull * (uint32_t)n + 1) & 1)) continue;
+        uint64_t rec = save + LATER_RECORDS + (uint64_t)LATER_RECORD * (file - 0x78);
+        if ((uint32_t)g64(rec + 0x08) == data_id) return n;
+    }
+    return -1;
 }
 
 // ---- Course World's thumbnails: a course's picture (the lists, the course page, a download) and its whole-course
@@ -514,6 +563,95 @@ static void map_get(Cpu *c) {
     c->x[0] = wrapper_ok();
 }
 
+// The card's press for a course already in the Coursebot. The card's download machine (registered in
+// main+0x17774a0; its states' functions take the owner, +600 the course's data id): cDownload (enter
+// main+0x1766130, exec main+0x17661f0) fetches the course and its picture; then cLaterPlay (exec main+0x1766830)
+// hands them to the Coursebot (UI info +0x70: the record, the course at +0x318 from NetObj (main+0x2c4b710)
+// +0x1c868, the picture from the thumbnail cache) and requests reason 0x0D, or, for a course already in the
+// Coursebot, cSavedAlready (enter main+0x1766bb0, exec main+0x1766c40) shows SMM2's "You cannot save the same
+// course." [obs] and goes back to the card. There the mod does the Edit instead: it puts the fetched course where the
+// Course Maker's loader takes a slot's data (main+0x100e3ba90: the save buffer's +0x6C000 course, +0xC8000 picture,
+// +0xE4000 replay block, as the Coursebot's slot preparation does, main+0x16e44e0), makes that copy the player's own,
+// and requests the Course Maker with the course's Downloaded slot (reason 3), as the Coursebot window's Make does.
+// The Course Maker's Save is Save As into My Courses; the Coursebot's copy and the server's course stay as they were.
+#define SAVED_ALREADY_ENTER MAIN_ADDR(0x1766bb0)
+#define SAVED_ALREADY_EXEC MAIN_ADDR(0x1766c40)
+#define NETOBJ_COURSE 0x1c868                 // *(main+0x2c4b710): the downloaded course file (0x5c000)
+#define SLOT_THUMB 0xc8000
+#define SLOT_REPLAY 0xe4000
+#define REPLAY_BLOCK 0x68000
+
+static uint64_t cached_thumbnail(uint64_t data_id) {  // the thumbnail cache's valid block for the course; 0: none
+    uint64_t profile = g64(PROFILE), slots = profile ? g64(profile + 0x132858) : 0;
+    uint32_t n = profile ? g32(profile + 0x132850) : 0;
+    for (uint32_t i = 0; i < 100 && i < n && slots; i++) {
+        uint64_t slot = slots + 0x1c1b8ull * i;
+        if (g64(slot + 0x1c000) == data_id) return g8(slot + 0x1c1b4) && !g8(slot + 0x1c1b2) ? slot : 0;
+    }
+    return 0;
+}
+
+enum { CARD_NO, CARD_WAIT, CARD_DONE };
+
+static int card_edit(Cpu *c, uint64_t self) {
+    uint64_t id = g64(self + 600), save = g64(SAVE_MGR) ? g64(g64(SAVE_MGR) + 0x20) : 0, net = g64(MAIN_ADDR(0x2c4b710));
+    int32_t slot = downloaded_slot((uint32_t)id);
+    if (slot < 0 || !save || !net) return CARD_NO;
+    uint64_t src = net + NETOBJ_COURSE, file = save + SLOT_COURSE, hdr = file + 0x10;
+    uint64_t upload = g64(src + 0x10 + 0x28);  // (0 in a course our server took from the Course Maker [inf])
+    if (g32(src) != 1 || memcmp((const void *)(uintptr_t)(src + 0xc), "SCDL", 4) || (upload && upload != id)) {
+        LOG("[mod] edit: Edit on the card: the fetched course isn't course %llu\n", (unsigned long long)id);
+        return CARD_NO;
+    }
+    uint64_t lr = c->x[30], x0 = c->x[0];
+    c->x[0] = 0;
+    guest_call(c, FADE_BUSY);
+    bool busy = c->x[0] & 1;
+    c->x[0] = x0, c->x[30] = lr;
+    if (busy || (g64(SCENE_BUSY) && g8(g64(SCENE_BUSY) + 0x344))) return CARD_WAIT;
+    memcpy((void *)(uintptr_t)file, (const void *)(uintptr_t)src, SLOT_THUMB - SLOT_COURSE);
+    uint64_t thumb = cached_thumbnail(id);
+    if (thumb) memcpy((void *)(uintptr_t)(save + SLOT_THUMB), (const void *)(uintptr_t)thumb, THUMB_BLOCK);
+    else make_thumbnail(c, save + SLOT_THUMB);
+    uint64_t replay = save + SLOT_REPLAY;  // (an empty replay block, as the Coursebot's preparation makes one)
+    memset((void *)(uintptr_t)replay, 0, REPLAY_BLOCK);
+    s32(replay, crc32_of((const uint8_t *)(uintptr_t)(replay + 4), 0x67fcc));
+    // the copy, as prepare_copy does it
+    uint64_t rec = save + LATER_RECORDS + (uint64_t)LATER_RECORD * (g8(save + SLOT_TABLE + 8ull * (uint32_t)slot) - 0x78u);
+    char code[12], maker[48];
+    data_id_to_code((uint32_t)id, code);
+    utf16_utf8(rec + 0x16c, MAKER_NAME_CHARS, maker, sizeof maker);
+    static uint32_t seq;
+    uint32_t creation = (uint32_t)time(NULL) * 2246822519u ^ (++seq * 0x9e3779b9u) ^ (uint32_t)id;
+    if (!creation) creation = 1;
+    LOG("[mod] edit: Edit on Course World's card: %s by %s (in Downloaded slot %d) -> Course Maker (creation id %08x "
+        "-> %08x)\n", code, maker[0] ? maker : "?", slot - 0x78, g32(hdr + 0x24), creation);
+    g_reset.orig_creation = g32(hdr + 0x24), g_reset.orig_upload = g64(hdr + 0x28), g_reset.creation = creation;
+    snprintf(g_reset.code, sizeof g_reset.code, "%s", code), snprintf(g_reset.maker, sizeof g_reset.maker, "%s", maker);
+    make_own(file, creation);
+    uint64_t mgr = g64(SAVE_MGR), cur = mgr ? g64(mgr + 0x58) : 0;  // (the current-course copy, as prepare_copy)
+    if (cur && (int32_t)g32(mgr + 0x60) == slot && g32(cur) == 1) make_own(cur, creation);
+    pthread_t th;
+    if (pthread_create(&th, NULL, reset_after_load, NULL) == 0) pthread_detach(th);
+    remember_origin(creation, code, maker);
+    request_edit(c, slot);
+    c->x[0] = x0, c->x[30] = lr;
+    return CARD_DONE;
+}
+
+static int card_state;  // for the card in cSavedAlready: CARD_NO (SMM2's message), CARD_WAIT, CARD_DONE
+
+static void saved_already_enter(Cpu *c) {
+    card_state = edit_on() ? card_edit(c, c->x[0]) : CARD_NO;
+    if (card_state == CARD_NO) guest_call_orig(c, c->pc);
+}
+
+static void saved_already_exec(Cpu *c) {
+    if (card_state == CARD_NO) { guest_call_orig(c, c->pc); return; }
+    if (card_state == CARD_WAIT) card_state = card_edit(c, c->x[0]);  // (then the scene fades to the Course Maker)
+    if (card_state == CARD_NO) guest_call_orig(c, c->pc);
+}
+
 // ---- the Make button in the window of a downloaded course
 //
 // The window (Lcl_CourseInfoWindow_00) is one layout for both lists: its TypeMode animation shows the My Courses
@@ -550,7 +688,61 @@ static float gf(uint64_t a) { float f; memcpy(&f, (const void *)(uintptr_t)a, 4)
 static void sf(uint64_t a, float f) { memcpy((void *)(uintptr_t)a, &f, 4); }
 static void set_visible(uint64_t pane, bool on) { s8(pane + 0x58, (uint8_t)((g8(pane + 0x58) & ~1u) | (on ? 1u : 0u))); }
 
-static struct { uint64_t pane; float y, sx, sy; uint64_t hidden[8]; int nhidden; bool moved; } make_saved;
+static struct { uint64_t pane; float y, sx, sy; uint64_t hidden[8]; int nhidden; bool moved; uint64_t above; } make_saved;
+
+// The d-pad cursor. Each button of the window has a cursor controller (button +0x218) in the scene's cursor manager
+// (controller +0x18); a controller's +0x1460 holds its neighbour for each direction (0 up, 1 down, 2 left, 3 right,
+// then the diagonals; table main+0x23b2030), +0x14a0 / +0x14a4 its place, +0x14b0 the cursors allowed on it (the
+// enable call's bit). A move takes the neighbour when there is one in the manager, and stays put when that neighbour
+// is switched off; only a button without one is looked for by place (main+0x74db40, main+0x74e490). The window sets
+// the shown list's neighbours and leaves the others' empty [obs]: My Courses' Make has up = the list tab, down =
+// Upload; the downloaded course's Delete has up = the tab, down = Play. So Make, with no neighbours of its own and
+// Delete's up taken, was never reached. In a downloaded course's window Make goes at the top of that column as in My
+// Courses: Make's up is the tab (Delete's up before), its down Delete, left and right itself; Delete's up is Make.
+#define CTL_NEIGHBOURS 0x1460
+#define NB_UP 0
+#define NB_DOWN 1
+#define NB_LEFT 2
+#define NB_RIGHT 3
+
+static uint64_t named_button(uint64_t win, const char *name) {  // a window button (+0x268) by its pane's name
+    uint64_t buttons = g64(win + 0x268);
+    for (uint32_t i = 0; buttons && i < g32(win + 0x260) && i < 32; i++) {
+        uint64_t b = g64(buttons + 8ull * i), part = b ? g64(b + 0x58) : 0, pane = part ? g64(part + 0x48) : 0;
+        if (pane && !strncmp((const char *)(uintptr_t)(pane + 0xb0), name, 24)) return b;
+    }
+    return 0;
+}
+
+static void make_reachable(uint64_t make_button, uint64_t win) {
+    uint64_t del_button = named_button(win, "L_DLDel_00");
+    uint64_t make = g64(make_button + 0x218), del = del_button ? g64(del_button + 0x218) : 0;
+    if (!make || !del || g64(make + 0x18) != g64(del + 0x18)) return;
+    uint64_t up = g64(del + CTL_NEIGHBOURS + 8 * NB_UP);
+    if (up != make) make_saved.above = up;  // (the window set it again)
+    s64(del + CTL_NEIGHBOURS + 8 * NB_UP, make);
+    s64(make + CTL_NEIGHBOURS + 8 * NB_UP, make_saved.above ? make_saved.above : make);
+    s64(make + CTL_NEIGHBOURS + 8 * NB_DOWN, del);
+    s64(make + CTL_NEIGHBOURS + 8 * NB_LEFT, make);
+    s64(make + CTL_NEIGHBOURS + 8 * NB_RIGHT, make);
+}
+
+static void dump_nav(uint64_t win) {  // (tests: the window's buttons and their cursor neighbours)
+    uint64_t parts = g64(win + 0x238), buttons = g64(win + 0x268);
+    for (uint32_t i = 0; parts && i < g32(win + 0x230); i++) {
+        uint64_t part = g64(parts + 8ull * i), b = part ? g64(part + 0x58) : 0, pane = b ? g64(b + 0x48) : 0;
+        LOG("[mod] edit nav: part %u %llx button %llx pane %llx %.24s\n", i, (unsigned long long)part,
+            (unsigned long long)b, (unsigned long long)pane, pane ? (const char *)(uintptr_t)(pane + 0xb0) : "-");
+    }
+    for (uint32_t i = 0; buttons && i < g32(win + 0x260); i++) {
+        uint64_t b = g64(buttons + 8ull * i), ctl = b ? g64(b + 0x218) : 0;
+        if (!ctl) { LOG("[mod] edit nav: button %u %llx (no controller)\n", i, (unsigned long long)b); continue; }
+        LOG("[mod] edit nav: button %u %llx ctl %llx mgr %llx mask %x pos %.0f,%.0f size %.0f,%.0f nb %llx %llx %llx %llx\n",
+            i, (unsigned long long)b, (unsigned long long)ctl, (unsigned long long)g64(ctl + 0x18), g32(ctl + 0x14b0),
+            gf(ctl + 0x14a0), gf(ctl + 0x14a4), gf(ctl + 0x14a8), gf(ctl + 0x14ac), (unsigned long long)g64(ctl + 0x1460),
+            (unsigned long long)g64(ctl + 0x1468), (unsigned long long)g64(ctl + 0x1470), (unsigned long long)g64(ctl + 0x1478));
+    }
+}
 
 static void make_button(Cpu *c, uint64_t win, bool downloaded) {
     uint64_t make = part_pane(win, PART_EDIT, "L_Edit_00"), group = make ? g64(make + 0x18) : 0;
@@ -589,6 +781,7 @@ static void make_button(Cpu *c, uint64_t win, bool downloaded) {
         guest_call(c, BUTTON_ENABLE);
         c->x[30] = lr;
     }
+    if (flag == 1 && !getenv("RECOMP_EDIT_NO_NAV")) make_reachable(button, win);
 }
 
 static void info_window(Cpu *c) {
@@ -597,6 +790,8 @@ static void info_window(Cpu *c) {
     uint64_t win = g64(self + 0x228);
     int32_t slot = selected_slot();
     if (win && edit_on() && slot >= 0 && slot < 0xb4) make_button(c, win, slot >= 0x78);
+    static int dumps;
+    if (win && getenv("RECOMP_EDIT_TRACE") && (dumps++ % 600) == 30) LOG("[mod] edit nav: slot %d\n", slot), dump_nav(win);
 }
 
 __attribute__((constructor)) static void edit_register(void) {
@@ -605,6 +800,8 @@ __attribute__((constructor)) static void edit_register(void) {
     hle_override(MAIN_ADDR(0x14e0e70), relation_get, "mod: relation object (thumbnail) download");
     hle_override(MAIN_ADDR(0x14e2cf0), map_get, "mod: relation object (whole-course map) download");
     hle_override(DOWNLOAD_EXEC, download_exec, "mod: Course World cDownload (a picture that failed)");
+    hle_override(SAVED_ALREADY_ENTER, saved_already_enter, "mod: Course World cSavedAlready enter (Edit on the card)");
+    hle_override(SAVED_ALREADY_EXEC, saved_already_exec, "mod: Course World cSavedAlready exec (Edit on the card)");
     hle_override(DL_INFO_EXEC, dl_info, "mod: Coursebot downloaded cCourseInfoWindow (edit)");
     hle_override(DL_TO_PLAY_EXEC, dl_to_play, "mod: Coursebot downloaded cToPlay (edit)");
 }
