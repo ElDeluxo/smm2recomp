@@ -21,7 +21,8 @@
 #define VK_LATE_FUNCS(X) X(CmdBeginRendering) X(CmdEndRendering) X(CmdPipelineBarrier2) X(CmdSetCullMode) \
     X(CmdSetDepthBiasEnable) X(CmdSetDepthCompareOp) X(CmdSetDepthTestEnable) X(CmdSetDepthWriteEnable) \
     X(CmdSetFrontFace) X(CmdSetPrimitiveRestartEnable) X(CmdSetPrimitiveTopology) X(CmdSetStencilOp) \
-    X(CmdSetStencilTestEnable) X(CmdWriteTimestamp2) X(QueueSubmit2) X(GetSemaphoreCounterValue) X(WaitSemaphores)
+    X(CmdSetStencilTestEnable) X(CmdWriteTimestamp2) X(QueueSubmit2) X(GetSemaphoreCounterValue) X(WaitSemaphores) \
+    X(GetBufferDeviceAddress)
 #define X(n) extern PFN_vk##n vkl_##n;
 VK_LATE_FUNCS(X)
 #undef X
@@ -42,6 +43,7 @@ VK_LATE_FUNCS(X)
 #define vkQueueSubmit2 vkl_QueueSubmit2
 #define vkGetSemaphoreCounterValue vkl_GetSemaphoreCounterValue
 #define vkWaitSemaphores vkl_WaitSemaphores
+#define vkGetBufferDeviceAddress vkl_GetBufferDeviceAddress
 
 #include "../nvn.h"
 #include "../maxwell/shader.h"
@@ -62,6 +64,7 @@ typedef struct {
     VkSemaphore timeline;      // value = last completed submission number
     VkCommandPool pool;        // render thread only
     bool custom_border, divisor, host_import, geometry;
+    bool bda;  // bufferDeviceAddress: shader global memory through the heap's device address (exec.c gmem_desc)
     // window
     VkSurfaceKHR surface;
     VkSwapchainKHR swapchain;

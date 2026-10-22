@@ -2143,6 +2143,7 @@ static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32
 static VkBuffer gmem_buf;
 static VkDeviceMemory gmem_mem;
 static uint64_t gmem_size;
+static VkDeviceAddress gmem_addr;  // (g_vk.bda) the import's device address
 
 static bool gmem_import(uint64_t size) {
     PFN_vkGetMemoryHostPointerPropertiesEXT props =
@@ -2154,7 +2155,10 @@ static bool gmem_import(uint64_t size) {
     VkImportMemoryHostPointerInfoEXT imp = {.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_HOST_POINTER_INFO_EXT,
                                             .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT,
                                             .pHostPointer = (void *)(uintptr_t)HEAP_BASE};
-    VkMemoryAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .pNext = &imp, .allocationSize = size,
+    VkMemoryAllocateFlagsInfo af = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO, .pNext = &imp,
+                                     .flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT};
+    VkMemoryAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .pNext = g_vk.bda ? (void *)&af : (void *)&imp,
+                               .allocationSize = size,
                                .memoryTypeIndex = (uint32_t)__builtin_ctz(mp.memoryTypeBits)};
     VkDeviceMemory mem;
     if (vkAllocateMemory(g_vk.dev, &ai, NULL, &mem) != VK_SUCCESS) return false;
@@ -2162,7 +2166,8 @@ static bool gmem_import(uint64_t size) {
                                            .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT};
     VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .pNext = &eb, .size = size,
                              .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                                      VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT};
+                                      VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
+                                      (g_vk.bda ? VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT : 0)};
     VkBuffer buf;
     if (vkCreateBuffer(g_vk.dev, &bi, NULL, &buf) != VK_SUCCESS) { vkFreeMemory(g_vk.dev, mem, NULL); return false; }
     vkBindBufferMemory(g_vk.dev, buf, mem, 0);
@@ -2174,6 +2179,10 @@ static bool gmem_import(uint64_t size) {
     gmem_buf = buf;
     gmem_mem = mem;
     gmem_size = size;
+    if (g_vk.bda) {
+        VkBufferDeviceAddressInfo dai = {.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO, .buffer = buf};
+        gmem_addr = vkGetBufferDeviceAddress(g_vk.dev, &dai);
+    }
     LOG("[vk] guest heap imported for shader global memory: %llu MB\n", (unsigned long long)(size >> 20));
     return true;
 }
@@ -2230,6 +2239,59 @@ static VmaAllocation gfast_mem;
 static uint32_t gmap_tab[(GMAP_MAX + 1) * 4];  // this dispatch's table (stage_set copies it into binding 20)
 static VkBufferCopy gfast_cp[GMAP_MAX];       // its copies heap -> gfast_buf (reversed after a storing dispatch)
 static int gfast_n;
+
+// Binding GMEM_BUFFER_INDEX: the heap itself, or with g_vk.bda its device address and size (translate.c: GMemA)
+static VkDescriptorBufferInfo gmem_desc(void) {
+    VkDescriptorBufferInfo heap = gmem_info();
+    if (!g_vk.bda) return heap;
+    uint32_t ab[4] = {0, 0, 0, 0};  // (no import: size 0, every access out of bounds)
+    if (gmem_buf) ab[0] = (uint32_t)gmem_addr, ab[1] = (uint32_t)(gmem_addr >> 32), ab[2] = (uint32_t)gmem_size, ab[3] = (uint32_t)(gmem_size >> 32);
+    VkSpan s = vk_transient_copy(ab, sizeof ab, 256);
+    return (VkDescriptorBufferInfo){s.buf, s.off, sizeof ab};
+}
+
+// Draw stages without the heap on the GPU (no host memory import: maxwell_glsl_gmap_gfx; Android's emulator, many
+// phones), where global memory reads gave zero (sm35recomp 3fce300: its course cards and menu rows lost their text):
+// the stage's bound storage buffers are copied from guest memory into this draw's transient memory, and the table
+// (binding GMAP_BUFFER_INDEX) says where each one sits - the compute fast path's scheme (gfast_prepare), filled by the
+// CPU. Buffers over 8 MB, or more than 16 MB in all, are left out (their reads give zero, as before).
+static uint32_t gx_tab[(GMAP_MAX + 1) * 4];
+static VkDescriptorBufferInfo gx_fast;
+static VkDescriptorBufferInfo gfast_info(void);
+static void gfx_gmap(int stage) {
+    memset(gx_tab, 0, sizeof gx_tab);
+    struct { uint64_t lo, hi; } r[16];
+    int n = 0;
+    for (int i = 0; i < 16; i++) {  // heap offsets of the bound storage buffers, 256-aligned, sorted by start
+        uint64_t a = st.sbuf[stage][i].addr, sz = st.sbuf[stage][i].size;
+        if (!a || !sz || a < HEAP_BASE || a - HEAP_BASE + sz > HEAP_MAX || sz > (8u << 20)) continue;
+        uint64_t lo = (a - HEAP_BASE) & ~255ull, hi = (a - HEAP_BASE + sz + 255) & ~255ull;
+        if (hi > HEAP_MAX) hi = HEAP_MAX;
+        int k = n++;
+        while (k > 0 && r[k - 1].lo > lo) { r[k] = r[k - 1]; k--; }
+        r[k].lo = lo; r[k].hi = hi;
+    }
+    int m = 0;
+    for (int i = 0; i < n; i++) {  // (merged when they overlap or nearly touch)
+        if (m && r[i].lo <= r[m - 1].hi + 4096) { if (r[i].hi > r[m - 1].hi) r[m - 1].hi = r[i].hi; }
+        else r[m++] = r[i];
+    }
+    uint64_t total = 0;
+    for (int i = 0; i < m; i++) total += (r[i].hi - r[i].lo + 255) & ~255ull;
+    if (!m || m > GMAP_MAX || total > (16u << 20)) { gx_fast = gfast_info(); return; }  // (nothing / too much: none)
+    VkSpan sp = vk_transient(total, 256);
+    uint64_t off = 0;
+    for (int i = 0; i < m; i++) {
+        uint64_t len = r[i].hi - r[i].lo;
+        memcpy((uint8_t *)sp.ptr + off, (const void *)(uintptr_t)(HEAP_BASE + r[i].lo), len);
+        gx_tab[i * 4 + 0] = (uint32_t)r[i].lo;
+        gx_tab[i * 4 + 1] = (uint32_t)len;
+        gx_tab[i * 4 + 2] = (uint32_t)(off >> 2);
+        off += (len + 255) & ~255ull;
+    }
+    gx_tab[GMAP_MAX * 4] = (uint32_t)m;
+    gx_fast = (VkDescriptorBufferInfo){sp.buf, sp.off, total};
+}
 
 static VkDescriptorBufferInfo gfast_info(void) {
     if (!gfast_buf) {
@@ -2625,6 +2687,8 @@ static VkDescriptorSet stage_set(Prog *p, VkDescriptorSetLayout layout, uint32_t
     float rs[66][4] = {{1, 1, 0, 0}};  // ([65]: mirror mode, renderer.m)
     if (rscale_row0) memcpy(rs[0], rscale_row0, 16);
     rs[65][0] = g_mirror_w;
+    bool gx_stage = stage != 5 && si->uses_gmem_map;  // (a draw stage on per-draw copies: gfx_gmap)
+    if (gx_stage) gfx_gmap(stage);
     for (int i = 0; i < p->nbinds; i++) {
         VkBindingInfo *b = &p->binds[i];
         if (b->set != set) continue;
@@ -2649,7 +2713,7 @@ static VkDescriptorSet stage_set(Prog *p, VkDescriptorSetLayout layout, uint32_t
                 gpu_read_mark(st.sbuf[stage][k].addr, st.sbuf[stage][k].size);
                 if (stage == 5) gpu_read_mark(st.ubuf[5][k].addr, st.ubuf[5][k].size);
             }
-            bi[n] = b->binding == GFAST_BUFFER_INDEX ? gfast_info() : gmem_info();
+            bi[n] = b->binding == GFAST_BUFFER_INDEX ? (gx_stage ? gx_fast : gfast_info()) : gmem_desc();
             w[n].pBufferInfo = &bi[n];
         } else {
             continue;  // rscale / tint: written below, once the textures (and their scales) are known
@@ -2662,8 +2726,9 @@ static VkDescriptorSet stage_set(Prog *p, VkDescriptorSetLayout layout, uint32_t
             (b->binding != 18 && b->binding != 19 && b->binding != GMAP_BUFFER_INDEX)) continue;
         w[n] = (VkWriteDescriptorSet){.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = ds, .dstBinding = b->binding,
                                       .descriptorCount = 1, .descriptorType = b->type};
-        if (b->binding == GMAP_BUFFER_INDEX) {  // (compute) this dispatch's fast-copy table: gfast_prepare
-            bi[n] = ubo_span(vk_transient_copy(gmap_tab, sizeof gmap_tab, 256), sizeof gmap_tab);
+        if (b->binding == GMAP_BUFFER_INDEX) {  // this dispatch's fast-copy table (gfast_prepare), or the draw's (gfx_gmap)
+            bi[n] = gx_stage ? ubo_span(vk_transient_copy(gx_tab, sizeof gx_tab, 256), sizeof gx_tab)
+                             : ubo_span(vk_transient_copy(gmap_tab, sizeof gmap_tab, 256), sizeof gmap_tab);
         } else if (b->binding == 18) {
             for (int t = 0; t < si->ntex && t < 64; t++) { rs[1 + t][0] = tex_sc[sg][t][0]; rs[1 + t][1] = tex_sc[sg][t][1]; }
             bi[n] = ubo_span(copy_dedupe(sg ? DEDUPE_RSCALE_F : DEDUPE_RSCALE_V, rs, sizeof rs, 256), sizeof rs);

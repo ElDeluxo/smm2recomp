@@ -2036,3 +2036,31 @@ nothing gained: only SMM2 shows them. (3) Every "X ago" label counts from it; a 
 ages but nothing breaks, and the server's time could be sent later if that matters.
 **Would change:** a web view of comments wanting drawings as images (then decode the game's format server side);
 the time coming from the server (a field in the answers) if clients' clocks prove unreliable.
+
+## 2026-10-23 — Vulkan shader global memory: the heap's device address; per-draw copies only without host import
+**Decision:** shaders reach the guest heap (LDG / STG) through the import's device address (bufferDeviceAddress, a
+`buffer_reference` in the GLSL; binding 17 holds the address and size) wherever the heap is imported, and through
+per-draw copies of the bound storage buffers only where there is no host memory import (from sm35recomp e292dce and
+3fce300).
+- **Why the address:** a storage buffer binding reaches only maxStorageBufferRange of the 3.2 GB heap (128 MB on
+  lavapipe and Adreno, 1-2 GB on some desktop GPUs), and reads past it went wrong: 3D World Mario was a white blob on
+  lavapipe, and the validation layer flagged every bind. bufferDeviceAddress is required by Vulkan 1.3, which the
+  backend already needs, so every device the backend runs on has it; it isn't a second path that most players skip.
+- **Why copies only without the import:** a per-draw copy costs CPU time for every draw that reads global memory, and
+  a draw's stores into the copy are lost; with the import the address reaches the real memory at no copy. Without it
+  there is nothing to address, and the copies bring back what read 0 (the HUD text).
+- **Kept as switches:** `LARECOMP_VK_NO_BDA=1` (the old binding), `LARECOMP_VK_NO_GMEM=1` (no import: the copies).
+- **Not done:** SignedZeroInfNanPreserve in every SPIR-V module (so drivers can't fold the FMZ and isnan tests the
+  translated code relies on) was tried for the remaining eye NaN and made it worse on lavapipe.
+**What would change it:** a device whose bufferDeviceAddress reads are slower than a binding (then bind when the
+reads fit in the range); a driver that can't take the address of host-pointer imported memory (then the copies there
+too); compute without the import mattering in a game (then copy the dispatch's buffers in and back as gfast does).
+
+## 2026-10-23 — Linux Vulkan tests on the Mac run in Docker, not a VM
+**Decision:** Linux arm64 runs for Vulkan work go through `recomp/tools/linux_vk_docker.sh`: the zig cross-build (as
+the release packages) run in a Debian 13 arm64 container on lavapipe under Xvfb, with the build and the data folder
+mounted at their own paths (read-only where they can be). The Lima VM it replaces was gone, needed its own disk
+image and a copy of the build; Docker is already installed, starts in a second, and the image holds only Debian
+packages (no game data, never pushed).
+**What would change it:** a real Linux machine with a GPU for the testers' cases (lavapipe is software and has quirks
+of its own: the MRT split, the eye NaN), or an x86-64 need (the same script with an amd64 image under emulation).

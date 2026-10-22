@@ -105,8 +105,8 @@ static void stamp(char *out, size_t cap) {
     char exe[1024] = "";
     struct stat sb = {0};
     if (plat_exe_path(exe, sizeof exe)) stat(exe, &sb);
-    snprintf(out, cap, "ahead-vk 1 exe %lld-%lld key %d%d\n", (long long)sb.st_size, (long long)sb.st_mtime, vah.vkey.flip_y,
-             vah.vkey.depth_minus_one);
+    snprintf(out, cap, "ahead-vk 1 exe %lld-%lld key %d%d gmem %d%d\n", (long long)sb.st_size, (long long)sb.st_mtime, vah.vkey.flip_y,
+             vah.vkey.depth_minus_one, maxwell_glsl_bda, maxwell_glsl_gmap_gfx);  // (the GLSL differs with the gmem mode)
 }
 
 static void stop_ahead(void) { vah.stop = 1; }

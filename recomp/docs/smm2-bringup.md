@@ -165,7 +165,28 @@ generated C needs no changes: arm64 shares `generated/smm2` with macOS, and x86-
 - Geometry shaders as real Vulkan geometry stages, in descriptor set 2. They have point input, and the output topology
   and vertex count come from the shader header.
 
-**Linux arm64 in a VM (Mesa lavapipe):**
+**Linux arm64 on this Mac, in Docker (Mesa lavapipe), 2026-10-23:** `recomp/tools/linux_vk_docker.sh` (the earlier
+Lima VM is gone). The runtime and game code are cross-built with zig as the release packages are, and run in a Debian 13
+arm64 container on lavapipe under Xvfb (the image holds only Debian packages; the build and the data folder are
+mounted at run time, read-only where they can be). The title runs at 13-15 fps, the logos at 60.
+
+    tools/linux_vk_docker.sh image && tools/linux_vk_docker.sh deps     # the image (~1 GB), build/deps-linux-aarch64
+    tools/linux_vk_docker.sh build -j10                                  # build/smm2-linux-aarch64 (game code ~10 min)
+    tools/linux_vk_docker.sh rundir private/smm2 ~/smm-work/linux-vk/run # links to the game files, own save + smm2.ini
+    tools/linux_vk_docker.sh run ~/smm-work/linux-vk/run 240 SMM2_SEED=4 LARECOMP_HOST_INPUT=2386:shot:title
+
+- Runs are muted (`LARECOMP_NO_AUDIO=1`), log in `<run>/stdout.log`, shots in `<run>/build/`. `VK_LAYER=1` adds the
+  validation layer; `B=<folder>` runs another build (e.g. an older runtime next to a hard link of the game library).
+  `LARECOMP_HOST_INPUT`'s `shot` now works on Vulkan too.
+- Space: the game code build is 1.7 GB (`build/smm2-linux-aarch64`; zig's cache, `build/zig-cache`, can go after it).
+  With compile-ahead on, a run fills `<run>/cache/spirv` with ~470 MB (6,961 files); `LARECOMP_AHEAD=0` keeps test
+  runs small. Each changed GLSL form adds a full set again: four test variants filled 1.8 GB.
+- The container has no page write tracking (`[vk] no page write tracking`), so the vertex cache is off there.
+- In-course frames: at the title, L + R, A (Make), then Minus (test play), then hold `dpad_right`
+  (`LARECOMP_HOST_INPUT=2400:pad:lshoulder:20,2400:pad:rshoulder:20,3000:pad:east:10,3300:pad:back:10,3550:pad:dpad_right:700`).
+  The A press lands on Play in some runs (timing).
+
+**Linux arm64 in a VM (Mesa lavapipe), 2026-10-19:**
 - The build boots to the title screen.
 - The Mario model in the 3D World title course (2026-10-19). How SMM2 draws him:
   - A pass with two targets draws him into a character layer: target 0 (1600x900 RG11B10F, blended) and target 1
@@ -201,15 +222,42 @@ generated C needs no changes: arm64 shares `generated/smm2` with macOS, and x86-
   sampler. Vulkan compares only depth formats (validation: VUID-vkCmdDrawIndexed-None-06479); the Switch compares the
   red channel. Such a texture is now sampled through a D32_SFLOAT copy made in the submission's upload commands
   (`vk_shadow_view`, textures.c).
-- Shader global memory binds the whole 3.2 GB heap as one storage buffer. That is over lavapipe's
-  maxStorageBufferRange (128 MB; VUID-VkWriteDescriptorSet-descriptorType-00333), but lavapipe reads it correctly,
-  and clamping the range there broke the HUD text (its shaders read past 128 MB). NVIDIA, AMD and Intel allow large
-  storage buffers; left as it is for now.
+- Shader global memory bound the whole 3.2 GB heap as one storage buffer. That is over lavapipe's
+  maxStorageBufferRange (128 MB; VUID-VkWriteDescriptorSet-descriptorType-00333), and clamping the range there broke
+  the HUD text (its shaders read past 128 MB). Fixed 2026-10-23 (below, "Shader global memory"): it was also the
+  white blob in place of 3D World Mario.
 - Comparing captures needs care with colour:
   - Vulkan read-backs are raw sRGB; the Ryujinx references are window-server grabs.
   - Raw against grab is about 23 % of pixels apart on colour alone, for Metal too.
   - Compare raw with raw, or map the raw capture through the colour transform measured from a Metal raw / grab pair
     of the same frame.
+
+**Shader global memory (2026-10-23; from the SM35 port, sm35recomp e292dce and 3fce300):**
+- [obs] A storage buffer binding reaches only maxStorageBufferRange of the heap: 128 MB on lavapipe and Adreno, 1-2 GB
+  on some desktop GPUs. Past that, lavapipe gave Mario's character draws wrong data: the white blob on the title
+  (before: blob at frames 1500 and 2386; after: Mario drawn, and the validation layer's 20 range errors in a 150 s
+  title run are gone).
+- Now (`g_vk.bda`, device.c): the heap's import is reached through its device address (bufferDeviceAddress, part of
+  Vulkan 1.3). Binding 17 holds the address and size; the GLSL reads it through a `buffer_reference` (translate.c,
+  only in that mode). The address is fetched like the other 1.2 / 1.3 commands (`VK_LATE_FUNCS`, Windows' old loaders).
+  `LARECOMP_VK_NO_BDA=1`: the old storage buffer binding.
+- Without host memory import (Android's emulator, many phones; `LARECOMP_VK_NO_GMEM=1` forces it) there is no heap
+  on the GPU: global memory read zero. Draw stages now read per-draw copies of their bound storage buffers
+  (`gfx_gmap`, exec.c; the compute path's table scheme, filled by the CPU). [obs] On lavapipe without the import the
+  title's HUD text was missing (coin and score counters, "Press L + R", the version); with the copies it is back.
+  Their stores go to the copy and are lost (they were lost before too). Compute without the import still reads zero.
+- Also from e292dce (textures.c): a texture written since the last check is hashed in full, and the periodic full hash
+  can take one texture bigger than the frame's budget (a glyph cache that gains a few glyphs slipped past the sampled
+  hash: SM35's course cards).
+- Metal: unchanged. The 194 translated MSL sources of a title run are byte-identical before and after.
+- [obs] What's left of the blob: while Mario faces the camera (his eyes in view: title frames from ~2400 on, in-course
+  when he turns) a few texels of the character layer still become NaN after the eye draw (fragment program
+  0x729accf900) and bloom white. It is not that shader's maths: with its colour forced to a constant and alpha 1
+  (`LARECOMP_DEBUG_FS_OUT=729accf900:0:5`, `LARECOMP_DEBUG_FS_OUT_ALPHA=1`) the NaN texel is still there after it, and
+  the scans after the earlier passes find none. Metal with IEEE maths (`LARECOMP_SAFE_MATH=1`) shows no blob. Tried:
+  declaring SignedZeroInfNanPreserve in every SPIR-V module (so drivers keep the FMZ and isnan tests); on lavapipe the
+  blob then came earlier (frame 2386), so it was not kept. Open: whether a real GPU shows it (the owner's testers);
+  if it does, look at the blend inputs (the destination texel under the eyes) next.
 
 **Where this stands (2026-10-19, paused):**
 - Vulkan Mario: both causes fixed (vertex data past the allocation limit; the lavapipe-only draw split). Open: the

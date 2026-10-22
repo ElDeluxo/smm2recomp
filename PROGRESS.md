@@ -434,14 +434,26 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
   - ⬜ The water in the background looks a bit too shiny. The 3D World liquid surfaces already differ most from
     Ryujinx (castle lava 2.28 % px > 24), so check specular and reflection on liquids.
 
-- 🔄 **Vulkan fixes found by the SM35 port (2026-10-21; (1) ported on branch `b5-dev`, compiles, Metal output
-  unchanged, not yet run on a Vulkan device):** (1) shader global memory is one storage
-  buffer over the 3.2 GB heap, but a GPU only reaches `maxStorageBufferRange` of it (128 MB on lavapipe and Adreno,
-  1-2 GB on some desktop GPUs; reads past that give 0): SM35 uses bufferDeviceAddress where available
-  (sm35recomp e292dce). (2) without host memory import (Android emulator, many phones) global memory reads give 0:
-  SM35 copies each draw's bound storage buffers into per-draw memory (3fce300). (3) Android 11+ can't read files
-  adb pushed into Android/data/<pkg>: SM35 falls back to the internal folder (a5e5395). Likely behind SMM2's
-  Vulkan-only differences (3D World Mario on lavapipe); port when Windows / Linux / Android get attention.
+- 🔄 **Vulkan fixes found by the SM35 port (2026-10-21; (1) and (2) landed 2026-10-23, run on lavapipe in Docker):**
+  - ✅ (1) shader global memory was one storage buffer over the 3.2 GB heap, but a GPU only reaches
+    `maxStorageBufferRange` of it (128 MB on lavapipe and Adreno, 1-2 GB on some desktop GPUs). Now through the heap's
+    device address (bufferDeviceAddress, sm35recomp e292dce; `LARECOMP_VK_NO_BDA=1`: the old binding). [obs] On
+    lavapipe this was the white blob in place of 3D World Mario on the title (now drawn while he faces sideways) and
+    the validation layer's 20 range errors per title run (now none). Includes e292dce's texture-hash fix.
+  - ✅ (2) without host memory import (Android emulator, many phones) global memory reads gave 0: draw stages now read
+    per-draw copies of their storage buffers (3fce300; only where the import is missing; `LARECOMP_VK_NO_GMEM=1` forces
+    it). [obs] Lavapipe without the import: the title's HUD text was gone (coin / score counters, "Press L + R", the
+    version) and is back. Left: compute dispatches without the import still read 0.
+  - Metal unchanged: a title run's 194 translated MSL sources are byte-identical before and after.
+  - ⬜ Left on lavapipe: while Mario faces the camera his eyes still go NaN after the eye draw (0x729accf900) and bloom
+    white, title and in-course. Not that shader's maths (a constant colour with alpha 1 still leaves the NaN); Metal
+    with IEEE maths is clean. Declaring SignedZeroInfNanPreserve made it come earlier on lavapipe, so it isn't kept.
+    Needs a real GPU's word (testers) before more digging (`recomp/docs/smm2-bringup.md`, "Shader global memory").
+  - ⬜ (3) Android 11+ can't read files adb pushed into Android/data/<pkg>: SM35 falls back to the internal folder
+    (a5e5395). Lower priority.
+  - The test setup: `recomp/tools/linux_vk_docker.sh` (Debian 13 arm64 container, lavapipe, Xvfb; the zig cross-build;
+    a run folder linking the dev data read-only). Found with it: compile-ahead's `cache/spirv` is ~470 MB per GLSL
+    variant and never pruned, so each version whose GLSL changes adds another set in a player's data folder.
 
 ### GitHub issues (triaged 2026-10-22; owner: no replies needed, fix what they reveal)
 Release times (UTC, 2026-10-21): v0.3.0 06:51, v0.3.1 09:23, v0.3.2 12:58. #9 (prod.keys legal): the owner's, no action.

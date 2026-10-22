@@ -164,8 +164,16 @@ static void create_device(void) {
     free(ep);
 
     // features the backend relies on (all present on current desktop drivers)
-    VkPhysicalDeviceFeatures2 have = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+    VkPhysicalDeviceVulkan12Features have12 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+    VkPhysicalDeviceFeatures2 have = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = &have12};
     vkGetPhysicalDeviceFeatures2(g_vk.phys, &have);
+    // Shader global memory (exec.c gmem_desc, translate.c): a storage buffer binding reaches only maxStorageBufferRange
+    // of the 3.2 GB heap (128 MB on lavapipe and Adreno, 1-2 GB on some desktop GPUs), so the heap's import is reached
+    // through its device address instead (bufferDeviceAddress: part of Vulkan 1.3). Without host memory import there is
+    // no heap on the GPU at all: draw stages then read per-draw copies of their storage buffers (exec.c gfx_gmap).
+    // LARECOMP_VK_NO_BDA=1: the old storage buffer binding; LARECOMP_VK_NO_GMEM=1: no import (the per-draw copies).
+    bool no_gmem = !g_vk.host_import || getenv("LARECOMP_VK_NO_GMEM");
+    g_vk.bda = have12.bufferDeviceAddress && have.features.shaderInt64 && !no_gmem && !getenv("LARECOMP_VK_NO_BDA");
     VkPhysicalDeviceVertexAttributeDivisorFeaturesEXT div = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_ATTRIBUTE_DIVISOR_FEATURES_EXT,
         .vertexAttributeInstanceRateDivisor = VK_TRUE, .vertexAttributeInstanceRateZeroDivisor = VK_FALSE};
@@ -180,7 +188,7 @@ static void create_device(void) {
     VkPhysicalDeviceVulkan12Features f12 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
                                             .timelineSemaphore = VK_TRUE, .shaderInt8 = VK_TRUE, .samplerMirrorClampToEdge = VK_TRUE,
                                             .uniformAndStorageBuffer8BitAccess = VK_TRUE, .storageBuffer8BitAccess = VK_TRUE,
-                                            .scalarBlockLayout = VK_TRUE, .pNext = &f13};
+                                            .scalarBlockLayout = VK_TRUE, .bufferDeviceAddress = g_vk.bda, .pNext = &f13};
     VkPhysicalDeviceVulkan11Features f11 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES,
                                             .storageBuffer16BitAccess = VK_TRUE, .pNext = &f12};
     VkPhysicalDeviceFaultFeaturesEXT ff = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT, .deviceFault = VK_TRUE,
@@ -212,6 +220,10 @@ static void create_device(void) {
     VkDeviceCreateInfo di = {.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, .pNext = &f, .queueCreateInfoCount = 1,
                              .pQueueCreateInfos = &qi, .enabledExtensionCount = n_ext, .ppEnabledExtensionNames = ext};
     VK_CHECK(vkCreateDevice(g_vk.phys, &di, NULL, &g_vk.dev));
+    maxwell_glsl_bda = g_vk.bda;
+    maxwell_glsl_gmap_gfx = no_gmem;
+    LOG("[vk] shader global memory: %s\n", g_vk.bda ? "the heap through its device address" :
+        no_gmem ? "per-draw copies of the storage buffers (no host memory import)" : "the heap as a storage buffer");
     vkGetDeviceQueue(g_vk.dev, g_vk.qfam, 0, &g_vk.queue);
 #define X(n) if (!(vkl_##n = (PFN_vk##n)vkGetDeviceProcAddr(g_vk.dev, "vk" #n))) \
         FATAL("the graphics driver lacks vk" #n " (is a Vulkan 1.3 driver installed?)\n");

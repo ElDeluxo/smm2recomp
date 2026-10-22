@@ -79,7 +79,7 @@ typedef struct {
     uint32_t out_mask;      // vertex: output varyings; fragment: render targets written
     bool writes_depth, uses_discard, writes_point_size;
     bool uses_gmem;         // global memory access: bind the guest heap at GMEM_BUFFER_INDEX
-    bool uses_gmem_map;     // (GLSL compute only) gmem loads look their address up in GMap (uniform, binding
+    bool uses_gmem_map;     // (GLSL compute; draw stages too with maxwell_glsl_gmap_gfx) gmem loads look their address up in GMap (uniform, binding
                             // GMAP_BUFFER_INDEX) and read GFast (storage, GFAST_BUFFER_INDEX) - a device-local copy of the
                             // dispatch's storage buffers - when found, stores too (copied back after the dispatch).
                             // runtime/nvn/vulkan/exec.c
@@ -105,6 +105,13 @@ typedef struct {
 #define GMAP_MAX 16  // ranges in the table (GMap { uvec4 gmap[GMAP_MAX + 1]; }: [i] = addr lo, addr hi, size, word offset;
                      // [GMAP_MAX].x = count)
 extern uint64_t maxwell_gmem_base, maxwell_gmem_size;
+// GLSL: global memory through a buffer device address held at binding GMEM_BUFFER_INDEX ({address, size} as uvec2 pairs)
+// instead of a storage buffer over the heap (set by the Vulkan backend when the device has bufferDeviceAddress)
+extern bool maxwell_glsl_bda;
+// GLSL: draw stages read global memory through per-draw copies of their storage buffers (GMap / GFast, as compute) -
+// set by the Vulkan backend when the device can't reach the heap at all (no host memory import: Android's emulator,
+// many phones). Their stores go to the copy and are lost (without the import they were lost before too).
+extern bool maxwell_glsl_gmap_gfx;
 // Debug: when translating the shader whose code starts at maxwell_dbg_code, output register
 // maxwell_dbg_reg as captured after the instruction at maxwell_dbg_pc (greyscale, all targets).
 extern const uint8_t *maxwell_dbg_code;
