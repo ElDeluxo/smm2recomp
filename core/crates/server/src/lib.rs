@@ -6,9 +6,9 @@
 //! | method | path | does |
 //! |---|---|---|
 //! | POST | `/api/courses` (body: course data; header `X-Maker`) | upload → `{code, …}` |
-//! | GET | `/api/courses?q=&style=&sort=new\|popular\|hard&limit=&offset=` | search |
-//! | GET | `/api/courses/<code>` | metadata |
-//! | GET | `/api/courses/<code>/data` | course data (bytes) |
+//! | GET | `/api/courses?q=&style=&sort=new\|popular\|hard&limit=&offset=` | search; with an upstream source, `popular` and `new` (no `q`) are its live lists first (`lists`) |
+//! | GET | `/api/courses/<code>` | metadata (of a held or an upstream-listed course) |
+//! | GET | `/api/courses/<code>/data` (`?wait_ms=`, at most 20000) | course data (bytes); an upstream-listed course the server doesn't hold is fetched and imported, waited for up to `wait_ms` (default 7000; 404 meanwhile) |
 //! | GET | `/api/courses/<code>/thumbnail`, `/entire_thumbnail` (`?wait_ms=`, at most 20000) | the course's picture and its whole-course map (JPEG); one of an upstream course the server doesn't hold yet is fetched from the source, waited for up to `wait_ms` (404 meanwhile) |
 //! | POST | `/api/courses/<code>/play`, `/clear` | statistics |
 //! | GET | `/api/health` | liveness: counts and the replay engine version |
@@ -58,6 +58,7 @@ use serde_json::{Value, json};
 
 pub mod accounts;
 pub mod endless;
+pub mod lists;
 pub mod upstream;
 
 use accounts::Accounts;
@@ -166,6 +167,12 @@ pub struct Store {
     /// Told when a client wants an upstream course's thumbnail the store doesn't hold (code,
     /// whole-course map?): [`upstream`] fetches it; never blocks.
     thumbs_wanted: std::sync::OnceLock<ThumbsWanted>,
+    /// Course World's Popular and New from an upstream source ([`lists`]).
+    lists: Mutex<lists::Lists>,
+    /// Told when a page of an upstream list is asked for (set: the lists are served).
+    lists_wanted: std::sync::OnceLock<lists::ListsWanted>,
+    /// Told when a listed course the store doesn't hold is wanted (code).
+    course_wanted: std::sync::OnceLock<lists::CourseWanted>,
 }
 
 type ThumbsWanted = Box<dyn Fn(&str, bool) + Send + Sync>;
@@ -386,6 +393,9 @@ impl Store {
             verified_records: false,
             wants: std::sync::OnceLock::new(),
             thumbs_wanted: std::sync::OnceLock::new(),
+            lists: Mutex::new(lists::Lists::default()),
+            lists_wanted: std::sync::OnceLock::new(),
+            course_wanted: std::sync::OnceLock::new(),
         })
     }
 
@@ -417,7 +427,8 @@ impl Store {
     }
 
     /// A course's thumbnail (JPEG; `entire`: the whole-course map). One the store doesn't hold, of
-    /// an upstream course, is asked for from the source (and kept), waiting up to `wait` for it.
+    /// an upstream course (held or listed), is asked for from the source (and kept), waiting up to
+    /// `wait` for it.
     pub fn thumbnail(
         &self,
         code: &str,
@@ -428,7 +439,11 @@ impl Store {
         if let Ok(b) = fs::read(&path) {
             return Some(b);
         }
-        if !self.get(code)?.upstream {
+        let upstream = match self.get(code) {
+            Some(m) => m.upstream,
+            None => self.listed(code)?.meta.upstream,
+        };
+        if !upstream {
             return None;
         }
         (self.thumbs_wanted.get()?)(code, entire);
@@ -444,7 +459,7 @@ impl Store {
 
     /// Keep a course's thumbnail (a JPEG, or the game's thumbnail block).
     pub fn put_thumbnail(&self, code: &str, entire: bool, data: &[u8]) -> Result<(), StoreError> {
-        if self.get(code).is_none() {
+        if self.get(code).is_none() && self.listed(code).is_none() {
             return Err(StoreError::NotFound);
         }
         let jpeg = thumbnail_jpeg(data).ok_or_else(|| StoreError::Bad("not a JPEG".into()))?;
@@ -1049,6 +1064,15 @@ impl Store {
         offset: usize,
         limit: usize,
     ) -> Vec<Meta> {
+        self.sorted(q, style, sort)
+            .into_iter()
+            .skip(offset)
+            .take(limit.min(100))
+            .collect()
+    }
+
+    /// All the courses a search finds, sorted.
+    fn sorted(&self, q: &str, style: Option<&str>, sort: &str) -> Vec<Meta> {
         let g = self.inner.lock().unwrap();
         let q = q.to_lowercase();
         let mut v: Vec<Meta> = g
@@ -1069,7 +1093,7 @@ impl Store {
             "hard" => v.sort_by_key(|m| std::cmp::Reverse(m.difficulty())),
             _ => v.sort_by_key(|m| std::cmp::Reverse(m.uploaded)),
         }
-        v.into_iter().skip(offset).take(limit.min(100)).collect()
+        v
     }
 
     /// Up to `count` random courses whose difficulty value is in min..=max (100 Mario pools).
@@ -1319,26 +1343,37 @@ pub fn handle(
         }
         ("GET", ["api", "courses"]) => {
             let n = |k: &str, d: usize| q.get(k).and_then(|v| v.parse().ok()).unwrap_or(d);
-            let list = store.search(
-                q.get("q").map(String::as_str).unwrap_or(""),
-                q.get("style").map(String::as_str),
-                q.get("sort").map(String::as_str).unwrap_or("new"),
-                n("offset", 0),
-                n("limit", 30),
-            );
-            json(
-                200,
-                json!({ "courses": list.iter().map(Meta::to_json).collect::<Vec<_>>() }),
-            )
+            let text = q.get("q").map(String::as_str).unwrap_or("");
+            let style = q.get("style").map(String::as_str);
+            let sort = q.get("sort").map(String::as_str).unwrap_or("new");
+            // Popular and New: the upstream lists, when the server has them
+            let listed = lists::Kind::of_sort(sort)
+                .filter(|_| text.is_empty())
+                .and_then(|k| store.list_page(k, style, n("offset", 0), n("limit", 30)));
+            let courses = listed.unwrap_or_else(|| {
+                store
+                    .search(text, style, sort, n("offset", 0), n("limit", 30))
+                    .iter()
+                    .map(Meta::to_json)
+                    .collect()
+            });
+            json(200, json!({ "courses": courses }))
         }
-        ("GET", ["api", "courses", code]) => match store.get(code) {
-            Some(m) => json(200, m.to_json()),
+        ("GET", ["api", "courses", code]) => match store.course_json(code) {
+            Some(v) => json(200, v),
             None => err(404, "no such course"),
         },
-        ("GET", ["api", "courses", code, "data"]) => match store.data(code) {
-            Ok(b) => (200, "application/octet-stream", b),
-            Err(_) => err(404, "no such course"),
-        },
+        ("GET", ["api", "courses", code, "data"]) => {
+            let wait = q
+                .get("wait_ms")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(DATA_WAIT_MS)
+                .min(20_000);
+            match store.data_wait(code, std::time::Duration::from_millis(wait)) {
+                Ok(b) => (200, "application/octet-stream", b),
+                Err(_) => err(404, "no such course"),
+            }
+        }
         (
             "GET",
             [
@@ -1402,6 +1437,10 @@ pub fn start_relay(
     std::thread::spawn(move || ws::serve(h, tcp));
     Ok(hub)
 }
+
+/// How long `GET /api/courses/<code>/data` waits for a listed course the server doesn't hold
+/// (under the game's 8 s request timeout).
+pub const DATA_WAIT_MS: u64 = 7000;
 
 /// Endless Challenge difficulties.
 pub const ENDLESS: &[&str] = &["easy", "normal", "expert", "super_expert"];
