@@ -41,36 +41,25 @@ static void retry_rollback(void) {
 void smm2_mod_after(Cpu *c, uint64_t addr) {
     extern bool costume_after(Cpu *c, uint64_t addr);  // (costume.c: its own hook points)
     if (costume_after(c, addr)) return;
-    if (addr == MAIN_ADDR(0x16dffb4)) {  // co-op groundwork (patches.py): the course set-up's one-player store
-        // RECOMP_COOP_TEST=<n>: n players there instead (Endless / 100 Mario: not enough on its own yet, PROGRESS)
-        static const char *n = (const char *)1;
-        if (n == (const char *)1) n = getenv("RECOMP_COOP_TEST");
-        if (n) {
-            s32(c->x[19], (uint32_t)atoi(n));
-            LOG("[mod] co-op test: %d players stored at %#llx\n", atoi(n), (unsigned long long)c->x[19]);
+    if (addr == MAIN_ADDR(0x263db0)) {  // co-op (coop.c): the controllers' poll reads Npads 0 .. w8 ([x0 + 0x28])
+        int n = coop_in_course() ? coop_players() : 0;
+        if (n > 1 && (uint32_t)c->x[8] < (uint32_t)n) {
+            c->x[8] = (uint32_t)n;
+            s32(c->x[0] + 0x28, (uint32_t)n);
         }
         return;
     }
-    if (addr == MAIN_ADDR(0x263db0)) {  // co-op: the controller poll's Npad count (w8, [x0 + 0x28])
-        static const char *n = (const char *)1;
-        if (n == (const char *)1) n = getenv("RECOMP_COOP_TEST");
-        if (n && (uint32_t)c->x[8] < (uint32_t)atoi(n)) {
-            static int nlog;
-            if (nlog++ < 3) LOG("[mod] co-op test: controller poll count %u -> %d\n", (uint32_t)c->x[8], atoi(n));
-            c->x[8] = (uint32_t)atoi(n);
-            s32(c->x[0] + 0x28, (uint32_t)c->x[8]);
-        }
-        return;
-    }
-    if (addr == MAIN_ADDR(0xe58328)) {  // co-op: the course's play mode, stored at [x19 + 0xe0] (w8)
-        static const char *n = (const char *)1;
-        if (n == (const char *)1) n = getenv("RECOMP_COOP_TEST");
-        if (n && (uint32_t)c->x[8] == 0) {
+    if (addr == MAIN_ADDR(0xe58328)) {  // co-op (coop.c): the course's play mode, stored at [x19 + 0xe0] (w8)
+        int n = coop_players(), style = n > 1 ? endless_course_style() : -1;
+        bool on = n > 1 && (uint32_t)c->x[8] == 0 && style >= 0 && style != 4;  // (3D World: no multiplayer in SMM2)
+        if (n > 1 && style == 4) LOG("[mod] co-op: a 3D World course is played alone (no multiplayer in that style)\n");
+        if (on) {
             uint64_t cnt = g64(MAIN_ADDR(0x2a66fb8));
-            LOG("[mod] co-op test: play mode 0 -> 1 (local multiplayer), %d players\n", atoi(n));
-            s32(c->x[19] + 0xe0, 1);
-            if (cnt) s32(cnt + 0x40, (uint32_t)atoi(n));
+            s32(c->x[19] + 0xe0, 1);  // local multiplayer
+            if (cnt) s32(cnt + 0x40, (uint32_t)n);
+            LOG("[mod] co-op: %d players in this course\n", n);
         }
+        coop_course(on);
         return;
     }
     if (!mod_hundred_rules()) return;

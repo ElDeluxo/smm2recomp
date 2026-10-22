@@ -860,6 +860,20 @@ WRAPPER(start_course, 0x14ecf30) {
         finish(c, no, ok, 2);
         return;
     }
+    // co-op: the game asks this for any player's miss (its Endless code knows one player); SMM2's local multiplayer
+    // rule is that the course is only lost when every player is down (owner, 2026-10-21): while one stands, no life
+    if (coop_in_course()) {
+        int up = coop_players_standing();
+        if (up > 0) {
+            pthread_mutex_lock(&state_lock);
+            uint32_t lives = runs[d].lives, clears = runs[d].clears;
+            pthread_mutex_unlock(&state_lock);
+            set_play(c, no, d, lives, clears);
+            LOG("[mod] co-op: a player is down on %s, %d still standing: no life lost (lives %u)\n", code, up, lives);
+            finish(c, no, true, 2);
+            return;
+        }
+    }
     char path[64], body[160];
     snprintf(path, sizeof path, "/api/endless/%s/result?ruleset=%s", DIFF[d], RULESET());
     snprintf(body, sizeof body, "{\"code\":\"%s\",\"result\":\"%s\"}", code,
@@ -1016,6 +1030,21 @@ bool endless_has_course(uint64_t id) {  // world.c: is this course the one an En
     pthread_mutex_lock(&state_lock);
     bool v = false;
     for (int d = 0; d < 4; d++) v |= id && (runs[d].current == id || runs[d].started == id || runs[d].last_done == id);
+    pthread_mutex_unlock(&state_lock);
+    return v;
+}
+
+// hooks.c (co-op): the style of the course a run is on (style_index: 0 SMB1 .. 4 3D World), -1 for no run's course,
+// -2 for one whose style wasn't served with it
+int endless_course_style(void) {
+    pthread_mutex_lock(&state_lock);
+    int v = -1;
+    for (int d = 0; d < 4 && v == -1; d++)
+        if (runs[d].current) {
+            v = -2;
+            for (int i = 0; i < ncourse_names; i++)
+                if (course_names[i].id == runs[d].current) v = course_names[i].style;
+        }
     pthread_mutex_unlock(&state_lock);
     return v;
 }

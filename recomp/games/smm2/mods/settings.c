@@ -209,8 +209,8 @@ static void mod_toggles_changed(void) {
 }
 
 // The tab: the switches above (when there is something to switch), then the SMM1 extras' (smm1_extras.c: one per SMM1
-// feature, always there), then the SMW goal wipe's (smw_goal.c), the Muncher hit box's (muncher_hitbox.c) and quick level return's
-// (quick_retry.c).
+// feature, always there), then the SMW goal wipe's (smw_goal.c), the Muncher hit box's (muncher_hitbox.c), quick level return's
+// (quick_retry.c) and co-op's (coop.c).
 int smm1_extras_toggles(GameModToggle *out, int room);
 void smm1_extras_toggles_changed(void);
 int smw_goal_toggles(GameModToggle *out, int room);
@@ -219,9 +219,11 @@ int muncher_hitbox_toggles(GameModToggle *out, int room);
 void muncher_hitbox_toggles_changed(void);
 int quick_retry_toggles(GameModToggle *out, int room);
 void quick_retry_toggles_changed(void);
+int coop_toggles(GameModToggle *out, int room);
+void coop_toggles_changed(void);
 static int own_shown;  // (the tab showed the switches above: apply them on a change)
 int game_mod_toggles(const GameModToggle **out) {
-    static GameModToggle all[16];
+    static GameModToggle all[24];
     const GameModToggle *own;
     int n = own_shown = mod_toggles(&own);
     for (int i = 0; i < n; i++) all[i] = own[i];
@@ -229,6 +231,7 @@ int game_mod_toggles(const GameModToggle **out) {
     n += smw_goal_toggles(all + n, (int)(sizeof all / sizeof *all) - n);
     n += muncher_hitbox_toggles(all + n, (int)(sizeof all / sizeof *all) - n);
     n += quick_retry_toggles(all + n, (int)(sizeof all / sizeof *all) - n);
+    n += coop_toggles(all + n, (int)(sizeof all / sizeof *all) - n);
     *out = n ? all : NULL;
     return n;
 }
@@ -239,6 +242,7 @@ void game_mod_toggles_changed(void) {
     smw_goal_toggles_changed();
     muncher_hitbox_toggles_changed();
     quick_retry_toggles_changed();
+    coop_toggles_changed();
 }
 
 // Overrides are registered before the game's first instruction runs (dispatch reads them on every first call). Each

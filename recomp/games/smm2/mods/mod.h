@@ -64,6 +64,11 @@ void guest_call_orig(Cpu *c, uint64_t addr);
 // ---- per-mod registration (called once at start-up when the mod is on)
 void online_register(void);     // online.c: pretend-online login and default "not connected" wrappers
 void endless_register(void);    // endless.c: the Endless Challenge wrappers against our server
+int coop_players(void);         // coop.c: players for an Endless / 100 Mario course (1 without co-op)
+void coop_course(bool on);       // coop.c (hooks.c): the course starting is played in co-op, or not
+bool coop_in_course(void);      // coop.c: the course being played is in co-op
+int coop_players_standing(void); // coop.c: players in the course now who are neither down nor in a bubble
+int endless_course_style(void);  // endless.c: a run's current course style (0 SMB1 .. 4 3D World), -1 none, -2 unknown
 void endless_note_course(uint64_t data_id, const char *code);  // course.c -> endless.c: which code a data id is
 
 // ---- course codes (course.c)

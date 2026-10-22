@@ -1769,3 +1769,21 @@ SMM2's miss sequence (states, timers, the card) would mean changing game logic i
 the same frames faster changes nothing the game can see except wall time.
 **Would change:** a restart that has to be quicker than the machine can run the miss frames (the reload itself, about
 0.7 s on an M-series Mac, isn't shortened), or the owner wanting the fanfare kept.
+
+## 2026-10-22 — Co-op in Endless / 100 Mario: run the course in SMM2's own local multiplayer mode
+
+**Decision:** a Mods-tab switch, "Co-op in Endless and 100 Mario" (`coop` in `smm2mods.ini`, `RECOMP_COOP`), off by
+default. With it on and more than one player's controller connected, an Endless / 100 Mario course is started in
+SMM2's local multiplayer play mode, the one Play Together uses, with as many players as there are controllers (up to
+four). Three small changes do it (`mods/coop.c`, `hooks.c`, `patches.py`):
+- the course's play mode (`[*0x2a6bcd0 + 0xe0]`: 0 one player, 1 local multiplayer, 2 online), stored by the player
+  spawn, becomes 1 in an Endless course, with the set-up's player count (`[*0x2a66fb8 + 0x40]`) set: SMM2 spawns the
+  players and gives each their own controller, as in Play Together;
+- the controllers' poll reads as many Npads as there are players (Endless leaves it at one);
+- Endless's miss request, which the game sends for any player's miss, costs a life only when no player is left
+  standing (state 3 is down, bit 5 of +0x48c a bubble).
+**Why:** the owner's rules (2026-10-21) are SMM2's local multiplayer ones: shared lives, a life lost when all players
+are down, a clear when anyone reaches the goal. SMM2 already has all of that for Play Together; switching the mode it
+runs the course in reuses it instead of writing multiplayer into Endless. Off, every hook returns at once.
+**Would change:** SMM2's multiplayer rules diverging from the owner's in play (e.g. a bubble rule that isn't wanted),
+or 3D World courses (SMM2 has no multiplayer in that style: those stay single player).

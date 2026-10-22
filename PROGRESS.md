@@ -438,8 +438,19 @@ Setup failures first, since they block new players:
   (Normal, NSMBU) Peach and her line at 60 fps. Music is chosen by difficulty and style as in the spec (not
   listened to). Not compared in Cemu this round.
 
+### Owner's v0.4.2 reports (2026-10-22: "100 Mario is working great" apart from these)
+- ⬜ **A rare 100 Mario hang after a death** (once): after a lost life the screen faded to black and stayed. Check
+  the miss -> retry path for a race (the hidden SMM2 menu driven by the bridge, quick level return's fast-forward,
+  the course reload / prefetch) and add a log line that would catch it.
+- ⬜ **Course World "Hot" is always the same courses, from 2020**: check what our server and TGRCode's upstream
+  return for Hot (sort, date window, caching); fix ours if it's ours.
+- ⬜ **Course lists freeze at each new page**: prefetch ahead (a bigger batch from the server / TGRCode, pages
+  served from it, refilled in the background), within TGRCode's rate limit.
+- ⬜ **Thumbnails missing in some cases**: find which (server course, TGRCode, missing picture, format) and fix.
+
 ### Next features (owner's order, 2026-10-22)
-1. 🔄 Co-op in Endless / 100 Mario (see the entry under Future)
+1. 🔄 Co-op in Endless / 100 Mario (see the entry under Future): Mods-tab switch built; spawn, controllers and the
+   shared-lives rule checked in game; left: a clear by either player, the ending with all players, a real second pad
 2. ⬜ Lanky Mario (SMM1's Weird Mushroom) as an SMM1 mod switch, off by default
    - with it: **mod triggers** (owner, 2026-10-22): an overlay-menu section with a button per triggerable mod effect
      (Lanky Mario now, a chosen costume now, later others), for the current player in a course, greyed out
@@ -522,9 +533,14 @@ Setup failures first, since they block new players:
     own controller (checked both ways: player 1 moves only Mario, player 2 only Luigi).
     (2) The controllers' poll (sead's Npad device, main+0x263d90) reads Npads 0 .. `[x0 + 0x28]`; Endless leaves it
     at 1, now 2 (hook at +0x263db0), so the game reads player 2's controller and Luigi walks and jumps on it.
-    SMM2's own lives card already shows Mario and Luigi side by side. Left: check the rules in play (shared lives, a
-    life lost when all are down, a clear when anyone reaches the goal), a Mods-tab switch that turns this on with a
-    second controller, the 100 Mario ending with all players.
+    SMM2's own lives card already shows Mario and Luigi side by side.
+  - 2026-10-22, **the Mods-tab switch** "Co-op in Endless and 100 Mario" (`coop`, `RECOMP_COOP`; off by default;
+    `mods/coop.c`, DECISIONS): with it on and two or more players' controllers connected, an Endless / 100 Mario
+    course is started in local multiplayer (3D World courses stay single player: SMM2 has no multiplayer there).
+    **Shared lives checked in game** (a one-course test server with a lava course, both players scripted): one
+    player down (state 3 at Endless's miss request) costs nothing while the other stands; both down costs one life
+    (100 -> 99 -> 98) and SMM2's retry brings both back. Left: a clear by either player, the ending with all
+    players, a real second controller.
   - Owner, 2026-10-22: the 100 Mario ending shows all the players in the rescue scene if that's reasonable, else
     whoever cleared the last course; the lives card shows each player ("give that a shot").
 - ✅ **User report (2026-10-22, platform not stated, maybe Windows): Course World says "make an ID" and goes back;

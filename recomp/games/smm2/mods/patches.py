@@ -54,14 +54,11 @@ HOOK_POINTS = {
     # its first instruction (sub sp, sp, #0x80): from small Mario the Mystery item's form becomes 0 and the costume
     # goes on
     0x15a94a0: (0xD10203FF, 'costume: form change request'),
-    # Co-op (hooks.c, groundwork): the course set-up's player count when it isn't the Coursebot's Play Together (str w9 = 1,
-    # [x19, #0x8]!); Endless and 100 Mario courses get one player there
-    0x16dffb4: (0xB8008E69, 'co-op: the one-player store'),
-    # Co-op: the course scene's play mode ([*0x2a6bcd0 + 0xe0], stored by the player spawn 0x7100e581d0): 0 one player
+    # Co-op (coop.c): the course scene's play mode ([*0x2a6bcd0 + 0xe0], stored by the player spawn 0x7100e581d0): 0 one player
     # (Endless, the title course, ...), 1 local multiplayer (Play Together: the set-up's player count, each player on
     # their own controller), 2 online
     0xe58328: (0xB900E268, 'co-op: the play mode store'),
-    # Co-op: the controllers' poll (sead's Npad device, 0x7100263d90) reads Npads 0 .. [x0 + 0x28] (and the handheld one);
+    # Co-op (coop.c): the controllers' poll (sead's Npad device, 0x7100263d90) reads Npads 0 .. [x0 + 0x28] (and the handheld one);
     # Endless leaves it at player 1's
     0x263db0: (0xB9402808, 'co-op: the controller poll\'s count load'),
 }

@@ -563,6 +563,24 @@ It applies immediately.
   for the flow's map, and right held from frame 6700: Mario misses at frame ~9780. `LARECOMP_FPS_INTERVAL=0.25`
   shows the fast-forward's rate. Don't save frames during it: the PNG writes slow every frame down.
 
+## Co-op in Endless and 100 Mario (`games/smm2/mods/coop.c`)
+
+A Mods-tab switch, off by default (`coop=0/1` in `smm2mods.ini`, `RECOMP_COOP=0/1`). With it on and two or more
+players' controllers connected (Settings > Controls: every further controller is the next player; "Controllers
+start at player 2" makes the keyboard / on-screen controls player 1), each Endless Challenge and 100 Mario course
+is played the way Play Together plays: Mario, Luigi, Toad and Toadette, each on their own controller.
+
+- **Rules** (owner, 2026-10-21): SMM2's local multiplayer ones. A player who is down comes back in a bubble while
+  another stands; a life is lost only when every player is down; anyone reaching the goal clears the course. The
+  lives card shows every player.
+- **3D World courses** are played alone (SMM2 has no multiplayer in that style).
+- **How**: the course's play mode (`[*0x2a6bcd0 + 0xe0]`) is made SMM2's local multiplayer one where the player spawn
+  stores it, with the set-up's player count; the controllers' poll reads as many controllers as there are players;
+  Endless's miss request, sent for any player's miss, costs a life only when no player stands. Hook points in
+  `patches.py`, handlers in `hooks.c`; DECISIONS 2026-10-22.
+- **Tests**: `RECOMP_COOP_TEST=<n>` plays as if n players were connected; `LARECOMP_INPUT2` scripts player 2.
+  The log says `co-op: <n> players in this course`, and at each miss request every player's state.
+
 ## The game's own network stack (backend local-nex): groundwork for Nextendo and a local NEX server
 
 The mod above *fakes* being online: nifm / acc / friends / mii answer locally, the enl session logs in without NEX,
