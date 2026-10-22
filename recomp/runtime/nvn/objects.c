@@ -1,4 +1,5 @@
 // NVN objects, builders, and state objects (everything except command recording).
+#include <pthread.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
@@ -742,6 +743,8 @@ static void display_pace(int interval) {
 // the renderers still run. It counts down by one per frame, so a mod that loses track can't leave it on.
 _Atomic int g_present_hidden;
 bool g_frame_hidden;  // (this present's: the backends read it)
+static pthread_mutex_t g_present_mx = PTHREAD_MUTEX_INITIALIZER;  // (nvn_represent)
+static _Atomic uint64_t g_game_present_ns;                        // the game's last present
 
 NVN(nvnQueuePresentTexture) {
     NvnWindow *w = HOST(NvnWindow, A(1));
@@ -758,7 +761,28 @@ NVN(nvnQueuePresentTexture) {
     } else {
         display_pace(w->interval);
     }
-    if (i >= 0 && i < w->num) backend_present(HOST(NvnTexture, w->textures[i]));
+    if (i >= 0 && i < w->num) {
+        pthread_mutex_lock(&g_present_mx);
+        backend_present(HOST(NvnTexture, w->textures[i]));
+        atomic_store(&g_game_present_ns, plat_now_ns());
+        pthread_mutex_unlock(&g_present_mx);
+    }
+}
+
+// A game thread waiting in a host dialog (runtime/ui/menu.mm menu_keyboard_run) presents the last frame again so the
+// overlay keeps drawing and taking input. The game's render thread may go on presenting meanwhile: two threads in the
+// backend and in the overlay's ImGui frame (ImGui asserted: "Forgot to call Render()"). So the dialog presents only
+// while the game hasn't for 100 ms (the game's own presents draw the dialog otherwise), one present at a time.
+void nvn_represent(void) {
+    extern void backend_represent(void);
+    if (plat_now_ns() - atomic_load(&g_game_present_ns) < 100000000ull) {
+        struct timespec ts = {0, 16000000};
+        nanosleep(&ts, NULL);
+        return;
+    }
+    pthread_mutex_lock(&g_present_mx);
+    backend_represent();
+    pthread_mutex_unlock(&g_present_mx);
 }
 
 // ================================================================== small state objects

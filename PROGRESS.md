@@ -489,6 +489,13 @@ Setup failures first, since they block new players:
   red coins collected, in Course World and 100 Mario, audio on and off: each came back. The previous session's log
   is now kept (`smm2recomp.previous.log`), so if it recurs the crash's log survives the next start.
 
+- ✅ **The software keyboard could abort the game** (found 2026-10-23 in a scripted upload: ImGui's "Forgot to call
+  Render()" from `menu_keyboard_run`): the game thread waiting for the text re-presented the last frame while the
+  game's render thread went on presenting, so two threads ran the backend's present and the overlay's ImGui frame at
+  once (the window presented 97-105 times a second while the keyboard was up). Now one present at a time, and the
+  dialog re-presents only while the game hasn't for 100 ms (`runtime/nvn/objects.c` nvn_represent): 60 a second,
+  the text comes back. Test: `LARECOMP_HOST_INPUT=900:kbd:<initial>:0` opens the keyboard from another thread.
+
 ### Next features (owner's order, 2026-10-22)
 1. ✅ Co-op in Endless / 100 Mario (see the entry under Future): Mods-tab switch; spawn, own controllers, shared lives
    and a clear by either player (then Next and the map) checked in game with a scripted player 2. The ending stays

@@ -3,6 +3,7 @@
 // Both go through the player's bindings (runtime/hle/bindings.c, defaults there: keyboard WASD left stick, arrows
 // d-pad, K/J/L/I = A/B/X/Y, Q/E = L/R, 1/3 = ZL/ZR, Enter / Backspace = Plus / Minus, numpad 8/4/5/6 right stick;
 // controller by position, Switch A = east).
+#include <pthread.h>
 #include <SDL3/SDL.h>
 #include <ctype.h>
 #include <math.h>
@@ -308,9 +309,27 @@ static void push_key(SDL_Scancode sc, SDL_Keymod mod, bool down) {
 // a real key event by SDL key name, as a player's ("Left", "K"): for a mod's tests that act on what is on screen
 void input_test_key(const char *name, bool down) { push_key(SDL_GetScancodeFromName(name), SDL_KMOD_NONE, down); }
 
+// "frame:kbd:<name>:0": a thread asks for text as a game's software keyboard does (runtime/hle/swkbd.c) while the
+// game goes on presenting (the race of the dialog's re-present with the game's, runtime/nvn/objects.c nvn_represent)
+static void *kbd_test_thread(void *arg) {
+    extern int menu_keyboard_run(const char *initial, int max_len, char *out, int cap);  // runtime/ui/menu.mm
+    char text[256] = "";
+    int ok = menu_keyboard_run((const char *)arg, 32, text, sizeof text);
+    LOG("[input] test keyboard: %s \"%s\"\n", ok ? "entered" : "cancelled", text);
+    return NULL;
+}
+
 static void test_push(uint64_t frame, unsigned long start, unsigned long len, const char *dev, const char *arg) {
     SDL_Event e;
     memset(&e, 0, sizeof e);
+    if (!strcmp(dev, "kbd")) {
+        static char initial[64];
+        pthread_t th;
+        if (frame != start) return;
+        snprintf(initial, sizeof initial, "%s", arg);
+        if (!pthread_create(&th, NULL, kbd_test_thread, initial)) pthread_detach(th);
+        return;
+    }
     if (!strcmp(dev, "shot")) {
         extern char g_window_shot_request[256];  // runtime/hle/hookshot.c
         if (frame == start) snprintf(g_window_shot_request, sizeof g_window_shot_request, "build/%s.png", arg);
@@ -415,7 +434,7 @@ static void host_test_frame(uint64_t frame) {
             unsigned long start = 0, len = 10;
             char dev[8] = "", name[400] = "";
             if (sscanf(tok, "%lu:%7[a-z]:%399[^:]:%lu", &start, dev, name, &len) < 3) continue;
-            if (!strcmp(dev, "type") || !strcmp(dev, "sdlpad") || !strcmp(dev, "sdlkey") || !strcmp(dev, "shot") || !strcmp(dev, "tap") || !strcmp(dev, "drag") || !strcmp(dev, "click") || !strcmp(dev, "finger")) {
+            if (!strcmp(dev, "type") || !strcmp(dev, "kbd") || !strcmp(dev, "sdlpad") || !strcmp(dev, "sdlkey") || !strcmp(dev, "shot") || !strcmp(dev, "tap") || !strcmp(dev, "drag") || !strcmp(dev, "click") || !strcmp(dev, "finger")) {
                 test_push(frame, start, len, dev, name);
                 continue;
             }

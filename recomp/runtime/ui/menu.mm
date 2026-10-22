@@ -751,7 +751,7 @@ static void keyboard_draw(ImGuiIO &io, float scale) {
 // Game thread (runtime/hle/swkbd.c): show the dialog, re-present the last frame until it's answered.
 // Returns 1 confirmed (out = text, UTF-8), 0 cancelled.
 extern "C" int menu_keyboard_run(const char *initial, int max_len, char *out, int cap) {
-    extern void backend_represent(void);
+    extern void nvn_represent(void);  // runtime/nvn/objects.c
     snprintf(g_kbd_text, sizeof g_kbd_text, "%s", initial ? initial : "");
     g_kbd_max = max_len > 0 && max_len < (int)sizeof g_kbd_text / 4 ? max_len : 8;
     input_reset();
@@ -760,7 +760,7 @@ extern "C" int menu_keyboard_run(const char *initial, int max_len, char *out, in
     if (getenv("LARECOMP_KBD_AUTO")) { snprintf(g_kbd_text, sizeof g_kbd_text, "%s", getenv("LARECOMP_KBD_AUTO")); g_kbd = 2; }
     while (g_kbd.load() == 1 && !g_rt_unwind) {  // ~60 Hz (a reboot cancels)
         uint64_t t0 = SDL_GetTicks();
-        backend_represent();
+        nvn_represent();
         uint64_t dt = SDL_GetTicks() - t0;
         if (dt < 16) SDL_Delay((uint32_t)(16 - dt));
     }
