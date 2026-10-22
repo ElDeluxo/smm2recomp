@@ -234,17 +234,11 @@ bool superworld_fill_detail(Cpu *c, uint64_t no, const char *id) {
     info_fill(w, pid, map, courses);
     call2(c, CONVERT_DETAIL, rec, g_info);
     s64(rec + 0x230, (uint64_t)json_num(json_get(w, "created"), 0));
-    // the owner (the converter only resets these): name +0x948 (UTF-16 string object, capacity +0x950), player id
-    // +0x970 [inf: the world's title screen shows the name]
-    MLOG("Super World owner name buffer %llx cap %u\n", (unsigned long long)g64(rec + 0x948), g32(rec + 0x950));
+    // the owner [inf: a block the converter only resets, an owner's name (UTF-16 string object, capacity +0x950: 11)
+    // and player id; the world's title screen doesn't take its name from it (it shows the player's own)]
     if (g64(rec + 0x948) && g32(rec + 0x950) > 1 && g32(rec + 0x950) < 0x100)
         put_utf16(g64(rec + 0x948), g32(rec + 0x950), json_str(json_get(w, "maker_name"), ""));
     s64(rec + 0x970, pid);
-    // ... and the owner's Mii (+0x9a4, 0x58 bytes, in the run the converter zeroes): the title reads "SUPER <the Mii's
-    // nickname> WORLD" [inf: with none it shows the player's own]. A default Mii named after the maker, as the user
-    // records get (world.c).
-    extern void mii_default_charinfo(uint8_t out[0x58], const char *nickname);
-    mii_default_charinfo((uint8_t *)(uintptr_t)(rec + 0x9a4), json_str(json_get(w, "maker_name"), ""));
     // ninjis: one per course (the source's list, when it has one per course)
     if (json_len(ninjis) == levels)
         for (uint32_t k = 0; k < levels && k < MAX_LEVELS; k++)

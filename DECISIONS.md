@@ -1841,3 +1841,29 @@ v3.0.3 research (`lanky-smm2-v303.md`) found every piece in SMM2 itself: a spare
 animation class, the jump launch's computed/preset split, SMM1's lanky sounds still in SMM2's data.
 **Would change:** the owner wanting the bonus on preset or crouch jumps too, the random mushroom kept out of runs, or
 the Weird Mushroom's own look (SMM1's `M1_Item_kinokofunny`: not done, the mushroom looks like a Super Mushroom).
+
+## 2026-10-22 — Super Worlds: TGRCode's worlds through the game's own converters, the map blob never decrypted by us
+
+**Decision:** Course World's Super Worlds are served by our server from TGRCode (`/get_super_worlds`,
+`/super_world/<id>`), and the mod answers the game's eight Super World requests (`mods/superworld.c`).
+- **The answers go through the game's converters**, not hand-written records: the mod builds the NEX record the game
+  would have received (a guest WorldMapInfo) and calls the list-entry converter (main+0x14d54d0) or the detail
+  converter (main+0x14d48a0). The detail converter resets the 0xa40-byte record, decrypts the map with the game's own
+  key table and fills the course ids, so neither the server nor the mod holds a key or decrypts anything: the server
+  keeps TGRCode's `unk1` blob byte for byte. An upload is encrypted by the game's own function before it leaves.
+- **The pool grows from random answers**: each `/get_super_worlds` gives ten random recent worlds, so the server merges
+  every answer into one list (newest first, 300 kept, our players' uploads first), asks again only while a client
+  browses and the last answer is 10 minutes old (three answers while it is small), and keeps it on disk with the time
+  of the last answer. A world's details and map are fetched the first time a client opens it and kept for good; its
+  courses join the listed courses, so their data comes through the existing on-demand import.
+- **Thumbnails fail** to the game's placeholder planets: TGRCode's world thumbnails are Nintendo CDN addresses, which
+  we never contact. Our own uploads keep theirs on the server (not shown yet).
+- **Uploads stay on our server**, one world a player (a new one replaces the last), made only of that player's own
+  courses on our server.
+**Why:** the converters already do the record layout, the reset, the map decryption and the ring writes exactly as the
+game expects; writing them by hand would copy that logic and need the world key table outside the game. TGRCode has no
+"all worlds" list, only random picks, so a kept, growing pool is the only way to offer more than ten at a time without
+hammering it.
+**Would change:** a source with a full world list, or world thumbnails we may fetch or render ourselves (the server
+could then serve a picture and the thumbnail request answer it).
+

@@ -239,7 +239,8 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     (`leaderboard_makers.png`); ✅ SMM2's own Endless under the `smm2` ruleset (5 lives, endless, its
     own screens and HUD; an Easy run against the server: `evidence/mods/smm2_endless/`); 🔄 built, not
     yet seen working: likes / boos (the clear screen's hearts took no test input), comments (text),
-    uploads from the Course Maker, the ID search, maker pages; ⬜ thumbnails, Super Worlds, Ninji;
+    uploads from the Course Maker, the ID search, maker pages; ✅ Super Worlds (list, map, courses play; below);
+    ⬜ thumbnails, Ninji;
     ✅ courses=tgrcode setting (built-in server, awaiting core/crates/embed);
     ⬜ online multiplayer: plan in `DECISIONS.md` (local play over our relay first, Network Play at
     the enl layer second)
@@ -480,7 +481,20 @@ Setup failures first, since they block new players:
    5-7 s): the server fetched in reverse order, slept through waiting clients and dropped a busy picture for good.
    Now the first pictures of Hot / New / Popular are fetched ahead, the page's and the next page's while browsing,
    and a busy one is asked for again; Hot = Popular's latest uploads first; live lists from TGRCode (`lists.rs`)
-7. ⬜ Super Worlds
+7. ✅ Super Worlds (2026-10-22; `recomp/docs/mods.md` "Super Worlds",
+   `games/smm2/mods/superworld.c`, server `superworlds.rs`; evidence `private/smm2/evidence/mods/superworlds/`)
+   - ✅ server: a pool from TGRCode's `/get_super_worlds` (grows ten random worlds an answer, kept on disk, refreshed at
+     most every 10 minutes while a client browses), a world's details and map fetched once and kept, its courses
+     listed (fetched from TGRCode when played); progress per player; uploads of our players' own worlds, delete; tests
+   - ✅ in game: config value 37 on; Course World > Super Worlds lists TGRCode's worlds (name, worlds, courses, planet);
+     Play: the world's map, decrypted by the game's own converter (lives, roads, castles), Mario walks it; a course
+     point downloads its course and plays it (an SMB3 and a 3D World course seen); the pause menu shows the course's
+     name, world number and maker
+   - ✅ fixed on the way: GetCourses skipped the first id of its list (a world's course start asks for one: the game
+     then called the course corrupt)
+   - ⬜ the title screen says "SUPER Player WORLD" (the player's name, not the owner's; source of the name not found)
+   - ⬜ not yet seen in game: the progress save after a course, a world cleared, upload / delete (needs a world of
+     courses uploaded to our server), My Info's world list; thumbnails stay the game's placeholder planets
 8. ✅ Disable the buttons that don't work yet (2026-10-22, checked in game): every Course World entry works or answers
    the way SMM2 does when a service is off. Ninji Speedruns showed "A communication error occurred": its two
    requests (event count main+0x14f3980, event list +0x14f3770) are now answered empty, so it shows SMM2's own "No

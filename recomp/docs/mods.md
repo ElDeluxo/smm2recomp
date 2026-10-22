@@ -112,8 +112,8 @@ calls (read from the client vtable slot it uses):
 | GetReqGetInfoHeadersInfo (134) + HTTP: a course's picture ("relation objects", 5 at a time) | 0x14e0e70 (`edit.c`) | `GET /api/courses/<code>/thumbnail?wait_ms=` (below) |
 | the same for a course's whole-course map (More info) | 0x14e2cf0 (`edit.c`) | `GET /api/courses/<code>/entire_thumbnail?wait_ms=` |
 
-Course World courses download and play exactly like the Endless ones (the same GetObject). Not served: Super Worlds,
-Ninji speedruns, notifications, follows, Network Play.
+Course World courses download and play exactly like the Endless ones (the same GetObject). Super Worlds: below. Not
+served: Ninji speedruns, notifications, follows, Network Play.
 
 **Thumbnails** (a course's picture on its card and course page, its whole-course map under More info): the server
 keeps them as JPEGs (`thumbnails/<code>.jpg`, `<code>-entire.jpg` in its folder). For a course from TGRCode's archive
@@ -140,6 +140,49 @@ withheld picture, `RECOMP_MOD_TEST_NO_THUMB=<code>`, the stand-in).
 **Played Courses** (a maker page's tab): the server keeps each player's played courses, newest first (300): a play
 posted from Course World, and every course of a challenge run (Endless, 100 Mario) on its first report; a store from
 before this starts from the courses its runs passed. **Liked Courses**: the courses the player liked.
+
+### Super Worlds (`games/smm2/mods/superworld.c`)
+
+Course World > Super Worlds lists, opens and plays other makers' Super Worlds from our server, which takes them from
+TGRCode (spec: `research/specs/super-worlds-v303.md`). Application config value 37 = 1 switches the button on
+(`online.c`; anything else: "This service is not active right now").
+
+| Request (method id) | Function (main+) | Answered from |
+|---|---|---|
+| SearchWorldMap (161): Course World's list (flag +0x1b2728 = 1) | 0x14f79a0 | `GET /api/super_worlds?limit=50&wait_ms=20000`; the owners' names then come through GetUsers (world.c, up to 64 ids) |
+| SearchWorldMap (160): My Info's list (flag 0) | 0x14f79a0 | `GET /api/makers/<own id>/super_worlds` (the worlds the player has progress in) |
+| GetWorldMap (159): the selected world (id at +0x1b17a8) into the detail record +0x1b0d00 | 0x14f6600 | `GET /api/super_worlds/<id>?wait_ms=20000` and `/map` |
+| GetWorldMap (159) into the list ring | 0x14f6100 | `GET /api/super_worlds/<id>` |
+| play info get / reset / save (162 / 164 / 165), id at +0x1b1748 | 0x14f7d10, 0x14f8260, 0x14f84d0 | `GET` / `POST /api/super_worlds/<id>/progress`, `POST …/progress/reset` (always ok: the game keeps its own copy) |
+| world thumbnails (87 + HTTP) | 0x14f8850 | failed (status 2): the game's placeholder planets |
+| RegisterWorldMap (158): upload | 0x14f5940 | the map encrypted with the game's own function and the world key table, then `POST /api/super_worlds?data_ids=&worlds=&version=` (map + thumbnail block); the server takes only the player's own courses on it [not tried in game] |
+| DeleteWorldMap (163) | 0x14f7c30 | `DELETE /api/super_worlds/mine` [not tried in game] |
+| a maker's page / own user record with a world (user record +0x1b0) | 0x14d2f00, 0x14d5cd0 | `super_world_id` of `/api/makers/<id>`, `/api/me` (our players' uploads), then the detail as above |
+
+**How the answers are written:** through the game's own converters, as a NEX answer would be. The mod fills a guest
+WorldMapInfo (the NEX record, 0x140 bytes: id, owner, the map blob, counts, planet type, NEX DateTime, the courses'
+data ids, an empty ninji map) and calls the list-entry converter main+0x14d54d0 or the detail converter main+0x14d48a0,
+which resets the record, fills the entry, **decrypts the map** (the 0x500-byte blob TGRCode calls `unk1`, kept and
+served as it is) with the game's own key table and the data id ring; the mod then adds the ninjis (when the source has
+one per course) and the owner's name and player id at +0x948 / +0x970 [inf]. The world's courses
+are ordinary courses: the course start asks GetCourses (main+0x14dbae0, endless.c, which read its id list from the
+second id on and so answered nothing for a world's one-id request: fixed) and downloads with GetObject; the server
+registers a fetched world's courses as listed, so it fetches and imports each from TGRCode when its data is asked for.
+
+**Server** (`core/crates/server/src/superworlds.rs`): the pool is every world a TGRCode `/get_super_worlds` answer
+named (ten random recent ones an answer), newest first, at most 300 plus our own uploads first; asked for when a client
+browses and the pool is older than 10 minutes (3 answers while it holds fewer than 30; the time of the last answer is
+kept across restarts), always through the one fetcher with its pacing and 429 back-off. A world's details and map are
+fetched the first time a client asks (ahead of everything else) and kept for good (`superworlds/<id>.json`, `.map`).
+Progress is kept per player and world (`superworlds/progress.json`); a player's upload (one each, replacing the last)
+is kept here only, with its thumbnail block. TGRCode's world thumbnails are on Nintendo's CDN: never fetched.
+
+**Seen in game** (2026-10-22, `evidence/mods/superworlds/`): the list with TGRCode's worlds (name, worlds, courses,
+planet), a world's map (decrypted, 99 lives, Mario on the start), its first course downloaded and playing.
+**Open:** the world's title screen reads "SUPER Player WORLD" (the player's own name, not the owner's: where the title
+takes its name from is not found; neither +0x948 nor a Mii at +0x9a4 changed it); thumbnails of our own uploads (the server keeps
+them; the request still fails); upload and delete not tried in game (they need a Super World made of courses
+uploaded to our server); the progress save after a course not seen yet.
 
 ### Edit any course (`games/smm2/mods/edit.c`)
 
@@ -447,8 +490,8 @@ every difficulty draws from all of them.
 
 ### Limits
 
-- Not online yet: Network Play (plan: `DECISIONS.md` "Online multiplayer"), Super Worlds, Ninji speedruns,
-  follows, notifications; they answer "not connected" or empty.
+- Not online yet: Network Play (plan: `DECISIONS.md` "Online multiplayer"), Ninji speedruns, follows,
+  notifications; they answer "not connected" or empty.
 - The Maker avatar is the console's default Mii with your account's name (creating one needs the Mii editor applet,
   which the runtime doesn't have). `online.c` puts it in the save's user settings (+0x60) when there is none, so the
   avatar icon at the top left of Course World's menus shows it from the start (it was a white box until a maker page
