@@ -492,7 +492,7 @@ Setup failures first, since they block new players:
    Online section picks Nextendo), `nextendo_ios.mm` compiles for iOS. Owner to test: a live sign-in (verified
    e-mail, linked Discord) and Network Play with a second player on another connection
 10. ⬜ iPhone layout (the notch-safe L / ZL: verify)
-11. ⬜ Exact sound timing (owner: seems fine now; only if cheap)
+11. ✅ Exact sound timing: the owner found it fine in play (2026-10-22); no change made, nothing concrete to fix
 
 ### Future (owner's backlog, not scheduled)
 - 🔄 **120 fps output by frame generation** (owner, 2026-10-19): built 2026-10-20 (Video tab, `frame_gen`,
