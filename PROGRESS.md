@@ -351,6 +351,14 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     hole until the composite draw with fragment program 72711e4500 (draw ~529 of the frame) lays the character layer
     over it; the speckle is in the scene right after that. Next: dump the iPad's image after that draw (the run was
     paused at that point), then the translated shader of 72711e4500 and what it reads (the RG16F depth layer).
+    2026-10-22, later: the composite (72711e4500, `LARECOMP_SAVE_MSL=1` saves it) samples the character depth layer
+    and discards where it reads exactly 1.0 (nothing drawn), then compares the scene's linearised depth (through a
+    MUFU reciprocal) with Mario's own (`r9 < -r4`). Behind Mario the two are nearly equal, so the compare sits on a
+    knife edge: a precision difference on the M5 would flip it pixel by pixel, as the speckle does. Ruled out on the
+    iPad: depth textures sampled without filtering (an experiment, no change; removed). In progress: precise
+    reciprocal / rsqrt for MUFU (`LARECOMP_PRECISE_MUFU`, stashed as `git stash` "iPad 3D World: ..."; it compiles on
+    the Mac; the iPad run reached no screenshot in its 150 s, likely recompiling every shader, so not yet seen).
+    The iPad still has that test build and a `recomp-test.env` on it.
     It's not how he looks on the console. Compare the same frame with Ryujinx; suspects are his shading or AO
     pass and texture or sampler state on the iPad's GPU. The Vulkan NaN blur at his eyes (line 98) may be related.
     Checked 2026-10-21: on the Mac, Mario on the 3D World title is smooth at render scale 1.0 and at 1.43 (the
