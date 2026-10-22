@@ -14,6 +14,15 @@
 //              reaches those two only (not net_hosts= targets), UDP any address (PIA's peers), and the game server's TLS certificate is
 //              pinned (its public key's SHA-256). The account's PID, user name and an ID token carrying the
 //              account's game token come from acc (services/acc.c, runtime/net/token.c)
+//   ocw        OpenCourse World: the game's own online client against the player's own OCW account
+//              (games/smm2/mods/ocw.c reads ocw-config.json in the data folder and calls net_ocw_set_target).
+//              The only backend that reaches a public host, and it reaches exactly the one name that config
+//              names - every other name still fails and every other address is still refused. Its certificate is
+//              checked: the chain must end in a public root the runtime carries (net/roots.c: Let's Encrypt's
+//              ISRG Root X1 / X2 among them) or one the system bundle has, and match the host name
+//              (tls_trust=roots, the default here). OCW is to be open source and self-hostable, so
+//              tls_trust=any still turns the check off for a server of one's own - a LAN instance or OCW
+//              itself under development, where there is no certificate a public root can vouch for.
 //
 // Settings: environment variable, else the game's settings (game_net_config: smm2mods.ini for SMM2):
 //   RECOMP_NET_BACKEND        backend=           ours | local-nex | nextendo
@@ -24,8 +33,11 @@
 //   RECOMP_NET_HOSTS          net_hosts=         extra redirect entries "name=ip;*.domain=ip" (local addresses only;
 //                                                they come before the backend's own)
 //   RECOMP_NET_TLS_TRUST      tls_trust=         local-nex: local-ca (default): server certificates must chain to the
-//                                                local test CA; any: accept any certificate (only towards local
-//                                                addresses). (nextendo: always the pin)
+//                                                local test CA; any: accept any certificate (local addresses, or a
+//                                                self-hosted ocw server). ocw: roots (default): the chain must end in
+//                                                a public root the runtime carries (net/roots.c: Let's Encrypt's ISRG
+//                                                Root X1 / X2 among them) or the system bundle has, and match the
+//                                                host name. (nextendo: always the pin)
 //   RECOMP_NET_TLS_CA         tls_ca=            the local test CA (PEM), default net/test-ca.pem in the data folder
 //   RECOMP_NEXTENDO_SERVER    nextendo_server=   nextendo: the game server's address (default 51.178.29.194)
 //   RECOMP_NEXTENDO_NAT       nextendo_nat=      nextendo: the NAT check's address (default 164.132.111.120)
@@ -34,13 +46,22 @@
 //   RECOMP_NET_NEX_TOKEN_FILE nex_token_file=    local-nex: a backend's NEX login token, carried in the local ID
 //                                                token's "nnex" claim (runtime/net/token.c)
 //   RECOMP_NET_LOG            net_log=1          log every socket, name, TLS and token call
+//   RECOMP_NET_LOG_DATA       net_log_data=1     ... and the TLS plaintext itself (the first 160 bytes of each read
+//                                                and write): noisy, and off even with net_log=1. Registered secrets
+//                                                are hidden from it (net_log_secret)
 #pragma once
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
-typedef enum { NET_BACKEND_OURS = 0, NET_BACKEND_LOCAL_NEX = 1, NET_BACKEND_NEXTENDO = 2, NET_BACKEND_COUNT } NetBackend;
-typedef enum { NET_TRUST_LOCAL_CA = 0, NET_TRUST_ANY = 1, NET_TRUST_PINNED = 2 } NetTrust;
+typedef enum {
+    NET_BACKEND_OURS = 0,
+    NET_BACKEND_LOCAL_NEX = 1,
+    NET_BACKEND_NEXTENDO = 2,
+    NET_BACKEND_OCW = 3,
+    NET_BACKEND_COUNT
+} NetBackend;
+typedef enum { NET_TRUST_LOCAL_CA = 0, NET_TRUST_ANY = 1, NET_TRUST_PINNED = 2, NET_TRUST_ROOTS = 3 } NetTrust;
 
 NetBackend net_backend(void);          // in effect (nextendo without a signed-in account -> ours)
 NetBackend net_backend_setting(void);  // as set
@@ -49,9 +70,14 @@ const char *net_backend_fallback_why(void);  // why it does though another backe
 const char *net_backend_key(NetBackend b);  // "ours", "local-nex", "nextendo"
 bool net_real_sockets(void);           // the game's sockets reach the host's network stack (local-nex, nextendo)
 bool net_log_on(void);
-// A log line with the player id masked: every "PID=<digits>" (any case; NEX station URLs carry it) becomes
-// "PID=<hidden>". Always NUL-terminated within cap; a cut digit run is dropped, never printed.
+bool net_log_data(void);  // ... and the TLS plaintext (net_log_data=1; off even with net_log=1)
+// A log line with what must not be read from it taken out: every "PID=<digits>" (any case; NEX station URLs carry
+// it) becomes "PID=<hidden>", and so does any string registered with net_log_secret (an account token). Always
+// NUL-terminated within cap; a cut digit run is dropped, never printed.
 void net_log_redact(const char *in, char *out, size_t cap);
+// A secret that must never appear in a log, registered before the game runs (a log file is what a player attaches
+// to a bug report). Shorter than 8 characters: ignored, too short to find in ordinary text safely.
+void net_log_secret(const char *s);
 #define NLOG(...) do { if (net_log_on()) LOG(__VA_ARGS__); } while (0)
 
 // For a settings page: the backends, which can be chosen now, and choosing one (saved; takes effect at the next
@@ -76,8 +102,25 @@ uint32_t net_test_server_ip(void);     // host order
 uint16_t net_dest_port(uint32_t ip, uint16_t port);
 const char *net_nsd_environment(void); // the nsd environment that replaces '%' in the game's host names ("lp1")
 
+// The OCW backend's one host (games/smm2/mods/ocw.c, from ocw-config.json), set while the modules are loaded and
+// before the game's first instruction. `host` is the name written into the game and the name it looks up; `ip`
+// (NULL or empty: ask the host resolver) points that name at an address, which is how a self-hosted or local OCW
+// instance is reached and how an IP-only setup works. Nothing else resolves and nothing else is reachable.
+void net_ocw_set_target(const char *host, const char *ip);
+bool net_ocw_host(char *out, size_t cap);  // the configured host ("" / false: none)
+
+// What the backend wants as the network service account (services/acc.c). True: use *id for the account ID and send
+// no ID token at all. The ocw backend does, and matches the console mod exactly there (_vendor/ocw-client-mod: it
+// stubs GetNetworkServiceAccountId to one shared id and LoadNetworkServiceAccountIdTokenCache to nothing), because
+// OCW identifies the player by the token in the WebSocket handshake, not by this id - the id is the same for every
+// OCW player on a console. False: the local account (runtime/net/token.h), a random id and a local JWT.
+bool net_account_shared(uint64_t *id);
+
 // TLS
-NetTrust net_tls_trust(void);         // nextendo: NET_TRUST_PINNED
+NetTrust net_tls_trust(void);         // nextendo: NET_TRUST_PINNED; ocw: NET_TRUST_ROOTS unless set otherwise
+// May a connection to ip go ahead with "accept any certificate" (services/ssl.c)? Local addresses always; under the
+// ocw backend its own addresses too (the owner's choice: OCW's session is not certificate-checked).
+bool net_tls_any_allowed(uint32_t ip);
 const char *net_tls_ca_path(void);
 bool net_tls_pin(uint8_t out[32]);     // NET_TRUST_PINNED: the server certificate's SPKI SHA-256 to require
 // (runtime/services/ssl.c) true when the certificate's public key (SubjectPublicKeyInfo, DER) hashes to pin

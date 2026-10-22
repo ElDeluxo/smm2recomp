@@ -4,7 +4,7 @@
 //               off, order, its GameBanana page, remove);
 //   GameBanana  the game's mods there (runtime/gamebanana.h), most downloaded first or a search; a row opens its page
 //               (details, which file, install);
-//   Online      the online backend and the app's own rows.
+//   Online      the online backend, the game's own settings for it (game_rows) and the app's own rows.
 // Rows are the menu's option rows, so a controller, touch and the mouse all work it; B (Esc) leaves a mod's page.
 #include <SDL3/SDL.h>
 #include <pthread.h>
@@ -14,6 +14,7 @@
 #include <strings.h>
 
 #include "../game.h"  // GAME_TITLE
+#include "../game_rows.h"
 #include "imgui.h"
 #include "option_rows.h"
 
@@ -40,6 +41,43 @@ extern "C" bool online_rows_available(void);
 extern "C" void online_rows(void);
 extern "C" void rt_request_reboot(int kind);
 void menu_close(void);  // (menu.mm)
+
+// A game's settings that are not switches (runtime/game_rows.h): the Online page draws them under the backend
+// choice, since that is what they configure (OpenCourse World's domain and token, games/smm2/mods/ocw.c).
+// (no menu_keyboard_run here: it blocks re-presenting frames from the game thread, and these rows are drawn during
+// a present - opt_text has its own field, with the on-screen keyboard for a controller)
+#define MAX_SHOWN_ROWS 16
+static bool g_row_shown[MAX_SHOWN_ROWS];  // a secret row was activated: its field is drawn until the menu closes
+extern "C" void game_mod_rows_hide(void) {  // (menu.mm, when the menu closes)
+    for (int i = 0; i < MAX_SHOWN_ROWS; i++) g_row_shown[i] = false;
+}
+
+static void game_rows(void) {
+    const GameModRow *r;
+    int n = game_mod_rows(&r);
+    bool changed = false;
+    for (int i = 0; i < n; i++) {
+        if (!r[i].value && !r[i].text) { opt_section(r[i].label); continue; }
+        if (r[i].value) { changed |= opt_toggle(r[i].label, r[i].value, r[i].def, r[i].desc); continue; }
+        // a secret: "set" / "not set" until the row is activated, then the field itself (never masked in place -
+        // that would mean swapping the buffer under a live ImGui field)
+        if (r[i].secret && i < MAX_SHOWN_ROWS && !g_row_shown[i]) {
+            if (opt_action(r[i].label, r[i].text[0] ? "set" : "not set", r[i].desc)) g_row_shown[i] = true;
+            continue;
+        }
+        // max_len is in characters, as the game's own keyboard limit is: cut at the boundary after the last one,
+        // never inside one (a domain is ASCII, but nothing here promises that)
+        if (r[i].max_len > 0 && !opt_text_editing(r[i].label)) {
+            int chars = 0;
+            for (char *q = r[i].text; *q; q++) {
+                if (((unsigned char)*q & 0xc0) == 0x80) continue;
+                if (chars++ == r[i].max_len) { *q = 0; break; }
+            }
+        }
+        changed |= opt_text(r[i].label, r[i].text, (size_t)r[i].cap, r[i].hint, r[i].desc);
+    }
+    if (changed) game_mod_rows_changed();
+}
 
 static bool g_back_used;  // B / Esc went to a page here this frame (the menu doesn't close on it)
 bool mods_page_used_back(void) { bool u = g_back_used; g_back_used = false; return u; }
@@ -361,6 +399,7 @@ void mods_page(void) {
     case 2: page_gb(); break;
     default:
         if (online_rows_available()) online_rows();
+        game_rows();  // the game's own settings for the backend above (OCW's domain and token)
         launcher_settings_rows();
         break;
     }
