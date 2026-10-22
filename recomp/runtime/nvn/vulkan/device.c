@@ -23,6 +23,9 @@
 #include "../renderer.h"
 
 VkG g_vk;
+#define X(n) PFN_vk##n vkl_##n;
+VK_LATE_FUNCS(X)
+#undef X
 static SDL_Window *window;
 static atomic_bool ui_ready;
 static VkDebugUtilsMessengerEXT messenger;
@@ -210,9 +213,15 @@ static void create_device(void) {
                              .pQueueCreateInfos = &qi, .enabledExtensionCount = n_ext, .ppEnabledExtensionNames = ext};
     VK_CHECK(vkCreateDevice(g_vk.phys, &di, NULL, &g_vk.dev));
     vkGetDeviceQueue(g_vk.dev, g_vk.qfam, 0, &g_vk.queue);
+#define X(n) if (!(vkl_##n = (PFN_vk##n)vkGetDeviceProcAddr(g_vk.dev, "vk" #n))) \
+        FATAL("the graphics driver lacks vk" #n " (is a Vulkan 1.3 driver installed?)\n");
+    VK_LATE_FUNCS(X)
+#undef X
 
+    // (VMA fetches its functions too: its Vulkan 1.3 ones are not in an old loader either)
+    VmaVulkanFunctions vf = {.vkGetInstanceProcAddr = vkGetInstanceProcAddr, .vkGetDeviceProcAddr = vkGetDeviceProcAddr};
     VmaAllocatorCreateInfo ai = {.physicalDevice = g_vk.phys, .device = g_vk.dev, .instance = g_vk.inst,
-                                 .vulkanApiVersion = VK_API_VERSION_1_3};
+                                 .vulkanApiVersion = VK_API_VERSION_1_3, .pVulkanFunctions = &vf};
     VK_CHECK(vmaCreateAllocator(&ai, &g_vk.vma));
 
     VkSemaphoreTypeCreateInfo st = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO,
