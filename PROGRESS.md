@@ -389,21 +389,21 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
   adb pushed into Android/data/<pkg>: SM35 falls back to the internal folder (a5e5395). Likely behind SMM2's
   Vulkan-only differences (3D World Mario on lavapipe); port when Windows / Linux / Android get attention.
 
-### GitHub issues (triaged 2026-10-22; replies drafted in `research/issue-replies.md`, not posted)
+### GitHub issues (triaged 2026-10-22; owner: no replies needed, fix what they reveal)
 Release times (UTC, 2026-10-21): v0.3.0 06:51, v0.3.1 09:23, v0.3.2 12:58. #9 (prod.keys legal): the owner's, no action.
 Setup failures first, since they block new players:
-- ✅ (next release) **"hactool stopped without a message (exit code 1)" on the cnmt NCA** (#10, #17, a comment on #7;
+- ✅ (v0.4.1) **"hactool stopped without a message (exit code 1)" on the cnmt NCA** (#10, #17, a comment on #7;
   "no output" in v0.2.1: #4, #6). hactool did say why, but its message mentions keys ("Invalid NCA header! Are keys
   correct?", "Key (...) must be 32 hex digits!"), and `masked()` drops every line with "key" in it, so setup called
   it a crash. Now: a header key that doesn't fit says so (`KEYS`, also in sysdata.py), and our hactool build skips a
   key file line it can't read (a known key whose value is the wrong length, a title key listed twice) instead of
   exiting on it, without printing the value (`tools/build_hactool.sh`; checked with a broken key file on macOS and
   the Windows build under Wine). Emulators' key files often have such a line, which is why "it works in Ryujinx".
-- ✅ (next release) **Setup copied and linked its own last result onto itself** when the chosen folder held the data
+- ✅ (v0.4.1) **Setup copied and linked its own last result onto itself** when the chosen folder held the data
   folder (on Windows the program's folder is the data folder): the scan found `extracted/exefs` and
   `extracted/romfs` as sources. It now skips setup's own output. Likely #11 ("keep the game files out of the
   program's folder" fixed it for two players); its crash after setup still needs a log.
-- ✅ (next release) **Windows: "vkCmdBeginRendering not found in vulkan-1.dll" before anything shows** (#15): the exe
+- ✅ (v0.4.1) **Windows: "vkCmdBeginRendering not found in vulkan-1.dll" before anything shows** (#15): the exe
   imported 17 Vulkan 1.2 / 1.3 commands (and VMA two more), which an older Vulkan loader doesn't have, so Windows
   refused to start it. They're now fetched from the device (`vk.h` `VK_LATE_FUNCS`, VMA's dynamic functions); the
   cross-built exe imports no 1.2 / 1.3 command. A driver without Vulkan 1.3 still can't run it, but now says so.
@@ -418,6 +418,17 @@ Setup failures first, since they block new players:
 - ✅ **Course World bounces to the title, "create a Mii"** (#14, #13's second half): fixed in v0.4.0.
 - ✅ **Applying the update crashed (access violation)** (#7, v0.3.1): fixed in v0.3.2.
 - ⬜ **Steam Deck runs slowly** (#13, v0.3.2): needs the frame rate and render scale; try a lower render scale.
+- ✅ **PR #8 merged** (2026-10-22, x86-64-v2 baseline, gamebuild.c builds v3 where the CPU has AVX2; in v0.4.1).
+  Follow-up, minor: the game code's id comes from the v2 flags, so a data folder moved from an AVX2 machine to an
+  older CPU keeps its v3 build (illegal instruction). Put the chosen level in the id when it matters.
+- ✅ **100 Mario ending, each difficulty** (owner, 2026-10-22: "Normal didn't show the Peach animation; Easy did"):
+  Peach's and Toad's looping wait pattern stopped on its last key after one loop (the rescue draws it on the
+  scene's clock), so NSMBU / 3D World Peach froze after 39 frames, SMW's blink after its first, while Easy's Toad
+  (80 frames) still moved for longer. `bfres_texpat_at` now wraps looping patterns. Checked offline
+  (`test_smm1ui --flow ending:<d>:0:<style>`) for all four difficulties x five styles: Toad on Easy, Peach on the
+  rest, the Thank-you line by difficulty (Easy row 1, Normal 2, Expert / Super Expert 3), the credits roll; in game
+  (Normal, NSMBU) Peach and her line at 60 fps. Music is chosen by difficulty and style as in the spec (not
+  listened to). Not compared in Cemu this round.
 
 ### Next features (owner's order, 2026-10-22)
 1. 🔄 Co-op in Endless / 100 Mario (see the entry under Future)
