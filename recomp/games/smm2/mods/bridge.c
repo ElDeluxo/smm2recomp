@@ -654,9 +654,16 @@ static void play_exec(Cpu *c) {
     // A course loaded underneath the flow's map waits at its first play frame until the flow's card is up
     // (hundred_flow_ready_to_start), so it doesn't run hidden.
     static bool holding;
+    static uint64_t held_since;
     if (started_pending && run_d >= 0 && mod_hundred_rules() && test_difficulty() < 0 && !hundred_flow_ready_to_start()) {
-        if (!holding) holding = true, LOG("[mod] bridge: the course waits for the flow's card\n");
-        return;
+        if (!holding) holding = true, held_since = renderer_present_count(), LOG("[mod] bridge: the course waits for the flow's card\n");
+        if (renderer_present_count() - held_since < 600) return;
+        // (10 s: never in a good run; owner, 2026-10-22, once stayed black after a miss) say why, and let it go
+        char d[256];
+        hundred_flow_describe(d, sizeof d);
+        LOG("[mod] bridge: the course waited 10 s for the flow: let go (flow: %s)\n", d);
+        started_pending = false;
+        if (test_difficulty() < 0) hundred_flow_course_started();
     }
     if (holding) holding = false, LOG("[mod] bridge: the course starts\n");
     extern void quick_retry_play_state(void);  // (quick_retry.c: the course is playing again after a miss)
@@ -876,6 +883,7 @@ void hundred_mode_switch(void) {  // ZL / ZR / the tap on the flow's select: SMM
 
 // (the flow's: whether a course may start playing; this stand-in, for builds without it, says yes)
 __attribute__((weak)) bool hundred_flow_ready_to_start(void) { return true; }
+__attribute__((weak)) void hundred_flow_describe(char *out, size_t n) { snprintf(out, n, "no flow"); }
 
 // The Endless menu's Disappear state (index 5 of its machine; exec main+0x1a24d30): the menu closes towards Course
 // World (a course start goes through CourseIn / InFade instead).

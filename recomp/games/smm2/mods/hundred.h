@@ -9,6 +9,7 @@
 // queues what it is told and acts on it at its next tick (60 Hz, the presented frames).
 #pragma once
 #include <stdbool.h>
+#include <stddef.h>
 
 struct hundred_credit {
     char name[66];   // course name, UTF-8
@@ -46,6 +47,7 @@ bool hundred_flow_covering(void);        // ... and has faded in all the way: no
 bool hundred_flow_overlay(void);         // an SMM1 overlay is up over the course (pause, skip, clear, card): input to it
 void hundred_flow_pause(void);           // the player paused during a run (the mod keeps SMM2's own pause from opening)
 void hundred_flow_course_started(void);  // the course is on screen and playing (the start card may go)
+void hundred_flow_describe(char *out, size_t n);  // the flow's state in a line (logs)
 void hundred_flow_course_in(void);       // SMM2 has left its map for the course scene (SMM2's course-in card comes)
 void hundred_flow_cover(void);           // SMM2's screen is black on its way back to its Endless menu after a Save &
                                          // Quit: keep it black until the select comes out of it

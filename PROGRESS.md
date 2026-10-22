@@ -439,9 +439,12 @@ Setup failures first, since they block new players:
   listened to). Not compared in Cemu this round.
 
 ### Owner's v0.4.2 reports (2026-10-22: "100 Mario is working great" apart from these)
-- ⬜ **A rare 100 Mario hang after a death** (once): after a lost life the screen faded to black and stayed. Check
-  the miss -> retry path for a race (the hidden SMM2 menu driven by the bridge, quick level return's fast-forward,
-  the course reload / prefetch) and add a log line that would catch it.
+- 🔄 **A rare 100 Mario hang after a death** (once): after the lives card the fade back into the course never came;
+  the game ran on at 60 fps and the menu opened. Not reproduced (a lava course, misses with quick level return on
+  and off: each came back). Two ways it could stick are now caught, said and undone: the bridge holding the course
+  for the flow (`hundred_flow_ready_to_start`) longer than 10 s, and the flow's black over a course longer than
+  10 s (`[hundred] black over the course`); both log the flow's whole state (`hundred_flow_describe`), and each
+  miss logs the lives and the flow's state. If it comes back, the log says which.
 - ⬜ **Course World "Hot" is always the same courses, from 2020**: check what our server and TGRCode's upstream
   return for Hot (sort, date window, caching); fix ours if it's ours.
 - ⬜ **Course lists freeze at each new page**: prefetch ahead (a bigger batch from the server / TGRCode, pages
