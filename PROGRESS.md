@@ -466,7 +466,11 @@ Setup failures first, since they block new players:
 5. ⬜ Edit any course: the d-pad onto Make, the upload credit, Edit on the course card / Endless
 6. ⬜ Course World thumbnails: check whether they already work; fix only if not
 7. ⬜ Super Worlds
-8. ⬜ Disable the buttons that don't work yet (e.g. Ninji Speedruns), greyed out or hidden the way SMM2 would
+8. ✅ Disable the buttons that don't work yet (2026-10-22, checked in game): every Course World entry works or answers
+   the way SMM2 does when a service is off. Ninji Speedruns showed "A communication error occurred": its two
+   requests (event count main+0x14f3980, event list +0x14f3770) are now answered empty, so it shows SMM2's own "No
+   active speedruns / No courses found". Super Worlds and Network Play's modes already say SMM2's "This service is
+   not active right now" (the application config's switches); Leaderboards opens (empty until our server ranks).
 9. ⬜ Online multiplayer via Nextendo (branch `nextendo`): the gen.py jump-table change + regen + retest, the iOS
    compile, a live sign-in, Network Play, then merge once verified. The SMM2 client ID is in the owner's notes. Live tests:
    one device per internet connection; the account needs a verified e-mail and a linked Discord
