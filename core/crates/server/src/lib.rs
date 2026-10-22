@@ -38,7 +38,7 @@
 //! | GET | `/api/super_worlds/<id>/map`, `/thumbnail` | the game's encrypted map blob (0x500 bytes); an uploaded world's thumbnail block (none for the source's) |
 //! | POST | `/api/super_worlds?data_ids=&worlds=&planet_type=&version=` (body: the map blob, then optionally the thumbnail block) | upload the signed-in player's world (their own courses here, 1–40; replaces their earlier one) → the summary |
 //! | DELETE | `/api/super_worlds/mine` | remove the player's uploaded world |
-//! | GET, POST | `/api/super_worlds/<id>/progress`, POST `…/progress/reset` | the signed-in player's play record of a world (`status`, `counter_a`, `counter_b`, `score`, `world`, `x`, `y`, `extra`; `cleared`, `flags` as decimal strings) |
+//! | GET, POST | `/api/super_worlds/<id>/progress`, POST `…/progress/reset` | the signed-in player's play record of a world (`status`: 2 progress to continue, 1 none; `clear`: 2 once the world is cleared; `counter_a`, `counter_b`, `score`, `world`, `x`, `y`, `extra`; `cleared`, `flags` as decimal strings) |
 //! | GET | `/api/makers/<maker id>/super_worlds` | the worlds a player has a play record of, the latest first |
 //!
 //! The Endless Challenge routes (`endless` module) need a signed-in account; the server holds

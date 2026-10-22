@@ -382,9 +382,13 @@ pub fn base64_decode(s: &str) -> Option<Vec<u8>> {
 }
 
 /// The progress fields a record keeps (the game's online play record, `super-worlds-v303.md` §2.5),
-/// with their largest values; the 64-bit ones travel as decimal strings.
-const PROGRESS_FIELDS: [(&str, u64); 8] = [
+/// with their largest values; the 64-bit ones travel as decimal strings. `status` is the record's
+/// own: 2 while there is progress to continue (the game then puts the world, Mario's place and the
+/// clears back on the map), 1 when there is none (started over, or the world cleared). `clear` is
+/// the save's kind (1 a course cleared, 2 the world cleared) and keeps its highest value.
+const PROGRESS_FIELDS: [(&str, u64); 9] = [
     ("status", u32::MAX as u64),
+    ("clear", 2),
     ("counter_a", 0xff),
     ("counter_b", 0xff),
     ("score", u32::MAX as u64),
@@ -395,7 +399,7 @@ const PROGRESS_FIELDS: [(&str, u64); 8] = [
 ];
 const PROGRESS_BITS: [&str; 2] = ["cleared", "flags"];
 
-fn progress_record(v: &Value, status: Option<u64>) -> Value {
+fn progress_record(v: &Value) -> Value {
     let mut out = json!({});
     for (k, max) in PROGRESS_FIELDS {
         out[k] = json!(v[k].as_u64().unwrap_or(0).min(max));
@@ -406,9 +410,6 @@ fn progress_record(v: &Value, status: Option<u64>) -> Value {
             n => n.as_u64().unwrap_or(0),
         };
         out[k] = json!(n.to_string());
-    }
-    if let Some(s) = status {
-        out["status"] = json!(s);
     }
     out
 }
@@ -669,19 +670,19 @@ impl Store {
         let g = self.superworlds.lock().unwrap();
         match g.progress.get(maker_id).and_then(|m| m.get(id)) {
             Some(v) => {
-                let mut r = progress_record(v, None);
+                let mut r = progress_record(v);
                 r["held"] = json!(true);
                 r
             }
             None => {
-                let mut r = progress_record(&Value::Null, None);
+                let mut r = progress_record(&Value::Null);
                 r["held"] = json!(false);
                 r
             }
         }
     }
 
-    /// Keep `maker_id`'s play record of a world (`status`: the save's own, else the record's).
+    /// Keep `maker_id`'s play record of a world (`clear` never goes down: a world cleared stays so).
     pub fn set_super_world_progress(
         &self,
         maker_id: &str,
@@ -691,9 +692,18 @@ impl Store {
         if !is_world_id(id) {
             return Err(StoreError::NotFound);
         }
-        let mut r = progress_record(v, None);
+        let mut r = progress_record(v);
         r["updated"] = json!(crate::now());
         let mut g = self.superworlds.lock().unwrap();
+        let before = g
+            .progress
+            .get(maker_id)
+            .and_then(|m| m.get(id))
+            .and_then(|o| o["clear"].as_u64())
+            .unwrap_or(0);
+        if before > r["clear"].as_u64().unwrap_or(0) {
+            r["clear"] = json!(before);
+        }
         g.progress
             .entry(maker_id.to_string())
             .or_default()
@@ -702,8 +712,8 @@ impl Store {
         Ok(r)
     }
 
-    /// A world's play record started over (the game's network progress reset): status 1 (playing),
-    /// the rest zero but the game's `extra` value.
+    /// A world's play record started over (the game's network progress reset): status 1 (nothing to
+    /// continue), the rest zero but the game's `extra` value (and `clear`, which stays).
     pub fn reset_super_world_progress(
         &self,
         maker_id: &str,
@@ -1069,7 +1079,7 @@ mod tests {
             ),
             (Some(false), Some(0), Some("0"))
         );
-        let save = br#"{"status":1,"counter_a":5,"counter_b":2,"score":12345,"world":1,"x":3,"y":2,
+        let save = br#"{"status":2,"clear":2,"counter_a":5,"counter_b":2,"score":12345,"world":1,"x":3,"y":2,
                         "cleared":"18446744073709551615","flags":"258","extra":7}"#;
         assert_eq!(call(&store, "POST", &p, Some(&bob), save).0, 200);
         let got = call(&store, "GET", &p, Some(&bob), b"").1;
@@ -1112,6 +1122,7 @@ mod tests {
             ),
             (Some(1), Some(0), Some(9))
         );
+        assert_eq!(r["clear"], 2, "a world cleared stays cleared");
 
         // kept after a restart; a new upload replaces the old one; deleted
         drop(store);

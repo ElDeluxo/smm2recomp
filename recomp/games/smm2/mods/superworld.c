@@ -21,7 +21,7 @@
 #define NO_SW_DETAIL 0x1b0d00    // the world detail record (0xa40 bytes)
 #define NO_SW_PLAY 0x1b1740      // the play info record: id string object (char* +8, capacity +0x10), fields below
 #define NO_SW_ID 0x1b17a8        // the world id to fetch: string object (char* +8, capacity +0x10)
-#define NO_SW_SAVE_STATUS 0x1b17e8  // u32: the status the progress save sends
+#define NO_SW_SAVE_STATUS 0x1b17e8  // u32: the progress save's kind (1 a course cleared, 2 the world cleared)
 #define NO_SW_UP_IDS 0x1b25c0    // upload: the courses' data ids (u64 ring: entries, +8 cap, +0xc head, +0x10 count)
 #define NO_SW_UP_SLOT 0x1b2718   // upload: the Worldbot slot (map +0, thumbnail +0x500, +0xcd25 one byte)
 #define NO_SW_UP_BUF 0x1b2720    // upload: 0x500-byte buffer for the encrypted map
@@ -288,7 +288,9 @@ SW_WRAPPER(sw_one, 0x14f6100) {
 }
 
 // ---- online progress (162 get, 164 reset, 165 save): the play record at +0x1b1740 (id string object, fields
-// +0x1b1780..). Our server keeps it per player and world.
+// +0x1b1780..). Our server keeps it per player and world. The game resumes a world from it: the 162 answer is copied
+// to the profile (+0x226110, main+0x14bb710) and the world's loader (main+0x148eae0) puts the score, lives, world,
+// Mario's place and the clear bits back on the map when its status is 2; the title then offers Continue.
 static const struct { const char *key; uint32_t off; int size; } PLAY_FIELDS[] = {
     {"counter_a", 0x1b1784, 1}, {"counter_b", 0x1b1785, 1}, {"score", 0x1b1788, 4}, {"world", 0x1b178c, 1},
     {"x", 0x1b178d, 1}, {"y", 0x1b178e, 1}, {"extra", 0x1b17a0, 4},
@@ -323,7 +325,9 @@ SW_WRAPPER(sw_progress_save, 0x14f84d0) {
     char id[64], path[160], body[512];
     netobj_lock(c);
     guest_str(g64(no + NO_SW_PLAY + 8), id, sizeof id);
-    int n = snprintf(body, sizeof body, "{\"status\":%u", g32(no + NO_SW_SAVE_STATUS));
+    // (the record's own status, set by the game's course end: 2 progress to continue, 1 none (the world cleared);
+    // the save's kind beside it: 1 a course cleared, 2 the world cleared [obs main+0x1493950, the callback main+0x1524850])
+    int n = snprintf(body, sizeof body, "{\"status\":%u,\"clear\":%u", g32(no + 0x1b1780), g32(no + NO_SW_SAVE_STATUS));
     for (size_t k = 0; k < sizeof PLAY_FIELDS / sizeof *PLAY_FIELDS; k++)
         n += snprintf(body + n, sizeof body - n, ",\"%s\":%u", PLAY_FIELDS[k].key,
                       PLAY_FIELDS[k].size == 1 ? g8(no + PLAY_FIELDS[k].off) : g32(no + PLAY_FIELDS[k].off));
