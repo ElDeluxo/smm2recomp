@@ -228,7 +228,7 @@ tablet is untested** (no device was available), so expect problems there.
   and back (the Vulkan surface is recreated); the guest window at 0x800000000 is claimed on every boot.
 - **Not tested:** a physical device (install, its GPU driver, BC-less GPUs, memory limits); a course from the Course
   World / Story / Make menus; a Bluetooth controller.
-- [?] The title screen's button bar shows no text in the emulator.
+- 2026-10-23: the title screen's HUD and button bar text show in the emulator (per-draw storage buffer copies, no host import there); the title course runs at 17-18 fps once the shader compile-ahead is done.
 
 Requirements:
 - **Device:** arm64 (arm64-v8a), Android 13 or newer (the NDK's Vulkan 1.3 entry points), a Vulkan 1.3 driver with
@@ -265,6 +265,12 @@ generated for that base (`generated/smm2-0x800000000`, `GUEST_ORIGIN` in the Mak
 adb, following the RomFS links (about 3 GB: some minutes). The same folder gets the settings, caches and the log
 (`smm2recomp.log`, also in logcat under the tag `smm2recomp`). An app gets no environment variables: a `recomp.env`
 there (one `NAME=value` per line, e.g. `SMM2_SEED=4`) sets them (the table under "Running").
+
+If the app can't read what adb pushed there (Android 11+: "Permission denied" in the log; seen in the API 35 emulator
+when adb made the folder), use the app's internal folder instead: build a debuggable APK
+(`RECOMP_ANDROID_DEBUGGABLE=1 make ... apk install`) and push with `make ... PUSH_INTERNAL=1 push-data`, which copies
+the files into `/data/data/org.smcraft.smm2recomp/files` as the app (`adb run-as`). The app uses that folder whenever
+`extracted/exefs/main` is in it (log and `recomp.env` too; read them with `adb exec-out run-as <package> cat ...`).
 
 Input:
 - Touches are the console's touch screen; the on-screen controller (stick, ABXY, L/R/ZL/ZR, +/-, menu, hide) is drawn

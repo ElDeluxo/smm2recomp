@@ -109,7 +109,7 @@ void plat_thread_realtime(uint64_t period_ns) {
 static char g_log_path[1024];
 
 #ifdef __ANDROID__
-// An app's stdout / stderr go nowhere: they go to <external files dir>/smm2recomp.log (written directly, so nothing is
+// An app's stdout / stderr go nowhere: they go to <data folder: plat_android_data_dir>/smm2recomp.log (written directly, so nothing is
 // lost when the process ends on an error), and a thread copies each new line to logcat (tag smm2recomp).
 static void *logcat_pump(void *arg) {
     int fd = (int)(intptr_t)arg;
@@ -133,9 +133,18 @@ static void *logcat_pump(void *arg) {
     return NULL;
 }
 
+const char *plat_android_data_dir(void) {
+    static char dir[1024];
+    if (dir[0]) return dir;
+    const char *ext = SDL_GetAndroidExternalStoragePath(), *in = SDL_GetAndroidInternalStoragePath();
+    char probe[1100];
+    snprintf(probe, sizeof probe, "%s/extracted/exefs/main", in ? in : "");
+    snprintf(dir, sizeof dir, "%s", in && access(probe, R_OK) == 0 ? in : ext ? ext : in ? in : "");
+    return dir[0] ? dir : NULL;
+}
+
 static void log_to_file_without_terminal(void) {
-    const char *dir = SDL_GetAndroidExternalStoragePath();
-    if (!dir) dir = SDL_GetAndroidInternalStoragePath();
+    const char *dir = plat_android_data_dir();  // (with the game files: the log and recomp.env go where they are)
     if (!dir) return;
     mkdir(dir, 0755);
     snprintf(g_log_path, sizeof g_log_path, "%s/" GAME_EXE ".log", dir);
@@ -149,7 +158,7 @@ static void log_to_file_without_terminal(void) {
     int rd = open(g_log_path, O_RDONLY | O_CLOEXEC);
     pthread_t t;
     if (rd >= 0 && pthread_create(&t, NULL, logcat_pump, (void *)(intptr_t)rd) == 0) pthread_detach(t);
-    // An app gets no environment from its launcher: <external files dir>/recomp.env, one NAME=value per line ('#'
+    // An app gets no environment from its launcher: <data folder>/recomp.env, one NAME=value per line ('#'
     // comments), sets the runtime's environment variables (README "Running": SMM2_SEED, LARECOMP_WINDOW_SHOT, ...)
     char env_path[1100], line[1024];
     snprintf(env_path, sizeof env_path, "%s/recomp.env", dir);

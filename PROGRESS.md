@@ -98,6 +98,25 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
   `recomp/private/smm2/evidence/linux/` (private). Mario's model on the 3D World title (2026-10-19): his composite drew nothing (vertex data 2.6 GB into the heap, past lavapipe's 2 GB allocation limit: now copied there) and his depth mask was not written on lavapipe (a lavapipe-only workaround splits such draws into submissions); he is in the scene now, but a few NaN texels at his eyes bloom into a white blur in the final frame (open). Shadow samplers on a colour texture now go through a depth copy (validation clean apart from the 3.2 GB global-memory binding, see `recomp/docs/smm2-bringup.md`). Left: that NaN; Windows and x64 untested
 - 🔄 iOS / iPadOS (2026-10-19): `make -C recomp TARGET=ios-arm64 | iossim-arm64 GAME=smm2 app` (AOT: the game code is compiled on the Mac and linked into the app; no JIT, no game code library); Documents holds the game files and the log; touches are the console touch screen (macOS: the left mouse button), controllers through SDL; BC textures decoded on the CPU where the GPU lacks them. Evidence: the Simulator boots to the title; an iPad Pro 13 M5 (iOS 27.0, installed over Tailscale, App ID with extended virtual addressing + increased memory limit: `recomp/tools/ios_profile.sh`) boots through the intro to the title screen and its menu at a steady 60 fps (MetalFX to 2752x2064, the 3.25 GB heap buffer taken whole), no faults (`recomp/private/smm2/evidence/ios/`, private: screenshots, boot log, the address-space log below). The guest window stays at 0x7000000000 on iOS: with the entitlement iOS 27 gives an app up to 0x8000000000 and keeps 0x2ee000000-0x7000000000 itself (measured; `GUEST_ORIGIN` moves it where that differs). On-screen controller for touch-only devices (stick, ABXY, L/R/ZL/ZR, +/-, menu, hide), other touches stay the touch screen. Left: play a course on the device; the on-screen controller is drawn but not yet tried by hand
 - 🔄 Android (2026-10-19, emulator only: the owner has no Android device): `make -C recomp TARGET=android-arm64 GAME=smm2 apk install push-data` (AOT as on iOS: the game code is compiled on the Mac and shipped in the APK as `libsmm2game.so`; SDL's Java activity, no Gradle; deps from source: `tools/android_deps.sh`); game files in the app's external files folder (adb), log there and in logcat, `recomp.env` for environment variables; Vulkan backend with an RGBA swapchain fallback, compositor rotation, surface recreation after the home screen, CPU BC decoding; on-screen controller and touch screen, Back = overlay menu. Guest window at 0x800000000 (DECISIONS.md "Android"): [obs] the emulator's kernel has a 39-bit address space, and on one of its boots 742 mappings (6.4 GB) sat in the desktop window 0x7000000000-0x7320000000. Fixed on the way for every Vulkan target: the translator's GLSL `fmin` / `fmax` helpers (renamed: they broke MoltenVK's SPIR-V -> MSL), a settings-load crash on a saved `smm2.ini`. Evidence (`recomp/private/smm2/evidence/android/`, private: screenshots `emulator_title_3.png`, `emulator_stick_walk.png`, `emulator_a_jump.png`, `emulator_course_walk2.png`, `emulator_back_menu.png`, `emulator_resumed.png`, boot logs): intro, full title screen, the title course played by touch. Left: a physical device (install path untested); a course from the menus; fps on real hardware
+  - ✅ (2026-10-23) Data folder fallback (sm35recomp a5e5395): the runtime uses the app's internal folder
+    (`/data/data/<pkg>/files`) when the game files are there (`plat_android_data_dir`, linux.c; the log and
+    `recomp.env` follow it), else the external one as before. `make ... RECOMP_ANDROID_DEBUGGABLE=1 apk` makes a
+    debuggable test build and `make ... PUSH_INTERNAL=1 push-data` copies the files in as the app (run-as). [obs] On a
+    fresh API 35 emulator, a file adb pushed into `Android/data/<pkg>/files` (folder made by adb, `chmod a+rwX`) gave
+    the app "Permission denied" even to list the folder. The loader now says why an NSO can't be read.
+  - ✅ (2026-10-23) The Android build was broken since the Nextendo / frame generation merges, fixed: Mbed TLS
+    objects now built with `-fPIC`, and `-lnativewindow` for `ANativeWindow_setFrameRate`.
+  - ✅ (2026-10-23) Emulator run with this session's Vulkan changes (API 35 arm64, gfxstream over MoltenVK on an
+    M4 Pro, `[vk] shader global memory: per-draw copies of the storage buffers (no host memory import)`): title screen
+    with all its HUD text (coin / score counters, timer, "Press L + R", "© 2019 Nintendo", "Ver. 3.0.3"; on 2026-10-19
+    the button bar had no text), and the title course played by scripted input (walk right, jump: 6 coins, score
+    1000, Mario into the Koopa Car). 9-10 fps while compile-ahead runs (first ~3 min), then 17-18 fps on the title
+    course; compile-ahead finished (6889 compiled, 0 failed); no crash in 9 min. Validation layer not run on Android.
+    Evidence (private): `recomp/private/smm2/evidence/android/2026-10-23/` (`a2386_title.png`, `a2700_walk.png`,
+    `a3100.png`, `smm2recomp.log`).
+  - ⬜ Next (paused 2026-10-23, owner saving credits): compute dispatches without host import (below, Vulkan (2)).
+    Emulator setup to recreate: the AVD `smm2` was deleted with its 12 GB data partition; the system image
+    `system-images;android-35;google_apis;arm64-v8a` stays in /Volumes/SSD/android-sdk (3.8 GB).
 - 🔄 Frame generation, 120 fps output (owner request 2026-10-20; DECISIONS.md 2026-10-20): Video tab "Frame
   generation: Off / 120 fps" adds one motion-estimated in-between frame per real one on displays of 100 Hz and more;
   the game itself stays at 60 (scripted-run player traces identical off and on). Spec and plan:
@@ -447,14 +466,19 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
   - ✅ (2) without host memory import (Android emulator, many phones) global memory reads gave 0: draw stages now read
     per-draw copies of their storage buffers (3fce300; only where the import is missing; `LARECOMP_VK_NO_GMEM=1` forces
     it). [obs] Lavapipe without the import: the title's HUD text was gone (coin / score counters, "Press L + R", the
-    version) and is back. Left: compute dispatches without the import still read 0.
+    version) and is back. [obs] 2026-10-23 in the Android emulator (no import there): the HUD text is all there too,
+    title and title course, 17-18 fps. Left: compute dispatches without the import still read 0 (the title runs
+    none: "0 dispatches" in its stats). Planned fix, not written yet: in `gfast_prepare`, when there is no import,
+    fill gfast_buf from guest memory through the upload ring (bounds: `kernel_heap_size()`), and in `gfast_finish`
+    copy a storing dispatch's ranges into `vk_readback` and memcpy them to guest memory after the flush that
+    follows it (forced on that path even with RECOMP_NO_COMPUTE_FLUSH). Test where SMM2 dispatches (in a course).
   - Metal unchanged: a title run's 194 translated MSL sources are byte-identical before and after.
   - ⬜ Left on lavapipe: while Mario faces the camera his eyes still go NaN after the eye draw (0x729accf900) and bloom
     white, title and in-course. Not that shader's maths (a constant colour with alpha 1 still leaves the NaN); Metal
     with IEEE maths is clean. Declaring SignedZeroInfNanPreserve made it come earlier on lavapipe, so it isn't kept.
     Needs a real GPU's word (testers) before more digging (`recomp/docs/smm2-bringup.md`, "Shader global memory").
-  - ⬜ (3) Android 11+ can't read files adb pushed into Android/data/<pkg>: SM35 falls back to the internal folder
-    (a5e5395). Lower priority.
+  - ✅ (3) Android 11+ can't read files adb pushed into Android/data/<pkg>: ported SM35's internal folder fallback
+    (a5e5395; the Android entry above).
   - The test setup: `recomp/tools/linux_vk_docker.sh` (Debian 13 arm64 container, lavapipe, Xvfb; the zig cross-build;
     a run folder linking the dev data read-only). Found with it: compile-ahead's `cache/spirv` is ~470 MB per GLSL
     variant and was never pruned, so each version whose GLSL changes added another set in a player's data folder.

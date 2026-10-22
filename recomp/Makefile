@@ -179,7 +179,7 @@ OSFLAGS  := -Wno-format -Wno-nullability-completeness -fPIC
 RT_SRC   := $(filter-out runtime/gamebuild.c,$(RT_SRC))
 GENFLAGS += -fPIC
 LDFLAGS  := -shared -Wl,-soname,libmain.so -Wl,--no-undefined -Wl,-z,max-page-size=16384 -L$(SDL)/lib -lSDL3 -lshaderc_combined -lvulkan \
-            -landroid -llog -lm -ldl -static-libstdc++
+            -landroid -lnativewindow -llog -lm -ldl -static-libstdc++  # (nativewindow: ANativeWindow_setFrameRate)
 BACKEND_SRC := $(wildcard runtime/nvn/vulkan/*.c) $(wildcard runtime/nvn/vulkan/*.cpp)
 BACKEND_OBJ := $(patsubst runtime/%.cpp,$(B)/rt/%.o,$(patsubst runtime/%.c,$(B)/rt/%.o,$(BACKEND_SRC)))
 IMGUI_OBJ += $(B)/imgui/imgui_impl_vulkan.o
@@ -288,7 +288,7 @@ $(B)/rt/%.o: runtime/%.c $(RT_HDRS)
 
 $(B)/mbedtls/%.o: $(MBEDTLS)/library/%.c runtime/net/mbedtls_user_config.h
 	@mkdir -p $(dir $@)
-	@$(CC) -O2 -g $(MBEDTLS_FLAGS) $(filter -D%,$(OSFLAGS)) -c $< -o $@
+	@$(CC) -O2 -g $(MBEDTLS_FLAGS) $(filter -D% -fPIC,$(OSFLAGS)) -c $< -o $@  # (-fPIC: Android's libmain.so)
 $(B)/rt/services/ssl.o: RTFLAGS += $(MBEDTLS_FLAGS)
 $(B)/rt/services/ssl.o: runtime/net/mbedtls_user_config.h
 $(B)/rt/net/token.o: RTFLAGS += $(MBEDTLS_FLAGS)
@@ -392,14 +392,15 @@ app: $(EXE)
 
 # Android: the APK around libmain.so + the game code library (SDL's Java activity, manifest, debug-signed:
 # tools/make_android_apk.sh); `install` puts it on the device adb sees (ADB_SERIAL=<serial> to pick one), `push-data`
-# copies the game files there (tools/android_push_data.sh)
+# copies the game files there (tools/android_push_data.sh; PUSH_INTERNAL=1: into the app's internal folder, for a
+# debuggable build made with RECOMP_ANDROID_DEBUGGABLE=1, where Android 11+ won't let the app read adb's files)
 apk: all
 	$(if $(filter android,$(PLATFORM)),,$(error apk: pass TARGET=android-arm64))
 	tools/make_android_apk.sh $(B) $(APK) $(SDL) $(ANDROID_HOME) $(ANDROID_API)
 install: apk
 	tools/make_android_apk.sh --install $(APK)
 push-data:
-	tools/android_push_data.sh $(DATA)
+	tools/android_push_data.sh $(if $(filter 1,$(PUSH_INTERNAL)),--internal) $(DATA)
 
 # A player package of a cross build (runtime with its setup screen, Python, recompiler, zig, hactool; nothing from the
 # game): dist/SMM2Recomp-windows-x86_64.zip, dist/SMM2Recomp-linux-<arch>.tar.gz

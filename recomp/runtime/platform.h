@@ -58,6 +58,14 @@ bool plat_remove_tree(const char *dir);      // rm -rf
 #define PLAT_VENV_PYTHON "venv/bin/python"
 #endif
 
+#ifdef __ANDROID__
+// The data folder: the app's external files folder (/sdcard/Android/data/<package>/files: adb push, a file manager),
+// or its internal one (/data/data/<package>/files) when the game files are there (extracted/exefs/main): on Android
+// 11+ the app may be unable to read what `adb push` put in the external folder (Permission denied), and
+// tools/android_push_data.sh --internal copies them into the internal one as the app (sm35recomp a5e5395).
+const char *plat_android_data_dir(void);
+#endif
+
 // ---- diagnostics
 // Name of the host function containing pc (guest functions are f_<addr>), NULL if unknown.
 const char *plat_symbol(uint64_t pc, uint64_t *offset);

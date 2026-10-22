@@ -1175,6 +1175,9 @@ The recomp builds for Android arm64 (`make -C recomp TARGET=android-arm64 GAME=s
 - **Game files in the app's external files folder** (`/sdcard/Android/data/org.smcraft.smm2recomp/files`), pushed with
   adb (`tools/android_push_data.sh`, links followed, then opened to the app: adb's files belong to the shell user).
   Not bundled in the APK: 3 GB, and the APK should hold as little of the game as possible.
+  2026-10-23: the internal folder is used instead when the game files are in it (sm35recomp a5e5395): Android 11+
+  may refuse the app what adb put in the external one. Put there through `run-as`, so only for debuggable builds;
+  chosen over a SAF / file-picker import (needs Java code in the APK and copies 3 GB on the device).
 - **Tested in the emulator only** (the owner has no Android device): the arm64 API 35 image with `-gpu host`, whose
   Vulkan is gfxstream over MoltenVK. Two things that only showed there were fixed for all Vulkan targets rather than
   worked around: GLSL helpers named like Metal built-ins (`fmin` / `fmax`, ambiguous once MoltenVK turns SPIR-V into
