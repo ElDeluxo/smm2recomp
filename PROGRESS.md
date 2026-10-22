@@ -433,6 +433,13 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     a second player actor. Next: find where the play scene creates players (Ghidra project copy:
     /Volumes/SSD/smm-work/ghidra/agents/edit-smm2, script research/decomp/smw-goal/scripts/Multi.java; JAVA_HOME is
     Homebrew's openjdk@21). Not in v0.4.0.
+  - 2026-10-22, the spawn found (function profile `LARECOMP_FNPROF` of a Play Together course start against a 100
+    Mario one, then `LARECOMP_FNPROF_BT` callers): players are created by the play scene's set-up (main+0x16c2c70,
+    called from the scene manager main+0x178ed80) in a loop at main+0x16cd600 over a list (`[x25 + 0x28]` entries
+    at `[x25 + 0x30]`, each made through main+0xe443c0 -> ... -> the player constructor main+0x1587d10): one entry
+    in 100 Mario, two in Play Together. Right after, main+0x16cd670 compares a count (`[main+0x2c01cf0] + 0x98`)
+    with a 4-bit "players present" mask (`+0x54`): likely the multiplayer session. Next: where that list is filled
+    (and whether the session's mask must hold the second player), then fill it for co-op.
   - Owner, 2026-10-22: the 100 Mario ending shows all the players in the rescue scene if that's reasonable, else
     whoever cleared the last course; the lives card shows each player ("give that a shot").
 - ✅ **User report (2026-10-22, platform not stated, maybe Windows): Course World says "make an ID" and goes back;
