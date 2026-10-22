@@ -180,7 +180,9 @@ static bool post_ok(const char *path, const char *body) {
 // ---- users (makers): the user record (0x1f0 bytes) as the game's converter (main+0x14d0a60) fills it from a NEX
 // UserInfo: maker code +0x08, name +0x30 (both UTF-16, the code without dashes), player id +0x58, Mii +0x9c, play
 // stats +0xfc.. (plays, clears, attempts, deaths), Endless best clears +0x114 + 4 * difficulty, maker stats +0x124
-// (likes received) / +0x128 (maker points), versus / co-op +0x130.., "valid" +0x1ec.
+// (likes received) / +0x128 (maker points), versus / co-op +0x130.., the courses uploaded +0x190 and the most the
+// maker may upload +0x194 (the NEX record's map +0x1a8, keys 0 / 1; My Info's "Courses uploaded" header shows the
+// page's record's, profile +0x2264c0 + 0x190 / +0x194, main+0x1aa46a0), "valid" +0x1ec.
 void user_entry_reset(uint64_t e);                                     // online.c
 void mii_default_charinfo(uint8_t out[0x58], const char *nickname);  // runtime/services/mii.c
 uint64_t mod_maker_pid(const char *maker_id, const char *name);
@@ -191,6 +193,19 @@ uint64_t mod_player_pid(void);
 // The maker's record from GET /api/makers/<id> (name, courses -> likes and maker points); NULL: unknown maker.
 static Json *maker_profile(const char *maker_id) {
     return maker_get(maker_id);
+}
+
+// The maker's courses on our server and the most they may upload (the server's `upload_limit`, at least the count)
+static void upload_counts(Json *prof, uint32_t *count, uint32_t *limit) {
+    *count = (uint32_t)json_len(json_get(prof, "courses"));
+    *limit = (uint32_t)json_num(json_get(prof, "upload_limit"), 100);
+    if (*limit < *count) *limit = *count;
+}
+
+void mod_upload_counts(const char *maker_id, uint32_t *count, uint32_t *limit) {  // (online.c: the player's own)
+    Json *prof = maker_profile(maker_id);
+    upload_counts(prof, count, limit);
+    json_free(prof);
 }
 
 static void fill_user(uint64_t e, uint64_t pid, const char *maker_id, const char *name_hint, Json *prof) {
@@ -212,6 +227,10 @@ static void fill_user(uint64_t e, uint64_t pid, const char *maker_id, const char
     mii_default_charinfo((uint8_t *)(uintptr_t)(e + 0x9c), name);
     s32(e + 0x124, likes);
     s32(e + 0x128, points);
+    uint32_t uploaded, limit;
+    upload_counts(prof, &uploaded, &limit);
+    s32(e + 0x190, uploaded);
+    s32(e + 0x194, limit);
     const char *world = json_str(json_get(prof, "super_world_id"), "");  // the maker's Super World (UTF-8, +0x1b0)
     if (*world && g64(e + 0x1b0) && g32(e + 0x1b8) > strlen(world))
         memcpy((void *)(uintptr_t)g64(e + 0x1b0), world, strlen(world) + 1);
@@ -280,7 +299,10 @@ static void get_user_page(Cpu *c) {
     if (*world) superworld_fill_detail(c, no, world);
 }
 
-static void get_user_counts(Cpu *c) {  // main+0x14d74a0 (two counters of one user, map +0x190 keys 0 / 1): 0
+// main+0x14d74a0: GetUsers (option 0x40) for the user at +0x73a30, only the NEX record's map +0x190 (keys 0 / 1 to
+// +0x73a3c / +0x73a40; main+0x1513b60 copies them to the user records' +0x188 / +0x18c, meaning unknown: not the
+// "Courses uploaded" header, which reads +0x190 / +0x194 [obs]): 0
+static void get_user_counts(Cpu *c) {
     if (!mod_hundred()) { guest_call_orig(c, c->pc); return; }
     uint64_t no = c->x[0];
     netobj_lock(c);

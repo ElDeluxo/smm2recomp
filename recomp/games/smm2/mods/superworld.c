@@ -360,11 +360,86 @@ SW_WRAPPER(sw_progress_reset, 0x14f8260) {
     finish(c, no, true, 0);
 }
 
-// ---- world thumbnails (87 + HTTP, main+0x14f8850): TGRCode's are on Nintendo's CDN only, never asked for. The
-// request fails: the list shows the game's placeholder [obs: the callback's failure path, main+0x1525090].
+// ---- world thumbnails (87 + HTTP, main+0x14f8850): the requests' ring at +0x1b1c38 (entries 0x1e0 bytes: the world's
+// thumbnail record, the key string object at +0 (char* +8), then the address +0x40, the size +0x15c, +0x160), each
+// into the 0xc804-byte buffer *(+0x1b25b8)[i] (+0x1b25b0 their count). The callback (main+0x1525090) copies each
+// buffer into the profile's world thumbnail cache (+0x226180, 50 slots of 0xca30 bytes: block, +0xc808 the key
+// string, +0xca2a failed, +0xca2b loaded) where the key matches and the slot isn't loaded yet; an entry with an empty
+// key is skipped. A failed request marks every slot not loaded as failed, which shows the game's blank placeholder.
+// The block is the Worldbot slot's thumbnail as uploaded (+0x500): the JPEG, its size at +0xc800 [obs].
+// Our server keeps the uploaded worlds' blocks (`/api/super_worlds/<id>/thumbnail`); TGRCode's thumbnails are on
+// Nintendo's CDN only, never asked for: those keep the placeholder (their entries' keys are emptied for the callback
+// and their slots marked failed here, as the failure path would).
+#define NO_SW_THUMB_REQ 0x1b1c38  // ring: entries, +8 capacity, +0xc head, +0x10 count
+#define SW_THUMB_REQ 0x1e0
+#define NO_SW_THUMB_NBUF 0x1b25b0
+#define NO_SW_THUMB_BUFS 0x1b25b8
+#define SW_THUMB_CACHE 0x226178     // profile: u32 count, +8 slots
+#define SW_THUMB_SLOT 0xca30
+#define MAX_THUMBS 16
+#define SW_PROFILE MAIN_ADDR(0x2c115e0)
+
+static bool thumb_block_ok(const uint8_t *b, size_t len) {
+    if (len != THUMB_SIZE || b[0] != 0xff || b[1] != 0xd8) return false;
+    uint32_t n = (uint32_t)b[0xc800] | (uint32_t)b[0xc801] << 8 | (uint32_t)b[0xc802] << 16 | (uint32_t)b[0xc803] << 24;
+    return n > 2 && n <= 0xc800;
+}
+
+// The cache slot of `key` not loaded yet: failed (as the request's failure path marks it)
+static void thumb_slot_failed(const char *key) {
+    uint64_t prof = g64(SW_PROFILE), slots = prof ? g64(prof + SW_THUMB_CACHE + 8) : 0;
+    uint32_t n = prof ? g32(prof + SW_THUMB_CACHE) : 0;
+    char k[64];
+    for (uint32_t i = 0; i < n && i < 50 && slots; i++) {
+        uint64_t s = slots + (uint64_t)SW_THUMB_SLOT * i;
+        guest_str(g64(s + 0xc810), k, sizeof k);
+        if (!strcmp(k, key) && !g8(s + 0xca2b)) s8(s + 0xca2a, 1);
+    }
+}
+
 SW_WRAPPER(sw_thumbnails, 0x14f8850) {
-    MLOG("Super World thumbnails: none (placeholder)\n");
-    finish(c, no, false, 2);
+    char keys[MAX_THUMBS][64];
+    uint64_t outs[MAX_THUMBS], keybufs[MAX_THUMBS];
+    uint32_t n = 0;
+    netobj_lock(c);
+    uint64_t ring = no + NO_SW_THUMB_REQ, entries = g64(ring), bufs = g64(no + NO_SW_THUMB_BUFS);
+    uint32_t cap = g32(ring + 8), head = g32(ring + 0xc), count = g32(ring + 0x10), nbuf = g32(no + NO_SW_THUMB_NBUF);
+    for (uint32_t i = 0; i < count && cap && entries && n < MAX_THUMBS; i++) {
+        uint64_t e = entries + (uint64_t)SW_THUMB_REQ * ((head + i) % cap);
+        keybufs[n] = g64(e + 8);
+        guest_str(keybufs[n], keys[n], sizeof keys[n]);
+        outs[n++] = bufs && nbuf ? g64(bufs + 8ull * (i < nbuf ? i : 0)) : 0;
+    }
+    netobj_unlock(c);
+    bool got[MAX_THUMBS] = {0};
+    uint32_t ngot = 0;
+    for (uint32_t i = 0; i < n; i++) {  // (outside the lock: HTTP; the buffers are this request's)
+        char path[160];
+        if (!outs[i] || !safe_id(keys[i])) {
+            MLOG("Super World thumbnail '%s': not asked for\n", keys[i]);
+            continue;
+        }
+        snprintf(path, sizeof path, "/api/super_worlds/%s/thumbnail", keys[i]);
+        size_t len = 0;
+        uint8_t *b = srv_get_bytes(path, &len);
+        if (b && thumb_block_ok(b, len)) {
+            memcpy((void *)(uintptr_t)outs[i], b, THUMB_SIZE);
+            got[i] = true, ngot++;
+        }
+        free(b);
+        MLOG("Super World %s thumbnail: %s\n", keys[i], got[i] ? "from the server" : "none");
+    }
+    if (ngot) {
+        netobj_lock(c);
+        for (uint32_t i = 0; i < n; i++)
+            if (!got[i] && keybufs[i]) {
+                thumb_slot_failed(keys[i]);
+                s8(keybufs[i], 0);  // (the callback skips it)
+            }
+        netobj_unlock(c);
+    }
+    MLOG("Super World thumbnails: %u of %u from the server%s\n", ngot, n, ngot < n ? " (the rest: placeholders)" : "");
+    finish(c, no, ngot > 0, 2);
 }
 
 // ---- RegisterWorldMap (158, main+0x14f5940): the player's world to our server. The map is encrypted as the game

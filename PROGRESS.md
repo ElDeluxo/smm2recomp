@@ -587,8 +587,15 @@ Setup failures first, since they block new players:
      player's courses the server took down, main+0x14f0090) first, which no one answered; now none, ok (world.c)
    - ✅ the upload sends the slot's byte +0xcd25 as `planet_type` (the game sends it between the world count and
      the map format [inf: the planet type]; 0 in the tests)
-   - ⬜ thumbnails stay the game's placeholder planets (TGRCode's are on Nintendo's CDN; our own uploads' blocks are
-     kept by the server but no in-game upload has made one yet)
+   - ✅ fixed (2026-10-23, checked in game): **thumbnails of our own uploaded worlds** show (My Info's world panel,
+     Played Worlds; the world request main+0x14f8850 now answers each world the server holds a block for, the block as
+     the game uploaded it: the JPEG, its size at +0xc800). TGRCode's worlds keep the game's blank placeholder (their
+     thumbnails are on Nintendo's CDN, never asked for): in a mixed request their entries are skipped and their cache
+     slots marked failed, as the game's failure path does. Course World's Super Worlds screen never shows one: its
+     planets are the planet type, not a thumbnail [obs: no request from it]
+   - ✅ fixed (2026-10-23, checked in game): My Info's **"Courses uploaded"** read 0/0: the header shows the page's
+     user record +0x190 / +0x194 (the NEX record's map +0x1a8, keys 0 / 1; main+0x1aa46a0), which no answer filled;
+     now the maker's courses on our server and the server's `upload_limit` (100, shown only, not enforced) [obs: 2 /100]
 8. ✅ Disable the buttons that don't work yet (2026-10-22, checked in game): every Course World entry works or answers
    the way SMM2 does when a service is off. Ninji Speedruns showed "A communication error occurred": its two
    requests (event count main+0x14f3980, event list +0x14f3770) are now answered empty, so it shows SMM2's own "No

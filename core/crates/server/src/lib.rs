@@ -16,7 +16,7 @@
 //! | GET | `/api/pool?min=&max=&count=` | random courses by difficulty value (fail rate 0–100) |
 //! | POST | `/api/accounts` (body `{"name"}`) | new account → `{account, token}` (token shown once) |
 //! | GET | `/api/me` | the caller's account |
-//! | GET | `/api/makers/<maker id>` | a maker's profile and courses |
+//! | GET | `/api/makers/<maker id>` | a maker's profile, courses, `super_world_id` and `upload_limit` |
 //! | GET | `/api/makers/<maker id>/played`, `/liked` | the courses a player played (newest first: Course World and Endless) or liked |
 //! | POST | `/api/courses/<code>/like`, `/boo` | one vote per account (replaces its earlier vote) |
 //! | POST | `/api/courses/<code>/clear` (body `{"time_ms"}`, optional) | clear; first clear / record |
@@ -77,6 +77,10 @@ pub const MAX_COMMENT: usize = 75;
 
 /// Largest upload accepted (a course is 0x5BFC0 bytes raw).
 pub const MAX_UPLOAD: usize = 0x60000;
+
+/// The most courses a player may upload as the game shows it (My Info's "Courses uploaded", a maker's
+/// `upload_limit`): SMM2's own last limit [inf]. Shown only; uploads are not refused at it.
+pub const UPLOAD_LIMIT: usize = 100;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Meta {
@@ -677,7 +681,9 @@ impl Store {
         let (maker_id, public) = (a.maker_id.clone(), a.public_json());
         drop(g);
         let world = self.own_super_world(&maker_id).unwrap_or_default();
-        Some(json!({ "maker": public, "courses": courses, "super_world_id": world }))
+        Some(
+            json!({ "maker": public, "courses": courses, "super_world_id": world, "upload_limit": UPLOAD_LIMIT }),
+        )
     }
 
     /// Like (+1) or boo (−1) as `account`; a second vote replaces the first.
@@ -2221,6 +2227,7 @@ mod tests {
         // profile
         let (_, p) = call("GET", &format!("/api/makers/{maker_id}"), None, b"");
         assert_eq!(p["courses"][0]["code"].as_str(), Some(code.as_str()));
+        assert_eq!(p["upload_limit"], UPLOAD_LIMIT);
         // leaderboards (the course was booed, so no maker points)
         for kind in ["clears", "first_clears", "records"] {
             let (st, r) = call("GET", &format!("/api/rankings/{kind}"), None, b"");

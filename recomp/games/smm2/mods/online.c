@@ -259,13 +259,18 @@ static void get_my_user(Cpu *c) {
     Json *me = srv_call("GET", "/api/me", NULL, NULL);
     snprintf(world, sizeof world, "%s", json_str(json_get(me, "super_world_id"), ""));
     json_free(me);
+    // the courses the player uploaded and the most they may (My Info's "Courses uploaded"; world.c)
+    extern const char *mod_own_maker_id(void);
+    extern void mod_upload_counts(const char *maker_id, uint32_t *count, uint32_t *limit);
+    uint32_t uploaded, limit;
+    (void)mod_player_pid();  // (the own maker ID, from /api/me once)
+    mod_upload_counts(mod_own_maker_id(), &uploaded, &limit);
     netobj_lock(c);
     s64(no + USER_RING + 0xc, 0);  // head 0, count 0
     if (g32(no + USER_RING + 8) > 0) {
         uint64_t e = g64(no + USER_RING);
         user_entry_reset(e);
-        uint64_t pid = mod_player_pid();  // (asks /api/me once: the maker ID)
-        extern const char *mod_own_maker_id(void);
+        uint64_t pid = mod_player_pid();
         const char *mid = mod_own_maker_id();
         char code[12] = "";
         if (strlen(mid) == 11) snprintf(code, sizeof code, "%.3s%.3s%.3s", mid, mid + 4, mid + 8);
@@ -276,6 +281,8 @@ static void get_my_user(Cpu *c) {
         // for a new avatar, which needs the console's Mii editor.
         mii_default_charinfo((uint8_t *)(uintptr_t)(e + 0x9c), name);
         for (int d = 0; d < 4; d++) s32(e + 0x114 + 4 * d, best[d]);
+        s32(e + 0x190, uploaded);  // (world.c fill_user)
+        s32(e + 0x194, limit);
         s8(e + 0x1ec, 1);  // a registered Course World user (Course World's top screen checks it, with the id)
         // the player's uploaded Super World (+0x1b0, UTF-8; the upload scene reads it back after an upload)
         if (*world && g64(e + 0x1b0) && g32(e + 0x1b8) > strlen(world))
@@ -307,7 +314,8 @@ static void get_my_user(Cpu *c) {
             LOG("[mod] Maker avatar Mii set to the default Mii\n");
         }
     }
-    MLOG("GetUsers (own): %s, best %u/%u/%u/%u\n", name, best[0], best[1], best[2], best[3]);
+    MLOG("GetUsers (own): %s, best %u/%u/%u/%u, courses uploaded %u of %u\n", name, best[0], best[1], best[2], best[3],
+         uploaded, limit);
     s32(no + 0x60, 0);
     c->x[0] = wrapper_ok();
 }

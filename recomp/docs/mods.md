@@ -83,7 +83,7 @@ World screen runs the game's own code, which finds no connection and shows "A co
 | DominateEndlessModeCourse (clear) | `POST /api/endless/<d>/result {"result":"clear", pending, coins, score}` |
 | PassEndlessModeCourse (skip) | `result: skip` |
 | Suspend / FinishEndlessMode | `POST /api/endless/<d>/suspend`, `/finish` |
-| GetUsers (own) | `GET /api/me` (name, maker ID), best per difficulty (completed 100 Mario runs under `hundred`) |
+| GetUsers (own) | `GET /api/me` (name, maker ID), best per difficulty (completed 100 Mario runs under `hundred`), the courses uploaded and `upload_limit` of `/api/makers/<id>` (My Info's "Courses uploaded", record +0x190 / +0x194) |
 | GetCourses (by id) | `GET /api/courses/<code>` |
 | course list info, an id check | answered empty / passes |
 | ReportFromBugDetection (the game found a downloaded course invalid: "The course data is corrupt.") | in a run: `result: broken` (the course leaves the queue); the bridge answers the window, the flow hears `HUNDRED_SKIP`, the next course comes |
@@ -102,7 +102,7 @@ calls (read from the client vtable slot it uses):
 |---|---|---|
 | course lists: PickUp (84, "Hot"), PointRanking (71, "Popular", by difficulty), Latest (73, "New"), Advanced (72, detailed search: difficulty, style, sort), PostedBy (74, a maker's courses), BestTime / FirstClear (81 / 80) | 0x14d8550 (search type +0x746e8) | `GET /api/courses?sort=popular\|new&style=&offset=&limit=100`, filtered into the game's difficulty bands; a maker's courses from `GET /api/makers/<id>`; a player's Played Courses / Liked Courses (PlayedBy 76, PositiveRatedBy 75) from `GET /api/makers/<id>/played` / `liked`; followed makers and versus: empty |
 | GetUserOrCourse (131): the ID search | 0x14dc0d0 | `GET /api/courses/<code>`, else `GET /api/makers/<code>` |
-| GetUsers (48): the makers of listed courses, a maker's page | 0x14d02d0, 0x14d7780, 0x14d2f00 | `GET /api/makers/<id>`: name, maker code, likes received and maker points from their courses; the default Mii |
+| GetUsers (48): the makers of listed courses, a maker's page | 0x14d02d0, 0x14d7780, 0x14d2f00 | `GET /api/makers/<id>`: name, maker code, likes received and maker points from their courses, the courses uploaded and the server's `upload_limit` (record +0x190 / +0x194: a maker page's "Courses uploaded" header); the default Mii |
 | SearchUsers* (50, 51, 57, 58): leaderboards | 0x14d1820 (kind +0x73a14) | `GET /api/rankings/maker_points` (makers, also the period's board), `endless_<d>` (Endless), `clears` |
 | CanPostRatingAndComment (61) | 0x14ebc60 | allowed |
 | PostRatingInfo (104): like / boo | 0x14e6b90 | `POST /api/courses/<code>/like` or `/boo` |
@@ -158,7 +158,7 @@ TGRCode (spec: `research/specs/super-worlds-v303.md`). Application config value 
 | GetWorldMap (159): the selected world (id at +0x1b17a8) into the detail record +0x1b0d00 | 0x14f6600 | `GET /api/super_worlds/<id>?wait_ms=20000` and `/map` |
 | GetWorldMap (159) into the list ring | 0x14f6100 | `GET /api/super_worlds/<id>` |
 | play info get / reset / save (162 / 164 / 165), id at +0x1b1748 | 0x14f7d10, 0x14f8260, 0x14f84d0 | `GET` / `POST /api/super_worlds/<id>/progress` (the record's `status`: 2 progress to continue, 1 none; `clear`: the save's kind, 1 a course, 2 the world), `POST …/progress/reset` (always ok: the game keeps its own copy) |
-| world thumbnails (87 + HTTP) | 0x14f8850 | failed (status 2): the game's placeholder planets |
+| world thumbnails (87 + HTTP): the requests' ring +0x1b1c38 (0x1e0-byte records, the world id first), each into the 0xc804-byte buffer *(+0x1b25b8)[i] | 0x14f8850 | `GET /api/super_worlds/<id>/thumbnail` (our uploads' blocks); the rest (TGRCode's): the game's blank placeholder (below) |
 | RegisterWorldMap (158): upload | 0x14f5940 | the map encrypted with the game's own function and the world key table, then `POST /api/super_worlds?data_ids=&worlds=&planet_type=&version=` (map + thumbnail block; `planet_type` the slot's byte +0xcd25 [inf]); the server takes only the player's own courses on it |
 | DeleteWorldMap (163) | 0x14f7c30 | `DELETE /api/super_worlds/mine` |
 | the player's courses taken down (128), asked by My Info's Uploaded Courses | 0x14f0090 (world.c) | none, ok |
@@ -208,6 +208,18 @@ record's player id is the account id it holds itself (GetNetworkServiceAccountId
 "own" flag), so the mod gives the player's own maker that id (endless.c `pid_of_maker_id`); then DeleteWorldMap. The
 Worldbot slot's trash deletes the local slot only.
 
+**Thumbnails** (a world's picture: My Info's and a maker page's world panel, My Info's Played Worlds; Course World's
+Super Worlds screen shows the planet type, never a thumbnail [obs: it asks for none]). The game keeps them in the
+profile's world thumbnail cache (+0x226180, 50 slots of 0xca30 bytes: the block, +0xc808 the world id, +0xca28 /
++0xca29 wanted, +0xca2a failed, +0xca2b loaded; filled with the list's ids by main+0x152dfb0) and asks for up to five
+wanted slots at a time (main+0x1527ed0, a second recent-thumbnail cache at profile +0x5b4930 first). The block is the
+Worldbot slot's thumbnail as uploaded (+0x500): the JPEG, its size at +0xc800, no signature [obs]. The callback
+(main+0x1525090) copies each buffer into the slot of its id; a failed request marks every slot not loaded as failed,
+which shows a blank placeholder. The mod asks our server for each id and answers with the blocks it has; when only
+some came (a TGRCode world beside our own: TGRCode's thumbnails are on Nintendo's CDN, never fetched), the others'
+ids are emptied, which the callback skips, and their slots marked failed as the failure path would. [obs 2026-10-23:
+the own world's picture in My Info and Played Worlds, the other world beside it blank.]
+
 **The map objects' heap check** (fixed in the runtime): the World Maker's / Worldbot's map object (destructor
 main+0x1465f40) owns an nn::ngc::ProfanityFilter that the game allocates with its own operator new; the SDK's
 destructor deletes it with operator delete. On the console both modules' references to operator new / delete bind
@@ -223,7 +235,7 @@ owner's page with their world), a player's own uploaded world in My Info and the
 (`2026-10-23-upload-delete/`) two courses made, clear-checked and uploaded, a world built in World Maker with them,
 uploaded from the Worldbot, listed in Course World and played there and in the Worldbot, overwritten by a second
 upload, deleted from My Info; World Maker's Save As twice and ten Worldbot visits after the loader fix without a stop.
-**Open:** thumbnails of our own uploads (the server keeps them; the request still fails).
+2026-10-23 (`sw3`): the own upload's thumbnail in My Info and Played Worlds, a world without one blank beside it.
 
 ### Edit any course (`games/smm2/mods/edit.c`)
 
