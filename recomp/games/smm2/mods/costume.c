@@ -2,7 +2,8 @@
 //
 // The player wearing a costume stays form 0 (small Mario) for the game's logic: size class, physics, hit boxes and the
 // block and power-up rules are untouched, which is SMM1's costume behaviour. What changes:
-//   - Look: the model builder (0x710155fcd0, once per player per course) loads, for the SMB1 style, the course's
+//   - Look (overrides shared with lanky.c: player_model.c): the model builder (0x710155fcd0, once per player per
+//     course) loads, for the SMB1 style, the course's
 //     costume into the spare form slot 12 (Balloon: unused in SMB1, size class 1 like small Mario) by pointing that
 //     slot's model name at "Player_Chara_<res>" for the call; the visual slot setter (0x710155fcc0) shows slot 12 where
 //     the game asks for slot 0 while the costume is worn. The models are generated from the player's dumps
@@ -35,8 +36,6 @@ bool smm1_data_open(void);
 void smm1_se_bank(const char *bank);
 bool smm1_se(const char *name);
 
-#define BUILDER MAIN_ADDR(0x155fcd0)      // model holder build (holder, style, character, heap)
-#define SETTER MAIN_ADDR(0x155fcc0)       // visual slot setter (holder, int *slot): holder +0x478
 #define NAME_TABLE MAIN_ADDR(0x2c17638)   // model base names: SafeString {vtable, char *} [style * 16 + form]
 #define STYLE_PTR MAIN_ADDR(0x2c57d58)    // *(*(this + 0x30) + 0x1c): the course's style (0 SMB1)
 #define GOAL_FANFARE MAIN_ADDR(0x17a5020) // course music state changes; state 6 = the goal fanfare
@@ -213,35 +212,29 @@ static void wear(const char *res) {
 }
 const char *costume_worn(void) { return g_wear; }
 
-static bool smb1_course(void) {
+bool smb1_course(void) {
     uint64_t g = g64(STYLE_PTR);
     return g && g64(g + 0x30) && g32(g64(g + 0x30) + 0x1c) == 0;
 }
 
 // ---------------------------------------------------------------- the hooks
-static void builder(Cpu *c) {
-    uint32_t style = (uint32_t)c->x[1];
-    if (!costumes_on() || style != 0) {
-        guest_call_orig(c, BUILDER);
-        return;
-    }
+// the model builder (player_model.c, shared with lanky.c): for the SMB1 style, slot 12's file is the course's costume
+int costume_model_swaps(uint64_t holder, uint32_t style, uint32_t character, PmSwap *out) {
+    (void)holder, (void)character;
+    if (!costumes_on() || style != 0) return 0;
     pick_course();
     wear(g_forced[0] ? g_forced : NULL);  // (a new course starts as small Mario)
-    if (!g_course[0]) { guest_call_orig(c, BUILDER); return; }
+    if (!g_course[0]) return 0;
     snprintf(g_model_name, sizeof g_model_name, "Player_Chara_%s", g_course);
-    uint64_t slot = NAME_TABLE + (uint64_t)(style * 16 + COSTUME_SLOT) * 16;
-    uint64_t was = g64(slot + 8);
-    s64(slot + 8, (uint64_t)(uintptr_t)g_model_name);
-    guest_call_orig(c, BUILDER);
-    s64(slot + 8, was);
+    out[0] = (PmSwap){NAME_TABLE + (uint64_t)(style * 16 + COSTUME_SLOT) * 16 + 8, (uint64_t)(uintptr_t)g_model_name, 0};
     LOG("[costume] course costume %s (model slot %d)\n", g_course, COSTUME_SLOT);
+    return 1;
 }
 
-static void setter(Cpu *c) {
-    uint64_t holder = c->x[0], ps = c->x[1];
-    int32_t slot = (int32_t)g32(ps);
+// the visual slot setter (player_model.c): small Mario in costume shows slot 12
+int32_t costume_visual_slot(uint64_t holder, int32_t slot) {
     if (costumes_on() && g_wear[0] && slot == 0 && g32(holder + 0x470) == 0) slot = COSTUME_SLOT;
-    s32(holder + 0x478, (uint32_t)slot);
+    return slot;
 }
 
 // every frame of each player (games/smm2/trace.c smm2_player_hook): the pickup and losing the costume to a power-up
@@ -251,7 +244,9 @@ static void setter(Cpu *c) {
 #define P_GROUND 0x2308  // bit 0: on the ground
 #define P_VEL_Y 0x240    // float, up positive [inf: the sign from the jump test]
 #define P_SPEED 0x274    // float, forward speed
-#define P_INPUT_UP 0x560 // input block +0x10: Up held [inf]
+#define P_INPUT 0x550    // pointer to the player's input block: +0x10 Up held, +0x11 Down held [obs: Link's arrow aim
+                         // 0x71015cd8e0 and the door test 0x71015a9c60 read +0x10 as up, the crouch test 0x71015d6270
+                         // +0x11 as down]
 static void motion_sounds(uint64_t player) {
     static uint64_t who;
     static bool was_ground;
@@ -266,7 +261,8 @@ static void motion_sounds(uint64_t player) {
             if (!(rnd() & 1) || !sound("jump2")) sound("jump");
         } else if (!was_ground && ground)
             sound("ground");
-        if (ground && g8(player + P_INPUT_UP) && sp > -0.01f && sp < 0.01f) {
+        uint64_t in = g64(player + P_INPUT);
+        if (ground && in && g8(in + 0x10) && sp > -0.01f && sp < 0.01f) {
             if (++up == 8) sound("appeal");
         } else
             up = 0;
@@ -325,8 +321,6 @@ static void down_fanfare(Cpu *c) {
 }
 
 __attribute__((constructor)) static void costume_register(void) {
-    hle_override(BUILDER, builder, "costume: model builder");
-    hle_override(SETTER, setter, "costume: visual slot");
     hle_override(GOAL_FANFARE, goal_fanfare, "costume: goal fanfare");
     hle_override(DOWN_FANFARE, down_fanfare, "costume: death fanfare");
 }

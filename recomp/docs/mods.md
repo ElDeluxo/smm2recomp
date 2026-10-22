@@ -618,6 +618,55 @@ is played the way Play Together plays: Mario, Luigi, Toad and Toadette, each on 
 - **Tests**: `RECOMP_COOP_TEST=<n>` plays as if n players were connected; `LARECOMP_INPUT2` scripts player 2.
   The log says `co-op: <n> players in this course`, and at each miss request every player's state.
 
+## Lanky Mario (SMM1's Weird Mushroom) (`games/smm2/mods/lanky.c`)
+
+A Mods-tab switch, "Lanky Mario (Weird Mushroom)", off by default (`lanky=0/1` in `smm2mods.ini`, `RECOMP_MOD_LANKY`).
+It takes effect at the next start: the Slim Mario models are made then from the SMM1 dump.
+
+- **The form:** a lanky player is Super Mario (form 1) for the game: body, speeds, gravity, power-ups (a Super
+  Mushroom is refused, a Fire Flower gives Fire) and damage (a hit gives small Mario, as for Lanky in SMM1).
+- **Look:** Slim Mario in the spare SMB1 form slot 8 (Builder: size class 2, Super's animations, unused in SMB1),
+  shown where the game asks for slot 1 while the player is lanky (`player_model.c`: the holder's builder and visual
+  slot setter, shared with the costumes). The models are SMM2's Super SMB1 Mario with SMM1's Slim frames in its 21
+  textures (`smm1/costume_gen.c`, overlay generator `lanky`: `Pack/M1_Model.pack` gets
+  `Model/M1_Player_SlimMarioMdl{,_2,_3,_4}`, read and written through the overlay so the costumes' models stay).
+  Luigi's is recoloured with his SMB1 Super palette (each Super Mario colour mapped to Super Luigi's at the same
+  pixel); Toad and Toadette, drawn differently, wear Mario's. `test_smm1ui --lanky <sheet.png>` makes them alone and
+  draws every texture.
+- **Jump:** +0.5 px/frame on computed ground jumps (hook point main+0x15c8d54, the Jump state's begin after the launch:
+  the request's vy at +0x248c is NaN). Stomp bounces (preset 3.9095), springs, crouch, spin and shoe jumps are as
+  Super Mario's.
+- **Sounds:** SMM1's `power_up_Funny`, `jump_3_Funny` and `h_fuyu` (the "fuwa" cue 19 updates into a held jump, never
+  on a tap), which SMM2 still has (SLink user `M1_Player`), played by name with the game's own call (0x7100666af0).
+- **Weird Mushrooms:** SMM1's easter egg. Each Super Mushroom out of a block or a container in an SMB1 course counts
+  (the Super Mushroom's create, 0x71013547c0, overridden: its spawn kind is 1 when placed in the course, 4 out of a
+  ? block): while fewer than 100 were counted and none was weird, each is weird
+  with a chance of 1 in 20; the 100th is weird if none was. Small or Super Mario taking one becomes lanky (hook point
+  main+0x13502c4, the item pickup's form load). It looks like a Super Mushroom (SMM1's `M1_Item_kinokofunny`: open).
+- **Try it now:** "Lanky Mario now" (the overlay menu, `triggers.c`): player 1 becomes lanky, from small through the
+  game's own power-up request (the grow demo plays), from Super at once. Greyed out without the switch, outside an
+  SMB1 course being played, with another power-up (as the Weird Mushroom), and in Endless / 100 Mario runs (they keep
+  records).
+- **Co-op:** any player can be lanky.
+- **Co-op detail:** each player has two model holders (+0x2f90, +0x2f98); both show Slim Mario.
+- **Tests:** `RECOMP_LANKY=1` makes player 1 lanky 90 updates into each SMB1 course, `RECOMP_LANKY_WEIRD=1` makes
+  every eligible Super Mushroom weird, `RECOMP_LANKY_TRY=<frame>` presses "Lanky Mario now" at that frame,
+  `RECOMP_LANKY_DEBUG=1` logs the jumps (vy and peak height), mushrooms, forms and sounds. An SMB1 title course
+  with ? blocks (`RECOMP_MOD_DIR` with `romfs/Course/title_course_data_0N.szs`, `SMM2_SEED=1`) is playable on the
+  title screen; with `RECOMP_MOD_DIR` the generated overlay isn't served, so link `romfs/Pack/M1_Model.pack` to the
+  one in `mods-generated/romfs/`. Measured (2026-10-22): a standing lanky jump leaves at vy 4.128 (3.628 + 0.5);
+  held 45 frames it peaks at 96.8 px (Super Mario: 64.0 held 40 frames), a 2-frame tap at 25.7 px (19.9); h_fuyu
+  plays 18 frames into a held jump and not on a tap; a Koopa's hit makes a lanky Mario small.
+
+## Try it now: mod effects on demand (`games/smm2/mods/triggers.c`)
+
+The overlay menu's Mods tab has a "Try it now" section under the switches: one button per mod effect that can be
+asked for at once (runtime `game_mod_triggers`, drawn by `runtime/ui/menu.mm` `tab_mods`). A mod adds its rows with
+`mod_trigger_add` from a constructor (label, description, `available()`, `trigger(choice)`, optional choices). The
+rule each row follows (DECISIONS 2026-10-22): a try-it-out helper, greyed out outside a course and in Endless /
+100 Mario runs; `trigger()` only records the request and the mod applies it on the game's thread. Rows: "Lanky Mario
+now" (`lanky.c`).
+
 ## The game's own network stack (backend local-nex): groundwork for Nextendo and a local NEX server
 
 The mod above *fakes* being online: nifm / acc / friends / mii answer locally, the enl session logs in without NEX,

@@ -408,6 +408,370 @@ static bool costume_overlay(void) {
 ROV_GENERATOR("costumes", 2, costume_overlay)  // (2: the models compressed)
 #endif
 
+// ---------------------------------------------------------------- Lanky Mario's Slim model (mods/lanky.c)
+// SMM1's Weird Mushroom form is drawn with Model/M1_Player_SlimMarioMdl.szs (Pack/StaticSkin.pack of the SMM1 dump):
+// 16 x 32 frames on the same quad as Super Mario. SMM2's own Super SMB1 Mario (Model/M1_Player_SpMarioMdl{,_2,_3,_4}:
+// FMDL Su_mario_model, 21 textures of 16 x 32 RGBA8 sRGB) is copied with each texture's pixels replaced by the Slim
+// frame of the same pose: sizes, quad, skeleton, materials and animations stay SMM2's, so nothing but the pixels
+// changes. Written as Model/M1_Player_SlimMarioMdl{,_2,_3,_4}.Nin_NX_NVN.zs into Pack/M1_Model.pack, read through the
+// overlay (rov_read) so the costumes' models in the same pack stay, whichever generator runs first.
+//
+// SMM1 has only Mario's Slim art. Luigi, Toad and Toadette (co-op: _2, _3, _4) get it recoloured with their own SMB1
+// Super palette: each colour of SMM2's Super Mario maps to the colour at the same pixel of that character's Super
+// model (the most frequent one over all 21 textures), and Slim's colours go through that map (the nearest key when a
+// colour is not one of Super Mario's).
+
+// SMM2's Super texture -> the Slim frame shown in its place (the same name otherwise: climb, jump, shoes_wait, stoop,
+// swim, turn, wait, walk); Slim's appeal, b_dash and pole frames have no place in SMM2's Super model
+static const char *slim_frame_for(const char *smm2_name) {
+    static const char *map[][2] = {
+        {"held.", "wait.0"},        {"jump2.", "jump_fall.0"}, {"karon_stoop.", "stoop.0"},
+        {"karon_wait.", "wait.0"},  {"shoes_stoop.", "shoes_wait.0"}, {"CourseIn.", "wait.0"}, {"dead.", "wait.0"},
+    };
+    for (size_t i = 0; i < sizeof map / sizeof map[0]; i++)
+        if (!strncmp(smm2_name, map[i][0], strlen(map[i][0]))) return map[i][1];
+    return smm2_name;
+}
+
+// the BNTX's textures, each RGBA8 (bpp 4) with its mip 0 data in place: fn(name, data, w, h, block height log2)
+typedef void (*BntxFn)(void *ctx, const char *name, uint8_t *data, int w, int h, int bhl);
+static int bntx_each(uint8_t *b, size_t n, BntxFn fn, void *ctx) {
+    if (n < 0x60 || memcmp(b, "BNTX", 4) || memcmp(b + 0x20, "NX  ", 4)) return -1;
+    uint32_t count = le32(b + 0x24);
+    size_t info = (size_t)le64(b + 0x28);
+    if (!count || count > 64 || info + 8 * (size_t)count > n) return -1;
+    int done = 0;
+    for (uint32_t k = 0; k < count; k++) {
+        size_t t = (size_t)le64(b + info + 8 * (size_t)k);
+        if (t + 0xA0 > n || memcmp(b + t, "BRTI", 4)) return -1;
+        size_t no = (size_t)le64(b + t + 0x60), ptrs = (size_t)le64(b + t + 0x70);
+        if (no + 2 > n || ptrs + 8 > n) return -1;
+        char name[64];
+        snprintf(name, sizeof name, "%.*s", le16(b + no) < 63 ? le16(b + no) : 63, (const char *)b + no + 2);
+        int w = (int)le32(b + t + 0x24), h = (int)le32(b + t + 0x28), bhl = (int)le32(b + t + 0x34);
+        size_t size = le32(b + t + 0x50), data = (size_t)le64(b + ptrs);
+        if (w <= 0 || h <= 0 || w > 64 || h > 64 || data + size > n || size < (size_t)w * (size_t)h * 4) continue;
+        fn(ctx, name, b + data, w, h, bhl);
+        done++;
+    }
+    return done;
+}
+
+// the embedded BNTX of a BFRES (in place)
+static uint8_t *bfres_bntx(uint8_t *f, size_t n, size_t *bn) {
+    if (n < 0x100 || memcmp(f, "FRES    ", 8)) return NULL;
+    size_t ext = (size_t)le64(f + 0xB8);
+    if (!ext || ext + 16 > n) return NULL;
+    size_t boff = (size_t)le64(f + ext), bsz = le32(f + ext + 8);
+    if (boff + bsz > n) return NULL;
+    *bn = bsz;
+    return f + boff;
+}
+
+// a model archive (.zs: zstd -> SARC with one .bfres) unpacked; its BFRES is a malloc'd copy
+typedef struct { uint8_t *arc; size_t an; Entry *in; int nin, ibfres; uint8_t *bfres; size_t bn; } ModelZs;
+static bool model_open(ModelZs *m, const uint8_t *z, size_t zn) {
+    memset(m, 0, sizeof *m);
+    m->ibfres = -1;
+    m->arc = zstd_read(z, zn, &m->an);
+    m->nin = m->arc ? sarc_read(m->arc, m->an, &m->in) : 0;
+    for (int i = 0; i < m->nin; i++)
+        if (strstr(m->in[i].name, ".bfres")) m->ibfres = i;
+    if (m->ibfres < 0) return false;
+    m->bn = m->in[m->ibfres].n;
+    m->bfres = malloc(m->bn);
+    memcpy(m->bfres, m->in[m->ibfres].d, m->bn);
+    return true;
+}
+static void model_close(ModelZs *m) { free(m->arc), free(m->in), free(m->bfres); }
+static uint8_t *model_store(const ModelZs *m, size_t *zn) {  // the archive again, with the edited BFRES, compressed
+    const char *names[8];
+    int ids[8];
+    const uint8_t *d[8];
+    size_t dn[8];
+    int ni = m->nin < 8 ? m->nin : 8;
+    for (int i = 0; i < ni; i++) {
+        names[i] = m->in[i].name, ids[i] = i;
+        d[i] = i == m->ibfres ? m->bfres : m->in[i].d, dn[i] = i == m->ibfres ? m->bn : m->in[i].n;
+    }
+    size_t an;
+    uint8_t *arc = sarc_write(ni, names, ids, ni, d, dn, 0x1000, &an);
+    uint8_t *zs = zstd_store(arc, an, zn);
+    free(arc);
+    return zs;
+}
+
+// ---- the recolour map (Super Mario's colour -> the character's)
+#define PAL_MAX 64
+typedef struct { uint32_t from, to; } PalEntry;
+typedef struct { uint32_t from, to; int count; } PalVote;
+typedef struct {
+    const uint8_t *other;  // the character's BFRES BNTX (read only: textures looked up by name)
+    size_t other_n;
+    PalVote votes[512];
+    int nvotes;
+} PalCtx;
+typedef struct { const char *want; uint8_t *data; int w, h, bhl; } TexFind;
+static void tex_find(void *ctx, const char *name, uint8_t *data, int w, int h, int bhl) {
+    TexFind *f = ctx;
+    if (!f->data && !strcmp(name, f->want)) f->data = data, f->w = w, f->h = h, f->bhl = bhl;
+}
+static uint32_t px32(const uint8_t *p) { return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24; }
+static void pal_vote(void *ctx, const char *name, uint8_t *data, int w, int h, int bhl) {
+    PalCtx *p = ctx;
+    TexFind f = {name, NULL, 0, 0, 0};
+    bntx_each((uint8_t *)p->other, p->other_n, tex_find, &f);
+    if (!f.data || f.w != w || f.h != h) return;
+    uint8_t *a = malloc((size_t)w * h * 4), *b = malloc((size_t)w * h * 4);
+    tegra_deswizzle(data, a, (uint32_t)w, (uint32_t)h, 1, 4, (uint32_t)bhl, 0);
+    tegra_deswizzle(f.data, b, (uint32_t)w, (uint32_t)h, 1, 4, (uint32_t)f.bhl, 0);
+    for (int i = 0; i < w * h; i++) {
+        if (!a[4 * i + 3]) continue;
+        uint32_t x = px32(a + 4 * i), y = px32(b + 4 * i);
+        int k = 0;
+        while (k < p->nvotes && (p->votes[k].from != x || p->votes[k].to != y)) k++;
+        if (k == p->nvotes) {
+            if (p->nvotes == 512) continue;
+            p->votes[p->nvotes++] = (PalVote){x, y, 0};
+        }
+        p->votes[k].count++;
+    }
+    free(a), free(b);
+}
+// from the votes: each source colour's most frequent target. Only for a character drawn like Mario (Luigi): where
+// the shapes differ (Toad), the same pixel is often another part of the body, the votes disagree, and there is no map
+// (0: Mario's colours are kept)
+static int pal_build(const PalCtx *p, PalEntry *out) {
+    int n = 0, agree = 0, all = 0;
+    for (int i = 0; i < p->nvotes && n < PAL_MAX; i++) {
+        int k = 0;
+        while (k < n && out[k].from != p->votes[i].from) k++;
+        if (k < n) continue;
+        const PalVote *best = &p->votes[i];
+        int total = p->votes[i].count;
+        for (int j = i + 1; j < p->nvotes; j++)
+            if (p->votes[j].from == best->from) {
+                total += p->votes[j].count;
+                if (p->votes[j].count > best->count) best = &p->votes[j];
+            }
+        agree += best->count, all += total;
+        out[n++] = (PalEntry){best->from, best->to};
+    }
+    return all && agree * 10 >= all * 9 ? n : 0;
+}
+static uint32_t pal_map(const PalEntry *pal, int n, uint32_t c, int *missed) {
+    if (!(c >> 24)) return c;  // (transparent)
+    int best = -1, bd = 1 << 30;
+    for (int i = 0; i < n; i++) {
+        if (pal[i].from == c) return pal[i].to;
+        int d = 0;
+        for (int s = 0; s < 24; s += 8) {
+            int x = (int)(c >> s & 255) - (int)(pal[i].from >> s & 255);
+            d += x < 0 ? -x : x;
+        }
+        if (d < bd) bd = d, best = i;
+    }
+    if (best >= 0 && bd <= 96) return pal[best].to;
+    (*missed)++;
+    return c;
+}
+
+// ---- the Slim frames into a Super model's textures
+typedef struct { const Bfres *slim; const PalEntry *pal; int npal, done, missed; } SlimCtx;
+static void slim_put(void *ctx, const char *name, uint8_t *data, int w, int h, int bhl) {
+    SlimCtx *s = ctx;
+    const char *want = slim_frame_for(name);
+    int id = bfres_texture(s->slim, want);
+    if (id < 0 && !strcmp(want, "jump_fall.0")) id = bfres_texture(s->slim, "jump.0");
+    if (id < 0) id = bfres_texture(s->slim, "wait.0");
+    const LTex *t = lyt_tex(id);
+    if (!t || !t->px) return;
+    uint8_t *lin = calloc((size_t)w * h, 4);
+    for (int y = 0; y < h && y < t->h; y++)
+        for (int x = 0; x < w && x < t->w; x++) {
+            uint32_t c = px32(t->px + ((size_t)y * t->w + x) * 4);
+            if (s->pal) c = pal_map(s->pal, s->npal, c, &s->missed);
+            w32(lin + ((size_t)y * w + x) * 4, c);
+        }
+    tegra_swizzle(lin, data, (uint32_t)w, (uint32_t)h, 1, 4, (uint32_t)bhl, 0);
+    free(lin);
+    s->done++;
+}
+
+static Bfres *slim_bfres(void) {
+    size_t pn, zn, an, bn;
+    uint8_t *pack = smm1_dump_read("Pack/StaticSkin.pack", &pn);
+    LSarc ps, inner;
+    Bfres *b = NULL;
+    if (pack && lyt_sarc_open(&ps, pack, pn)) {
+        const uint8_t *z = lyt_sarc_get(&ps, "Model/M1_Player_SlimMarioMdl.szs", &zn);
+        uint8_t *arc = z ? lyt_yaz0(z, zn, &an) : NULL;
+        if (arc && lyt_sarc_open(&inner, arc, an)) {
+            const uint8_t *bf = lyt_sarc_get(&inner, "Output.bfres", &bn);
+            if (bf) b = bfres_load(bf, bn);
+            lyt_sarc_close(&inner);
+        }
+        free(arc);
+        lyt_sarc_close(&ps);
+    }
+    free(pack);
+    return b;
+}
+
+#ifdef SMM1UI_STANDALONE
+static uint8_t *lanky_read_pack(size_t *n) {  // (the costumes' test pack if made, else the game's)
+    uint8_t *d = smm1_read_file(OUT_PACK, n);
+    return d ? d : read_pack(n);
+}
+#else
+#define lanky_read_pack read_pack
+#endif
+
+bool lanky_generate(void) {
+    Bfres *slim = slim_bfres();
+    if (!slim) {
+        fprintf(stderr, LOGC "Lanky: SMM1's Model/M1_Player_SlimMarioMdl.szs not found (Pack/StaticSkin.pack of the "
+                             "SMM1 dump: RECOMP_SMM1_DUMP)\n");
+        return false;
+    }
+    size_t pn;
+    uint8_t *pack = lanky_read_pack(&pn);
+    if (!pack) { fprintf(stderr, LOGC "Lanky: SMM2's Pack/M1_Model.pack not found\n"); return false; }
+    Entry *orig = NULL;
+    int norig = sarc_read(pack, pn, &orig);
+    static const char *suffix[4] = {"", "_2", "_3", "_4"};
+    const uint8_t *tz[4] = {0};
+    size_t tzn[4] = {0};
+    for (int s = 0; s < 4; s++) {
+        char want[96];
+        snprintf(want, sizeof want, "Model/M1_Player_SpMarioMdl%s.Nin_NX_NVN.zs", suffix[s]);
+        for (int i = 0; i < norig; i++)
+            if (!strcmp(orig[i].name, want)) tz[s] = orig[i].d, tzn[s] = orig[i].n;
+    }
+    ModelZs mario;
+    if (!tz[0] || !model_open(&mario, tz[0], tzn[0])) {
+        fprintf(stderr, LOGC "Lanky: SMM2's Super SMB1 Mario model not readable\n");
+        free(pack), free(orig);
+        return false;
+    }
+    size_t mbn;
+    uint8_t *mb = bfres_bntx(mario.bfres, mario.bn, &mbn);
+    // the new pack: the files already there, then one Slim model per character (Mario's own colours for a character
+    // whose Super model or palette is missing)
+    int nn = 0, nblob = 0;
+    const char *names[1024 + 4];
+    int blob_of[1024 + 4];
+    const uint8_t *blob[1024 + 4];
+    size_t blob_n[1024 + 4];
+    char snames[4][96];
+    if (norig > 1024) norig = 1024;
+    for (int i = 0; i < norig; i++)
+        if (strncmp(orig[i].name, "Model/M1_Player_SlimMarioMdl", 28))  // (an earlier run's: made again below)
+            names[nn] = orig[i].name, blob_of[nn++] = nblob, blob[nblob] = orig[i].d, blob_n[nblob++] = orig[i].n;
+    int nkept = nblob, made = 0, mario_blob = -1;
+    for (int s = 0; s < 4; s++) {
+        snprintf(snames[s], sizeof snames[s], "Model/M1_Player_SlimMarioMdl%s.Nin_NX_NVN.zs", suffix[s]);
+        ModelZs m;
+        PalEntry pal[PAL_MAX];
+        int npal = 0;
+        size_t bn = 0;
+        uint8_t *b = NULL;
+        if (s > 0 && tz[s] && model_open(&m, tz[s], tzn[s]) && (b = bfres_bntx(m.bfres, m.bn, &bn)) && mb) {
+            // the character's colours: Super Mario's texture vs the character's, pixel by pixel
+            static PalCtx pc;
+            memset(&pc, 0, sizeof pc);
+            pc.other = b, pc.other_n = bn;
+            uint8_t *mcopy = malloc(mbn);
+            memcpy(mcopy, mb, mbn);
+            bntx_each(mcopy, mbn, pal_vote, &pc);
+            free(mcopy);
+            npal = pal_build(&pc, pal);
+        } else if (s > 0 && tz[s])
+            model_close(&m);
+        if (s > 0 && !npal) {  // (Mario's Slim model under the character's name: Toad, Toadette)
+            if (tz[s]) model_close(&m);
+            if (mario_blob < 0) continue;
+            fprintf(stderr, LOGC "Lanky: Slim%s: Mario's (the character isn't drawn like Mario)\n", suffix[s]);
+            names[nn] = snames[s], blob_of[nn++] = mario_blob, made++;
+            continue;
+        }
+        if (s == 0) {
+            model_open(&m, tz[0], tzn[0]);
+            b = bfres_bntx(m.bfres, m.bn, &bn);
+        }
+        SlimCtx sc = {slim, npal ? pal : NULL, npal, 0, 0};
+        int nt = b ? bntx_each(b, bn, slim_put, &sc) : -1;
+        size_t zn = 0;
+        uint8_t *zs = nt > 0 ? model_store(&m, &zn) : NULL;
+        model_close(&m);
+        if (!zs) { fprintf(stderr, LOGC "Lanky: the Slim model%s could not be made\n", suffix[s]); continue; }
+        if (s > 0) fprintf(stderr, LOGC "Lanky: Slim%s: %d textures recoloured%s\n", suffix[s], sc.done,
+                           sc.missed ? " (some pixels kept Mario's colours)" : "");
+        if (s == 0) mario_blob = nblob;
+        names[nn] = snames[s], blob_of[nn++] = nblob, blob[nblob] = zs, blob_n[nblob++] = zn;
+        made++;
+    }
+    model_close(&mario);
+    size_t on = 0;
+    uint8_t *out = made ? sarc_write(nn, names, blob_of, nblob, blob, blob_n, 0x80, &on) : NULL;
+#ifdef SMM1UI_STANDALONE
+    bool ok = out && write_file(OUT_PACK, out, on);
+#else
+    bool ok = out && rov_write(PACK, out, on);
+#endif
+    fprintf(stderr, LOGC "Lanky: %d Slim Mario models generated into " PACK "\n", made);
+    for (int b = nkept; b < nblob; b++) free((void *)blob[b]);
+    free(out), free(pack), free(orig);
+    return ok && made == 4;
+}
+
+#ifdef SMM1UI_STANDALONE
+// (test_smm1ui --lanky <sheet.png>: the generated pack's Super and Slim models, a row each, every texture side by side)
+typedef struct { uint8_t *sheet; int sw, row, col; } SheetCtx;
+static void sheet_put(void *ctx, const char *name, uint8_t *data, int w, int h, int bhl) {
+    SheetCtx *s = ctx;
+    if (getenv("LANKY_SHEET_DIMS")) fprintf(stderr, "row %d %s %dx%d bhl %d\n", s->row, name, w, h, bhl);
+    uint8_t lin[64 * 64 * 4];
+    tegra_deswizzle(data, lin, (uint32_t)w, (uint32_t)h, 1, 4, (uint32_t)bhl, 0);
+    for (int y = 0; y < h && y < 32; y++)
+        for (int x = 0; x < w && x < 16; x++)
+            memcpy(s->sheet + ((size_t)(s->row * 34 + y) * s->sw + s->col * 18 + x) * 4, lin + ((size_t)y * w + x) * 4, 4);
+    s->col++;
+}
+int write_png(const char *path, const uint8_t *rgba, int w, int h);
+bool lanky_sheet(const char *path) {
+    size_t pn;
+    uint8_t *pack = smm1_read_file(OUT_PACK, &pn);
+    Entry *e = NULL;
+    int n = pack ? sarc_read(pack, pn, &e) : 0;
+    static const char *rows[8] = {"SpMarioMdl", "SlimMarioMdl", "SpMarioMdl_2", "SlimMarioMdl_2",
+                                  "SpMarioMdl_3", "SlimMarioMdl_3", "SpMarioMdl_4", "SlimMarioMdl_4"};
+    SheetCtx s = {NULL, 24 * 18, 0, 0};
+    s.sheet = calloc((size_t)s.sw * 8 * 34, 4);
+    for (int r = 0; r < 8; r++) {
+        char want[96];
+        snprintf(want, sizeof want, "Model/M1_Player_%s.Nin_NX_NVN.zs", rows[r]);
+        for (int i = 0; i < n; i++) {
+            ModelZs m;
+            size_t bn;
+            uint8_t *b;
+            if (strcmp(e[i].name, want) || !model_open(&m, e[i].d, e[i].n)) continue;
+            if ((b = bfres_bntx(m.bfres, m.bn, &bn))) s.row = r, s.col = 0, bntx_each(b, bn, sheet_put, &s);
+            model_close(&m);
+        }
+    }
+    bool ok = !write_png(path, s.sheet, s.sw, 8 * 34);
+    free(s.sheet), free(e), free(pack);
+    return ok;
+}
+#endif
+
+#ifndef SMM1UI_STANDALONE
+bool lanky_on(void);  // (mods/lanky.c: the Slim models only with the mod on)
+static bool lanky_overlay(void) { return !lanky_on() || lanky_generate(); }
+ROV_GENERATOR("lanky", 1, lanky_overlay)
+#endif
+
 // ---------------------------------------------------------------- the costume table (SMM1's Mush/CharaMarioTable.byaml)
 // BYML v1, big-endian: root array of dictionaries with ResName (string) and Rare (int: the category: 0 always owned,
 // 1 / 2 / 3 / 6 the 100 Mario pools of Easy / Normal / Expert / Super Expert, 4 / 5 / 7 others) [obs data]

@@ -96,6 +96,10 @@ int main(int argc, char **argv) {
     }
     if (!smm1_data_open()) return 1;
     if (!strcmp(argv[1], "--flow")) return flow_test_main(argc - 1, argv + 1);
+    if (!strcmp(argv[1], "--lanky")) {  // --lanky <sheet.png>: the Slim Mario models (mods/smm1/costume_gen.c), shown
+        extern bool lanky_generate(void), lanky_sheet(const char *path);
+        return lanky_generate() && lanky_sheet(argv[2]) ? 0 : 1;
+    }
     if (!strcmp(argv[1], "--costumes")) {  // generate the costume models (mods/smm1/costume_gen.c)
         extern bool costume_generate(void);
         return costume_generate() ? 0 : 1;

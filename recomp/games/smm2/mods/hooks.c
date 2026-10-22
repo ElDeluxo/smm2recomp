@@ -39,6 +39,8 @@ static void retry_rollback(void) {
 }
 
 void smm2_mod_after(Cpu *c, uint64_t addr) {
+    extern bool lanky_after(Cpu *c, uint64_t addr);    // (lanky.c: its own hook points, and its own form requests)
+    if (lanky_after(c, addr)) return;
     extern bool costume_after(Cpu *c, uint64_t addr);  // (costume.c: its own hook points)
     if (costume_after(c, addr)) return;
     if (addr == MAIN_ADDR(0x263db0)) {  // co-op (coop.c): the controllers' poll reads Npads 0 .. w8 ([x0 + 0x28])

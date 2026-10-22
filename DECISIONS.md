@@ -1787,3 +1787,35 @@ are down, a clear when anyone reaches the goal. SMM2 already has all of that for
 runs the course in reuses it instead of writing multiplayer into Endless. Off, every hook returns at once.
 **Would change:** SMM2's multiplayer rules diverging from the owner's in play (e.g. a bubble rule that isn't wanted),
 or 3D World courses (SMM2 has no multiplayer in that style: those stay single player).
+
+## 2026-10-22 — Mod triggers ("Try it now"): a try-it-out helper, never in record-keeping runs
+
+**Decision:** the overlay menu's Mods tab has a "Try it now" section with one button per mod effect that can be asked
+for on demand (first: "Lanky Mario now"; a chosen costume next). Mods register their rows in a small list
+(`mods/triggers.c`, `mod_trigger_add`: label, description, `available()`, `trigger()`, optional choices). Every row
+follows the same rule: it is a helper for trying a mod out, kept apart from the normal game: greyed out when its mod's
+switch is off, outside a course being played, and in Endless / 100 Mario runs (SMM2's Endless and SMM1's 100 Mario
+keep records). Pressing it only records the request; the mod applies it on the game's thread at the player's next
+update, through the game's own paths where there is one (Lanky from small: the game's power-up request, so the grow
+demo plays).
+**Why:** the owner (2026-10-22) asked for a way to see a mod's effect without hunting for the item that gives it,
+without letting it into runs whose results are kept.
+**Would change:** a mod effect that should also be offered in runs (it would need the owner's word), or a trigger
+that needs a choice the menu's single choice row can't express.
+
+## 2026-10-22 — Lanky Mario: Super Mario with Slim's look and SMM1's jump bonus, SMM1's random Weird Mushroom
+
+**Decision:** a Mods-tab switch "Lanky Mario (Weird Mushroom)" (`lanky`, `RECOMP_MOD_LANKY`), off by default, effective
+at the next start (the models are made then). A lanky player is form 1 (Super) for SMM2, drawn with Slim Mario in the
+SMB1 row's spare slot 8, +0.5 px/frame on computed ground jumps only (preset jumps, stomp bounces, crouch jumps keep
+their vy), SMM1's three sounds through SMM2's own SLink keys, a hit gives small. Weird Mushrooms come from SMM1's
+easter egg (1 in 20 of the Super Mushrooms out of blocks and containers, at most one and at least one per 100), in
+every SMB1 course including 100 Mario / Endless runs (it is part of SMM1's game, not a helper); the trigger is not.
+Luigi's Slim model is recoloured with his SMB1 Super palette; Toad and Toadette, whose SMB1 sprites are shaped
+differently, wear Mario's Slim art (SMM1 has only Mario's). The builder and visual-slot overrides are shared with
+the costumes (`mods/player_model.c`: one override per address).
+**Why:** the owner's request (2026-10-22, "Lanky Mario as an SMM1 mod switch, off by default" with a trigger); the
+v3.0.3 research (`lanky-smm2-v303.md`) found every piece in SMM2 itself: a spare model slot with Super's size and
+animation class, the jump launch's computed/preset split, SMM1's lanky sounds still in SMM2's data.
+**Would change:** the owner wanting the bonus on preset or crouch jumps too, the random mushroom kept out of runs, or
+the Weird Mushroom's own look (SMM1's `M1_Item_kinokofunny`: not done, the mushroom looks like a Super Mushroom).

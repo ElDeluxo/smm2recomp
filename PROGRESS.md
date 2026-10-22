@@ -459,11 +459,14 @@ Setup failures first, since they block new players:
 ### Next features (owner's order, 2026-10-22)
 1. 🔄 Co-op in Endless / 100 Mario (see the entry under Future): Mods-tab switch built; spawn, controllers and the
    shared-lives rule checked in game; left: a clear by either player, the ending with all players, a real second pad
-2. ⬜ Lanky Mario (SMM1's Weird Mushroom) as an SMM1 mod switch, off by default
-   - with it: **mod triggers** (owner, 2026-10-22): an overlay-menu section with a button per triggerable mod effect
-     (Lanky Mario now, a chosen costume now, later others), for the current player in a course, greyed out
-     elsewhere; a small registry in the mods code (name, available(), trigger()). A try-it-out helper kept apart from
-     the normal game: off in 100 Mario / Endless runs (no records). The costume trigger comes with item 4
+2. ✅ Lanky Mario (SMM1's Weird Mushroom) as an SMM1 mod switch, off by default (2026-10-22, checked in game, `mods/lanky.c`; docs/mods.md,
+   DECISIONS 2026-10-22): Slim Mario in the SMB1 row's slot 8 (models made from the SMM1 dump, Luigi recoloured,
+   Toad / Toadette in Mario's), +0.5 on computed ground jumps, SMM1's three sounds by SLink key, a hit gives small,
+   SMM1's random Weird Mushroom (1 in 20 out of blocks, at most / at least one per 100). Open: the Weird Mushroom's
+   own look (`M1_Item_kinokofunny`)
+   - with it: **mod triggers** (owner, 2026-10-22): the overlay menu's "Try it now" rows from a small registry
+     (`mods/triggers.c`); "Lanky Mario now" registered; greyed out without the switch, outside an SMB1 course and in
+     100 Mario / Endless runs. The costume trigger comes with item 4
 3. ✅ Mid-air shell jumps (finished 2026-10-22: the test course shows the SMM1 jump on, SMM2 off)
 4. ⬜ Mystery Mushroom costumes: a hit removes the costume, the taunt, the reward window, more than one per course
 5. ⬜ Edit any course: the d-pad onto Make, the upload credit, Edit on the course card / Endless

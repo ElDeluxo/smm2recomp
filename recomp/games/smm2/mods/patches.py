@@ -54,6 +54,13 @@ HOOK_POINTS = {
     # its first instruction (sub sp, sp, #0x80): from small Mario the Mystery item's form becomes 0 and the costume
     # goes on
     0x15a94a0: (0xD10203FF, 'costume: form change request'),
+    # Lanky Mario (lanky.c): the Jump state's begin (0x71015c8a60), the first instruction after the jump launch
+    # (player vtable +0x1180) returns (ldr w8, [x19, #0x2738]); a lanky player's computed jump (the jump request's vy
+    # at +0x248c is NaN) gets +0.5 on vy ([x19 + 0x240]), and the fuwa cue's timer starts
+    0x15c8d54: (0xB9673A68, 'lanky: jump launch returned'),
+    # Lanky Mario: the item pickup (0x710134ffd0: x19 the item, x20 the player, w9 the form the item gives) loads the
+    # player's form (ldr w8, [x20, #0x4a8]); a Weird Mushroom makes a small or Super player lanky
+    0x13502c4: (0xB944AA88, 'lanky: item pickup, the player\'s form load'),
     # Co-op (coop.c): the course scene's play mode ([*0x2a6bcd0 + 0xe0], stored by the player spawn 0x7100e581d0): 0 one player
     # (Endless, the title course, ...), 1 local multiplayer (Play Together: the set-up's player count, each player on
     # their own controller), 2 online

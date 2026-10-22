@@ -650,6 +650,15 @@ static void course_started(const char *why) {
     if (test_difficulty() < 0) hundred_flow_course_started();
 }
 
+// The course being played is an Endless / 100 Mario run's (SMM2's Endless and SMM1's 100 Mario keep records): the
+// Endless scene's play state ran within a few frames of the last player update (games/smm2/trace.c, lanky.c).
+static volatile uint64_t endless_play_at;
+bool bridge_endless_course(void) {
+    extern uint64_t lanky_last_player_update(void);
+    uint64_t p = lanky_last_player_update(), e = endless_play_at;
+    return e && e + 30 >= p;
+}
+
 static void play_exec(Cpu *c) {
     // A course loaded underneath the flow's map waits at its first play frame until the flow's card is up
     // (hundred_flow_ready_to_start), so it doesn't run hidden.
@@ -668,6 +677,7 @@ static void play_exec(Cpu *c) {
     if (holding) holding = false, LOG("[mod] bridge: the course starts\n");
     extern void quick_retry_play_state(void);  // (quick_retry.c: the course is playing again after a miss)
     quick_retry_play_state();
+    endless_play_at = renderer_present_count();
     if (started_pending) course_started("play state");
     guest_call_orig(c, PLAY_EXEC);
 }

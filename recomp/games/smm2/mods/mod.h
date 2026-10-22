@@ -71,6 +71,26 @@ int coop_players_standing(void); // coop.c: players in the course now who are ne
 int endless_course_style(void);  // endless.c: a run's current course style (0 SMB1 .. 4 3D World), -1 none, -2 unknown
 void endless_note_course(uint64_t data_id, const char *code);  // course.c -> endless.c: which code a data id is
 
+// ---- the overlay menu's "Try it now" rows (triggers.c; the type is runtime/game_hooks.c's): a mod adds its own from a
+// constructor. available() and trigger() are called on the UI thread: trigger() only records a request, the mod
+// applies it on the game's thread.
+typedef struct {
+    const char *label, *desc;
+    bool (*available)(void);
+    void (*trigger)(int choice);
+    const char *choice_label;
+    const char *const *choices;
+    int nchoices;
+} GameModTrigger;
+void mod_trigger_add(const GameModTrigger *t);
+
+// ---- the player model holder's builder and visual slot setter (player_model.c, shared by costume.c and lanky.c: an
+// address takes one override)
+typedef struct { uint64_t addr, val, was; } PmSwap;  // a guest pointer set to val for the builder's call
+bool smb1_course(void);          // costume.c: the course being played or edited is SMB1-style
+bool lanky_on(void);             // lanky.c: Lanky Mario is on (the switch at start-up)
+bool bridge_endless_course(void);  // bridge.c: the course being played is an Endless / 100 Mario run's
+
 // ---- course codes (course.c)
 bool code_to_data_id(const char *code, uint32_t *id);
 void data_id_to_code(uint32_t id, char out[12]);

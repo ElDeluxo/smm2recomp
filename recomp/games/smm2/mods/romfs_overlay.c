@@ -429,8 +429,9 @@ static bool same_identity(const char *path, const char *id) {
 static void generate_all(void) {
     if (!ngens) return;
     char id[1024];
-    extern bool costumes_on(void);  // (mods/costume.c: the costume models only with the mod on)
+    extern bool costumes_on(void), lanky_on(void);  // (mods/costume.c, lanky.c: their models only with the mod on)
     snprintf(id, sizeof id, "hundred offered:%d\ncostumes on:%d\n", mod_hundred_offered(), costumes_on());  // (Challenge Modes: only then)
+    if (lanky_on()) snprintf(id + strlen(id), sizeof id - strlen(id), "lanky on:1\n");  // (absent when off: no new id)
     for (int i = 0; i < ngens; i++) {
         size_t l = strlen(id);
         snprintf(id + l, sizeof id - l, "%s:%d\n", gens[i].name, gens[i].version);
@@ -462,8 +463,8 @@ static void generate_all(void) {
 // The game's RomFS overlay (runtime/game_hooks.c, runtime/mods.c, runtime/services/fs.c).
 const char *game_romfs_overlay(void) {
     static pthread_once_t once = PTHREAD_ONCE_INIT;
-    extern bool costumes_on(void);
-    if (!mod_hundred() && !costumes_on()) return NULL;
+    extern bool costumes_on(void), lanky_on(void);
+    if (!mod_hundred() && !costumes_on() && !lanky_on()) return NULL;
     pthread_once(&once, generate_all);
     return gen_dir[0] && !generating ? gen_dir : NULL;
 }
