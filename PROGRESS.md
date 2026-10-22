@@ -459,17 +459,18 @@ Setup failures first, since they block new players:
   listened to). Not compared in Cemu this round.
 
 ### Owner's v0.4.2 reports (2026-10-22: "100 Mario is working great" apart from these)
-- 🔄 **A rare 100 Mario hang after a death** (once): after the lives card the fade back into the course never came;
+- ✅ **A rare 100 Mario hang after a death** (once; closed 2026-10-22 with the watchdogs below): after the lives card the fade back into the course never came;
   the game ran on at 60 fps and the menu opened. Not reproduced (a lava course, misses with quick level return on
   and off: each came back). Two ways it could stick are now caught, said and undone: the bridge holding the course
   for the flow (`hundred_flow_ready_to_start`) longer than 10 s, and the flow's black over a course longer than
   10 s (`[hundred] black over the course`); both log the flow's whole state (`hundred_flow_describe`), and each
   miss logs the lives and the flow's state. If it comes back, the log says which.
-- ⬜ **Course World "Hot" is always the same courses, from 2020**: check what our server and TGRCode's upstream
-  return for Hot (sort, date window, caching); fix ours if it's ours.
-- ⬜ **Course lists freeze at each new page**: prefetch ahead (a bigger batch from the server / TGRCode, pages
-  served from it, refilled in the background), within TGRCode's rate limit.
-- ⬜ **Thumbnails missing in some cases**: find which (server course, TGRCode, missing picture, format) and fix.
+- ✅ **Course World "Hot" is always the same courses, from 2020**, **course lists freeze at each new page**,
+  **thumbnails missing in some cases**: fixed together, see Next features item 6 (live lists, prefetch, busy retry).
+- ✅ **Quick level return crashed after a checkpoint with pink / red coins** (owner, 2026-10-22): closed as not
+  reproduced (owner, 2026-10-22). Tried: misses at the start and after a checkpoint, a time-up after the checkpoint,
+  red coins collected, in Course World and 100 Mario, audio on and off: each came back. The previous session's log
+  is now kept (`smm2recomp.previous.log`), so if it recurs the crash's log survives the next start.
 
 ### Next features (owner's order, 2026-10-22)
 1. ✅ Co-op in Endless / 100 Mario (see the entry under Future): Mods-tab switch; spawn, own controllers, shared lives
