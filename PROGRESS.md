@@ -1,5 +1,34 @@
 # Progress
 
+## Where this stands / next (paused 2026-10-23, owner: saving credits; resume from here)
+- **Released:** v0.4.4 (2026-10-22), installed on the Mac and the iPad (iPad build 267 = v0.4.4; build numbers are
+  the commit count). Owner is happy with it; no new release or iPad install without the owner.
+- **On main since v0.4.4 (all gated, CI green, package dry runs green; not released):**
+  - Costumes: jump sound under a costume, sub-area pipes, the "?" look, the sound loader holds every costume.
+  - Edit any course leftovers; Super Worlds (maker's name, Continue, upload / delete, own thumbnails, upload count).
+  - A Worldbot crash fixed in the loader: the SDK's new / delete bound to main's, as the console's rtld does.
+  - Course World likes / boos / comments (incl. drawn comments, clear-to-view).
+  - Keyboard fixes (present race, 75 characters, UTF-8 limits).
+  - Shader compile-ahead; Vulkan SM35 memory fixes (checked on lavapipe in Docker, `tools/linux_vk_docker.sh`) and a
+    size-bounded SPIR-V cache.
+  - x86 CPU-level rebuild; Android 11+ internal data folder (emulator checked).
+  - In-course frames vs Ryujinx 72 / 90 bit-identical (3D World lava / poison bloom mip, NSMBU underwater clear).
+- **Next, in order:**
+  1. Full 90-course rerun on main (only 22 rerun after the latest changes).
+     3W_water: a new 41-px spot under Mario's shoe (up to 77 levels) since the liquid fixes. Next step: one run with
+     the per-frame clear forced on, then compare pass dumps (`recomp/docs/smm2-bringup.md`).
+  2. The liquid fixes' Vulkan side runs untested (compiles); check with `tools/linux_vk_docker.sh`.
+  3. Vulkan compute without host memory import (plan in the Vulkan entry below).
+     The 3D World Mario eye NaN on lavapipe (needs a tester's real GPU).
+  4. Mystery Mushroom: its 2 x 2 size and palette icon.
+     The Worldbot's own title "SUPER Player WORLD" (needs a Mii in the database: overlaps PR #18).
+  5. Waiting on the owner:
+     - PR #18 (OpenCourse World): theirs to test; don't review or merge.
+     - The 3D World speckle on the iPad: needs the iPad.
+     - "Background water too shiny": likely the bloom-mip fix; owner to look again.
+     - Hardware checks of co-op, Nextendo and the iPhone layout.
+- Disk: / ~10 GB free, /Volumes/SSD ~20 GB (an Android 35 system image, 3.8 GB, is kept in android-sdk).
+
 ## Roadmap
 ✅ done · 🔄 in progress · ⬜ not started · ⏳ waiting on owner
 
