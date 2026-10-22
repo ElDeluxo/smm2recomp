@@ -8,7 +8,13 @@
 // names are not used.
 //   tls_trust=local-ca  the server's certificate must chain to the local test CA (net/test-ca.pem, made by
 //                       tools/nex_test_server), and match the host name
-//   tls_trust=any       any certificate, and only towards a local address (the test server)
+//   tls_trust=roots     the chain must end in a public root the runtime carries (net/roots.h: Let's Encrypt's ISRG
+//                       Root X1 / X2 among them) or one the system bundle has, and match the host name. The ocw
+//                       backend's default: OpenCourse World serves an ordinary publicly-signed certificate
+//   tls_trust=any       any certificate, towards a local address (the test server) or the one host
+//                       ocw-config.json names (net_tls_any_allowed). Never a default: it is for a server of one's
+//                       own - a self-hosted OCW on a LAN, or OCW itself under development, where no public root can
+//                       vouch for the certificate
 //   backend nextendo    pinned: Nextendo's game server presents a self-signed certificate, so the chain is not
 //                       checked (verify optional); after the handshake the certificate's public key
 //                       (SubjectPublicKeyInfo, DER) must hash (SHA-256) to the pin (net_tls_pin), or the connection is
@@ -35,6 +41,7 @@
 #include "../hle.h"
 #include "../ipc.h"
 #include "../net/netcfg.h"
+#include "../net/roots.h"
 #include "bsd.h"
 
 #define SSL_RESULT(d) MAKE_RESULT(123, d)
@@ -103,7 +110,9 @@ static const char *errstr(int e) {
     return b;
 }
 
-// a few bytes of plaintext for the log (the WebSocket upgrade, then binary frames)
+// A few bytes of plaintext for the log (the WebSocket upgrade, then binary frames). The plaintext has its own
+// setting, off even with net_log=1: it is noisy, and the upgrade carries whatever the backend authenticates with.
+// net_log_redact takes the player id and any registered secret out of the line first.
 // RECOMP_NET_HEX=<file>: every TLS payload in full, as hex, appended to that file (protocol study: NEX's RMC). It holds
 // the session's tokens and the player's id: a private file, never shared.
 static void hex_dump(const char *dir, const SslConn *c, const uint8_t *p, size_t n) {
@@ -122,7 +131,7 @@ static void hex_dump(const char *dir, const SslConn *c, const uint8_t *p, size_t
 
 static void log_data(const char *dir, const SslConn *c, const uint8_t *p, size_t n) {
     if (n) hex_dump(dir, c, p, n);
-    if (!net_log_on() || !n) return;
+    if (!net_log_data() || !n) return;
     char line[200];
     size_t o = 0, show = n < 160 ? n : 160;
     for (size_t i = 0; i < show && o + 4 < sizeof line; i++) {
@@ -132,7 +141,7 @@ static void log_data(const char *dir, const SslConn *c, const uint8_t *p, size_t
     }
     line[o] = 0;
     char shown[sizeof line + 16];
-    net_log_redact(line, shown, sizeof shown);  // (NEX station URLs carry the player id: "PID=<hidden>")
+    net_log_redact(line, shown, sizeof shown);  // (the player id, and any registered token)
     LOG("[ssl] %s %s %zu bytes: %s%s\n", c->sni[0] ? c->sni : "?", dir, n, shown, n > show ? " ..." : "");
 }
 
@@ -166,7 +175,10 @@ bool ssl_pin_check(const mbedtls_x509_crt *peer, const uint8_t pin[32]) {
 }
 
 static const char *trust_name(NetTrust t) {
-    return t == NET_TRUST_ANY ? "any certificate (local test server)" : t == NET_TRUST_PINNED ? "Nextendo's certificate (pinned)" : "local test CA";
+    return t == NET_TRUST_ANY     ? "any certificate (local test server)"
+           : t == NET_TRUST_PINNED ? "Nextendo's certificate (pinned)"
+           : t == NET_TRUST_ROOTS  ? "the public roots and the host name"
+                                   : "local test CA";
 }
 
 // Set Mbed TLS up for this connection under the trust policy; false = refused (logged)
@@ -186,8 +198,9 @@ static bool conn_setup(SslConn *c) {
         }
     }
     NetTrust trust = net_tls_trust();
-    if (trust == NET_TRUST_ANY && !net_ip_is_local(peer)) {
-        LOG("[ssl] %s (%s): \"accept any certificate\" is for local test servers only: refused\n", c->sni, pa);
+    if (trust == NET_TRUST_ANY && !net_tls_any_allowed(peer)) {
+        LOG("[ssl] %s (%s): \"accept any certificate\" is for local test servers and the ocw host only: refused\n",
+            c->sni, pa);
         return false;
     }
     mbedtls_ssl_init(&c->ssl);
@@ -199,6 +212,27 @@ static bool conn_setup(SslConn *c) {
     mbedtls_ssl_conf_max_tls_version(&c->conf, MBEDTLS_SSL_VERSION_TLS1_2);
     if (trust == NET_TRUST_ANY) {
         mbedtls_ssl_conf_authmode(&c->conf, MBEDTLS_SSL_VERIFY_NONE);
+    } else if (trust == NET_TRUST_ROOTS) {
+        // A publicly-signed server (the ocw backend): the chain must end in a root the runtime carries
+        // (runtime/net/roots.h: Let's Encrypt's ISRG Root X1 / X2 among them) or one the system bundle has, and
+        // match the host name. Verification is only meaningful against a name, so without one it is refused rather
+        // than quietly weakened - a server reached by address alone wants tls_trust=any set for it.
+        if (!c->sni[0] || is_ip(c->sni)) {
+            LOG("[ssl] %s: no host name to check a certificate against (connected by address): refused. A server of "
+                "your own wants tls_trust=any.\n", pa);
+            return false;
+        }
+        static const char *const bundles[] = {"/etc/ssl/cert.pem", "/etc/ssl/certs/ca-certificates.crt",
+                                              "/etc/pki/tls/certs/ca-bundle.crt"};
+        for (size_t i = 0; i < sizeof bundles / sizeof *bundles; i++)
+            if (mbedtls_x509_crt_parse_file(&c->ca, bundles[i]) >= 0 && c->ca.version) break;  // (a bad entry: skipped)
+        const char *pem = net_root_pems();
+        if (mbedtls_x509_crt_parse(&c->ca, (const unsigned char *)pem, strlen(pem) + 1) < 0 && !c->ca.version) {
+            LOG("[ssl] %s: no root certificates to check against: refused\n", c->sni);
+            return false;
+        }
+        mbedtls_ssl_conf_ca_chain(&c->conf, &c->ca, NULL);
+        mbedtls_ssl_conf_authmode(&c->conf, MBEDTLS_SSL_VERIFY_REQUIRED);
     } else if (trust == NET_TRUST_PINNED) {
         uint8_t pin[32];
         if (!net_tls_pin(pin)) { LOG("[ssl] %s: no certificate pin: refused\n", c->sni); return false; }

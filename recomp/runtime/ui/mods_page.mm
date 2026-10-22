@@ -40,6 +40,7 @@ extern "C" bool online_rows_available(void);
 extern "C" void online_rows(void);
 extern "C" void rt_request_reboot(int kind);
 void menu_close(void);  // (menu.mm)
+void menu_game_rows(void);  // (menu.mm: a game's settings rows - sections, switches, text fields)
 
 static bool g_back_used;  // B / Esc went to a page here this frame (the menu doesn't close on it)
 bool mods_page_used_back(void) { bool u = g_back_used; g_back_used = false; return u; }
@@ -360,7 +361,8 @@ void mods_page(void) {
     case 1: page_installed(); break;
     case 2: page_gb(); break;
     default:
-        if (online_rows_available()) online_rows();
+        if (online_rows_available()) online_rows();  // (first: the backend decides what the rest talks to)
+        menu_game_rows();  // the game's settings for that backend (OpenCourse World's domain and token: game_rows.h)
         launcher_settings_rows();
         break;
     }
