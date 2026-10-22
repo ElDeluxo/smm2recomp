@@ -133,7 +133,7 @@ RT_HDRS  := $(wildcard runtime/*.h) $(wildcard runtime/platform/*.h) $(wildcard 
             $(wildcard runtime/nvn/maxwell/*.h) $(wildcard runtime/nvn/vulkan/*.h) $(wildcard runtime/ui/*.h) \
             $(wildcard runtime/net/*.h) \
             $(GAMEDIR)/game.mk
-UI_SRC   := $(wildcard runtime/ui/*.mm)
+UI_SRC   := $(filter-out runtime/ui/nextendo_ios.mm,$(wildcard runtime/ui/*.mm))
 UI_OBJ   := $(patsubst runtime/%.mm,$(B)/rt/%.o,$(UI_SRC))
 IMGUI_OBJ := $(B)/imgui/imgui.o $(B)/imgui/imgui_draw.o $(B)/imgui/imgui_tables.o $(B)/imgui/imgui_widgets.o \
              $(B)/imgui/imgui_impl_sdl3.o
@@ -233,6 +233,14 @@ GAMELIB_SRCS := tools/gen.py tools/lifter.py tools/analyze.py tools/nso.py tools
 GAMELIB_ID := $(shell (cat $(GAMELIB_SRCS); echo '$(GENFLAGS)') | (shasum -a 256 2>/dev/null || sha256sum) | cut -c1-16)
 
 RT_OBJ   := $(patsubst %.c,$(B)/rt/%.o,$(patsubst runtime/%,%,$(RT_SRC)))
+ifneq ($(IOS),)
+UI_OBJ   += $(B)/rt/ui/nextendo_ios.o  # (the sign-in sheet: ASWebAuthenticationSession)
+LDFLAGS  += -framework AuthenticationServices
+endif
+ifneq ($(filter ios iossim macos,$(PLATFORM)),)
+RT_OBJ   += $(B)/rt/net/secure_store_apple.o  # (the Keychain backend of runtime/net/secure_store.h)
+LDFLAGS  += -framework Security
+endif
 # TLS for the game's own ssl service (runtime/services/ssl.c): Mbed TLS 3.6 LTS, third_party/mbedtls (Apache-2.0),
 # built with runtime/net/mbedtls_user_config.h (a TLS 1.2 client)
 MBEDTLS  := third_party/mbedtls
@@ -284,6 +292,11 @@ $(B)/mbedtls/%.o: $(MBEDTLS)/library/%.c runtime/net/mbedtls_user_config.h
 $(B)/rt/services/ssl.o: RTFLAGS += $(MBEDTLS_FLAGS)
 $(B)/rt/services/ssl.o: runtime/net/mbedtls_user_config.h
 $(B)/rt/net/token.o: RTFLAGS += $(MBEDTLS_FLAGS)
+$(B)/rt/net/http.o: RTFLAGS += $(MBEDTLS_FLAGS)
+$(B)/rt/net/http.o: runtime/net/mbedtls_user_config.h
+$(B)/rt/net/roots.o: RTFLAGS += $(MBEDTLS_FLAGS)
+$(B)/rt/net/nextendo.o: RTFLAGS += $(MBEDTLS_FLAGS)
+$(B)/rt/net/nextendo.o: runtime/net/mbedtls_user_config.h
 
 # a game's own glue (games/<game>/*.c), compiled like the runtime; its own headers too (a struct that grows in one
 # must rebuild every file that includes it)

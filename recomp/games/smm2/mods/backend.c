@@ -10,9 +10,16 @@
 //   nex_token_file=<path>                   RECOMP_NET_NEX_TOKEN_FILE
 //   net_log=1                               RECOMP_NET_LOG
 //
-// backend=ours (default) is the mod's path: the overrides answer Course World from our course server. Any other
-// backend switches the mod's online overrides off (mod_hundred() is false, settings.c), so the game's own NEX
-// client runs on the runtime's network stack instead.
+//   course_world=mod | backend              RECOMP_MOD_COURSE_WORLD (settings.c)
+//
+// backend=ours (default) is the mod's path: the overrides answer Course World and the login from our course server
+// (with hundred=1). Any other backend runs the game's own NEX client on the runtime's network stack, and the mod
+// answers less (hybrid.h, settings.c):
+// - nextendo: hybrid ("Nextendo for multiplayer only"): the game's NEX client logs in to Nextendo (Network Play is
+//   theirs) while the mod's overrides keep answering Course World, the Endless Challenge and 100 Mario from
+//   TGRCode (the default here) or our server; course_world=backend leaves all of Course World to Nextendo.
+// - local-nex: the mod's online overrides are off (mod_hundred() is false); course_world=mod makes it hybrid, as
+//   with nextendo (offline tests against tools/nex_test_server).
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,7 +32,8 @@ static const char *ini_path(void) { return getenv("RECOMP_MOD_INI") ? getenv("RE
 
 bool game_net_config(const char *key, char *out, size_t cap) {
     static const char *const keys[] = {"backend", "nex_test_server", "net_hosts", "tls_trust", "tls_ca",
-                                       "id_token_file", "nex_token_file", "net_log"};
+                                       "id_token_file", "nex_token_file", "net_log", "nextendo_server",
+                                       "nextendo_nat", "nextendo_tls_pin"};
     bool known = false;
     for (size_t i = 0; i < sizeof keys / sizeof *keys; i++) known |= !strcmp(keys[i], key);
     FILE *f = known ? fopen(ini_path(), "r") : NULL;

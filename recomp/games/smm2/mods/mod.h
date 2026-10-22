@@ -25,11 +25,16 @@ typedef struct {
     int timeout_ms;      // RECOMP_MOD_TIMEOUT_MS / timeout_ms=: per HTTP request (default 8000)
     bool log;            // RECOMP_MOD_LOG / log=1: log every request and override
     bool mode_endless;   // challenge_mode=endless: Challenge Modes opens on SMM2's Endless Challenge (the last one used)
+    char course_world[16];  // RECOMP_MOD_COURSE_WORLD / course_world=: with another backend than ours, who answers
+                            // Course World: "mod" or "backend" ("" unset: nextendo -> the mod; hybrid.h)
+    bool courses_set;    // courses= was given (ini or environment); unset, hybrid takes its courses from TGRCode
 } ModSettings;
 extern ModSettings g_mod;
 void mod_settings_load(void);   // once (idempotent)
 void mod_server_ready(void);    // before the first request: with courses=tgrcode, start the built-in server (once)
-bool mod_hundred(void);         // the 100 Mario mod is on
+bool mod_hundred(void);         // the mod answers Course World (the 100 Mario mod is on; hybrid too)
+bool mod_hybrid(void);          // ... while the game's own NEX client is logged in to the backend (hybrid.h)
+bool mod_answers_login(void);   // the mod answers the login too (backend ours: no NEX connection)
 bool mod_hundred_offered(void); // ... and 100 Mario is offered (ruleset "hundred": the Endless button opens it)
 bool mod_hundred_rules(void);   // ... and the player is in the 100 Mario part now: SMM1's rules
 bool mod_smm2_session(void);    // Challenge Modes is on SMM2's own Endless Challenge (SMM2's rules)
@@ -70,6 +75,9 @@ bool coop_in_course(void);      // coop.c: the course being played is in co-op
 int coop_players_standing(void); // coop.c: players in the course now who are neither down nor in a bubble
 int endless_course_style(void);  // endless.c: a run's current course style (0 SMB1 .. 4 3D World), -1 none, -2 unknown
 void endless_note_course(uint64_t data_id, const char *code);  // course.c -> endless.c: which code a data id is
+// hybrid (online.c -> endless.c): the player id the backend's own record gives the player; from then on the player's
+// own id everywhere (own courses, "me"). A secret: never logged.
+void mod_set_backend_pid(uint64_t pid);
 
 // ---- the overlay menu's "Try it now" rows (triggers.c; the type is runtime/game_hooks.c's): a mod adds its own from a
 // constructor. available() and trigger() are called on the UI thread: trigger() only records a request, the mod

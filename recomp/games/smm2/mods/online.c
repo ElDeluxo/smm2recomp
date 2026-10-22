@@ -6,11 +6,18 @@
 // The session (Nintendo's "enl" layer over NEX) is a state machine: cConnectNetwork -> cLogInReady (starts the NEX
 // login) -> cLogIn, which is also the logged-in resting state (it waits there for the next command in +0xe4). With
 // the mod, cLogInReady goes straight to cLogIn and cLogIn handles the commands without a NEX connection.
+//
+// Hybrid (hybrid.h: backend nextendo, or local-nex with course_world=mod): the game's own enl / NEX login runs and
+// the login sequence's requests go to the backend (mod_answers_login() is false); Course World's other requests stay
+// the mod's (mod_hundred()). Two answers are merged: the application config (the backend's, with the Endless
+// Challenge switched on) and the player's own record (the backend's, with our Endless bests and unlocks).
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "mod.h"
+#include "../../../runtime/net/netcfg.h"
+#include "../../../runtime/net/nextendo.h"
 
 #define STATE_CHANGE MAIN_ADDR(0x8b9320)  // (state machine, new state)
 
@@ -26,7 +33,7 @@ static void change_state(Cpu *c, uint64_t sm, uint32_t st) {
 }
 
 static void enl_login_ready(Cpu *c) {
-    if (!mod_hundred()) { guest_call_orig(c, ENL_LOGIN_READY); return; }
+    if (!mod_answers_login()) { guest_call_orig(c, ENL_LOGIN_READY); return; }
     uint64_t self = c->x[0];
     MLOG("enl session %llx: logged in (no NEX connection)\n", (unsigned long long)self);
     if (g_mod.log) {
@@ -41,7 +48,7 @@ static void enl_login_ready(Cpu *c) {
 // cLogIn, the logged-in state: +0xe4 is the command the game posted (1 log in: done; 0 log out; 0xf: log out and
 // stop). Matchmaking commands (3..7, online multiplayer) are not available: they are dropped.
 static void enl_login(Cpu *c) {
-    if (!mod_hundred()) { guest_call_orig(c, ENL_LOGIN); return; }
+    if (!mod_answers_login()) { guest_call_orig(c, ENL_LOGIN); return; }
     uint64_t self = c->x[0];
     int32_t cmd = (int32_t)g32(self + 0xe4);
     s8(self + 0x19, 1);
@@ -69,7 +76,7 @@ static void answered(Cpu *c, const char *what) {
 
 #define LOCAL_WRAPPER(name, off, body)                                                           \
     static void name(Cpu *c) {                                                                   \
-        if (!mod_hundred()) { guest_call_orig(c, MAIN_ADDR(off)); return; }                      \
+        if (!mod_answers_login()) { guest_call_orig(c, MAIN_ADDR(off)); return; }                \
         uint64_t no = c->x[0];                                                                   \
         (void)no;                                                                                \
         netobj_lock(c);                                                                          \
@@ -80,10 +87,33 @@ static void answered(Cpu *c, const char *what) {
 
 // The server's application config: 38 u32 values at +0x737b0 (copied to the UI cache at +0x28). Values 0-3 switch the
 // Endless Challenge on per difficulty (> 0; with 0 the game says "This service is not active right now"); the rest
-// stay 0 (features the mod doesn't serve).
-LOCAL_WRAPPER(get_application_config, 0x14ce2f0, { for (int d = 0; d < 4; d++) s32(no + 0x737b0 + 4 * d, 1); })
+// stay 0 (features the mod doesn't serve). Hybrid: the backend's config (Utility.GetIntegerSettings(0): its keys
+// 0..37 into the array, Network Play's switches among them) with the Endless Challenge's four switched on, since
+// the mod serves it.
+#define APP_CONFIG 0x737b0
+
+static void get_application_config(Cpu *c) {
+    uint64_t no = c->x[0];
+    if (mod_hybrid()) {
+        guest_call_orig(c, MAIN_ADDR(0x14ce2f0));
+        if (g32(no + 0x60) == 0 && (uint8_t)c->x[0] == wrapper_ok()) {  // (the game's own request succeeded)
+            uint64_t ret = c->x[0];
+            netobj_lock(c);
+            for (int d = 0; d < 4; d++) s32(no + APP_CONFIG + 4 * d, 1);
+            netobj_unlock(c);
+            c->x[0] = ret;
+            LOG("[mod] GetApplicationConfig: the backend's, Endless on\n");
+        }
+        return;
+    }
+    if (!mod_answers_login()) { guest_call_orig(c, MAIN_ADDR(0x14ce2f0)); return; }
+    netobj_lock(c);
+    for (int d = 0; d < 4; d++) s32(no + APP_CONFIG + 4 * d, 1);
+    netobj_unlock(c);
+    answered(c, "get_application_config");
+}
 LOCAL_WRAPPER(get_user_name_ng_type, 0x14f2cc0, s32(no + 0x141608, 0))  // the name is fine
-LOCAL_WRAPPER(sync_user_profile, 0x14cef40, {})
+// (sync_user_profile: below, after the player's own record)
 LOCAL_WRAPPER(get_mii_clothes, 0x14d8360, s32(no + 0x73a58, 0))      // no costume rewards (ring count)
 LOCAL_WRAPPER(login_check, 0x14d7d20, {})
 LOCAL_WRAPPER(update_last_login, 0x14d7e00, {})
@@ -138,15 +168,89 @@ void user_entry_reset(uint64_t e) {
 }
 
 uint64_t mod_player_pid(void);  // endless.c: the fake player id the overrides use for the signed-in account
+extern void mod_account_info(char *name, size_t cap, uint32_t best[4]);
+
+// ---- hybrid: the player's name. A save whose Maker avatar has no name (empty or only spaces, as one made without
+// the console's Mii editor) would have the login's SyncUserProfile send a blank name, and the backend would show
+// the player as nameless. The backend's account name stands in: nextendo's user name, or (local-nex) the name in
+// the backend's record of the player. A name the player set is never replaced, and the save is not written.
+#define NAME_MAX16 11  // UTF-16 units of a Maker name with its terminator (10 characters, as the game sends)
+
+static bool blank_utf16(uint64_t buf, uint32_t cap) {
+    for (uint32_t i = 0; buf && i < cap; i++) {
+        uint16_t ch = *(volatile uint16_t *)(uintptr_t)(buf + 2 * i);
+        if (!ch) return true;
+        if (ch != ' ' && ch != 0x3000) return false;  // (ASCII and ideographic spaces)
+    }
+    return true;
+}
+
+static uint16_t record_name[NAME_MAX16];  // local-nex: the backend's name for the player (from its record)
+
+// The backend's name for the player as UTF-16 into buf (cap units); false when there is none.
+static bool backend_name(uint64_t buf, uint32_t cap) {
+    if (!buf || cap < 2) return false;
+    if (cap > NAME_MAX16) cap = NAME_MAX16;
+    char nx[64];
+    if (net_backend() == NET_BACKEND_NEXTENDO) {
+        if (!nextendo_username(nx, sizeof nx) || !nx[0]) return false;
+        put_utf16(buf, cap, nx);
+        return true;
+    }
+    if (!record_name[0]) return false;
+    uint32_t i = 0;
+    for (; i + 1 < cap && record_name[i]; i++) s16(buf + 2 * i, record_name[i]);
+    s16(buf + 2 * i, 0);
+    return true;
+}
+
+// Hybrid: the backend's record of the player (its name, Mii, maker code, registration and player id) stays as the
+// game's own request wrote it; our server's Endless bests go into it (mod_account_info also sets the 100 Mario
+// unlocks), and its player id becomes the player's own id in the mod's answers (mod_set_backend_pid). Neither our
+// server's account name nor a Maker avatar name is written: the name is the backend's (SyncUserProfile, the next
+// request of the login, sends it the player's own avatar name from the save).
+static void get_my_user_hybrid(Cpu *c) {
+    uint64_t no = c->x[0];
+    guest_call_orig(c, MAIN_ADDR(0x14d5cd0));
+    uint64_t ret = c->x[0];
+    // (the game's own request succeeded and wrote at least one entry: the first is the player's, the ring's head is 0)
+    if (g32(no + 0x60) != 0 || (uint8_t)ret != wrapper_ok() || (int32_t)g32(no + USER_RING + 0x10) < 1) return;
+    char name[64] = "";
+    uint32_t best[4] = {0};
+    mod_account_info(name, sizeof name, best);  // (our server; before the lock: it may take a while)
+    bool named = false;
+    netobj_lock(c);
+    uint64_t e = g64(no + USER_RING);
+    if (e) {
+        for (int d = 0; d < 4; d++) s32(e + 0x114 + 4 * d, best[d]);
+        mod_set_backend_pid(g64(e + 0x58));
+        // the name (entry +0x30, the converter's copy of the UserInfo's name; +0x38 its capacity): kept for
+        // SyncUserProfile when it is a real one, else (nextendo) the account's user name, so the card shows it
+        uint64_t nb = g64(e + 0x30);
+        uint32_t cap = g32(e + 0x38);
+        if (!blank_utf16(nb, cap)) {
+            for (uint32_t i = 0; i < NAME_MAX16; i++)
+                record_name[i] = i + 1 < NAME_MAX16 && i < cap ? *(volatile uint16_t *)(uintptr_t)(nb + 2 * i) : 0;
+        } else if (net_backend() == NET_BACKEND_NEXTENDO) {
+            named = backend_name(nb, cap);
+        }
+    }
+    netobj_unlock(c);
+    (void)mod_player_pid();  // (the own maker ID from our server, before any list is answered)
+    if (named) LOG("[mod] GetUsers (own): the backend's record had no name; the Nextendo user name stands in\n");
+    c->x[0] = ret;
+    LOG("[mod] GetUsers (own): the backend's record, our Endless bests %u/%u/%u/%u\n", best[0], best[1], best[2],
+        best[3]);
+}
 void mii_default_charinfo(uint8_t out[0x58], const char *nickname);  // runtime/services/mii.c
 
 static void get_my_user(Cpu *c) {
-    if (!mod_hundred()) { guest_call_orig(c, MAIN_ADDR(0x14d5cd0)); return; }
+    if (mod_hybrid()) { get_my_user_hybrid(c); return; }
+    if (!mod_answers_login()) { guest_call_orig(c, MAIN_ADDR(0x14d5cd0)); return; }
     uint64_t no = c->x[0];
     char name[64];
     snprintf(name, sizeof name, "%s", getenv("RECOMP_USER_NAME") ? getenv("RECOMP_USER_NAME") : "Player");
     uint32_t best[4] = {0};
-    extern void mod_account_info(char *name, size_t cap, uint32_t best[4]);
     mod_account_info(name, sizeof name, best);
     netobj_lock(c);
     s64(no + USER_RING + 0xc, 0);  // head 0, count 0
@@ -191,6 +295,27 @@ static void get_my_user(Cpu *c) {
     MLOG("GetUsers (own): %s, best %u/%u/%u/%u\n", name, best[0], best[1], best[2], best[3]);
     s32(no + 0x60, 0);
     c->x[0] = wrapper_ok();
+}
+
+// SyncUserProfile (the login's profile upload: name, Mii, region; this = NetObj). Its name is the UTF-16 string at
+// +0x738e0 (buffer +0x738e8, capacity +0x738f0; the request converts 10 characters of it). Hybrid: a blank one is
+// the backend's name for the player (above) for this request only; the original then sends it.
+#define SYNC_NAME 0x738e0
+
+static void sync_user_profile(Cpu *c) {
+    uint64_t no = c->x[0];
+    if (mod_hybrid()) {
+        netobj_lock(c);
+        uint64_t buf = g64(no + SYNC_NAME + 8);
+        uint32_t cap = g32(no + SYNC_NAME + 0x10);
+        bool filled = blank_utf16(buf, cap < NAME_MAX16 ? cap : NAME_MAX16) && backend_name(buf, cap);
+        netobj_unlock(c);
+        if (filled) LOG("[mod] SyncUserProfile: the save's Maker name is blank; sending the backend's name\n");
+        guest_call_orig(c, MAIN_ADDR(0x14cef40));
+        return;
+    }
+    if (!mod_answers_login()) { guest_call_orig(c, MAIN_ADDR(0x14cef40)); return; }
+    answered(c, "sync_user_profile");
 }
 
 // RECOMP_MOD_TRACE=1: log each state entered by the machines above (their enter functions, reached through pointers)

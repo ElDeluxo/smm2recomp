@@ -146,6 +146,18 @@ static int g_kbd_max = 8;
 static bool capturing() { return g_open.load() || g_kbd.load() == 1; }
 // The on-screen controller's menu button (runtime/ui/touchpad.mm)
 extern "C" void menu_toggle(void) { set_open(!g_open.load()); }
+
+// A notice over the game for a few seconds (bottom centre), from any thread: menu_notice(text, seconds)
+static pthread_mutex_t notice_lock = PTHREAD_MUTEX_INITIALIZER;
+static char notice_text[512];
+static double notice_until;  // SDL_GetTicks seconds
+extern "C" void menu_notice(const char *text, double seconds) {
+    pthread_mutex_lock(&notice_lock);
+    snprintf(notice_text, sizeof notice_text, "%s", text);
+    notice_until = SDL_GetTicks() / 1000.0 + seconds;
+    pthread_mutex_unlock(&notice_lock);
+}
+static bool notice_active(void) { return SDL_GetTicks() / 1000.0 < notice_until; }
 extern "C" bool touchpad_visible(void);
 extern "C" void touchpad_draw(float w, float h);
 // The game gets no input while this is true (runtime/hle/input.c): menu or name entry up.
@@ -587,10 +599,13 @@ typedef struct {
 extern "C" int game_mod_triggers(const GameModTrigger **out);
 extern "C" bool launcher_has_settings(void);   // runtime/ui/launcher.mm: the Mods tab's app section (desktop)
 extern "C" bool launcher_settings_rows(void);
+extern "C" bool online_rows_available(void);   // runtime/ui/online_rows.mm: the Online section (backend, Nextendo account)
+extern "C" void online_rows(void);
 static void tab_mods(void) {
     const GameModToggle *t;
     int n = game_mod_toggles(&t);
     opt_begin("##mods", ImGui::GetFontSize() / 34);
+    if (online_rows_available()) online_rows();  // (first: the backend decides what the rest talks to)
     if (n > 0 && t[0].value) opt_section("Mods");
     bool changed = false;
     for (int i = 0; i < n; i++) {
@@ -771,7 +786,8 @@ static void tabs_body(float scale, bool in_game, void (*prelaunch)(float)) {
     static const int order[] = {8, 0, 1, 2, 9};  // Controls, Video, Audio, Mods, Quit
     const GameModToggle *mods;
     const GameModTrigger *triggers;
-    bool have_mods = game_mod_toggles(&mods) > 0 || game_mod_triggers(&triggers) > 0 || launcher_has_settings();
+    bool have_mods = game_mod_toggles(&mods) > 0 || game_mod_triggers(&triggers) > 0 || launcher_has_settings() ||
+                     online_rows_available();
     for (int i : order)  // (Quit: in game only; Mods: when the game has some)
         if ((i != 9 || !prelaunch) && (i != 2 || have_mods)) tabs[ntabs++] = {names[i], i, true};
     int cur = 0;  // g_tab / g_tab_request hold ids
@@ -982,7 +998,7 @@ void menu_render(void *cmd, uint32_t target_w, uint32_t target_h) {
     uint64_t ov_seq = 0;
     const uint8_t *ov_img = game_overlay_image(&ov_w, &ov_h, &ov_full, &ov_seq);
     g_drew = false;
-    if (!open && !kbd && !g_settings.show_fps && !ov_img && !touchpad_visible()) {
+    if (!open && !kbd && !g_settings.show_fps && !ov_img && !touchpad_visible() && !notice_active()) {
         if (g_inited) { pthread_mutex_lock(&q_lock); q_events.clear(); pthread_mutex_unlock(&q_lock); }
         return;
     }
@@ -1047,6 +1063,22 @@ void menu_render(void *cmd, uint32_t target_w, uint32_t target_h) {
     }
 
     if (!open && !kbd) touchpad_draw((float)tw, (float)th);
+    if (!open && notice_active()) {
+        char t[512];
+        pthread_mutex_lock(&notice_lock);
+        snprintf(t, sizeof t, "%s", notice_text);
+        pthread_mutex_unlock(&notice_lock);
+        float w = fminf(io.DisplaySize.x * 0.8f, 1100 * scale);
+        ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y - 40 * scale), 0, ImVec2(0.5f, 1));
+        ImGui::SetNextWindowSize(ImVec2(w, 0));
+        ImGui::SetNextWindowBgAlpha(0.85f);
+        ImGui::Begin("##notice", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
+                                           ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoSavedSettings);
+        ImGui::PushTextWrapPos(0);
+        ImGui::TextUnformatted(t);
+        ImGui::PopTextWrapPos();
+        ImGui::End();
+    }
 
     if (open) touch_drag_scroll(io, scale);
     opt_touch(g_touch_ui);

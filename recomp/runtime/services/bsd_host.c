@@ -1,10 +1,11 @@
 // bsd:u / bsd:s on the host's own network stack: the game's TCP and UDP sockets as real host sockets, for the
-// game's own online code against a local NEX test server (runtime/net/netcfg.h, backend local-nex). Only then;
-// otherwise bsd.c keeps the virtual LAN or reports no network.
+// game's own online code against a local NEX test server or Nextendo Network (runtime/net/netcfg.h, backends
+// local-nex / nextendo). Only then; otherwise bsd.c keeps the virtual LAN or reports no network.
 //
-// Deny by default: a socket may connect / send only to loopback and the redirect table's local test addresses
-// (net_dest_allowed; anything else: ENETUNREACH, logged), binds to INADDR_ANY go to 127.0.0.1 when the test server
-// is on this machine, and datagrams / connections from other addresses are dropped.
+// Deny by default: a socket may connect / send only to the destinations netcfg allows (TCP: net_dest_allowed, the
+// redirect table's targets; UDP: net_dest_allowed_udp, the same with local-nex and any address with nextendo, for
+// PIA's peers; anything else: ENETUNREACH, logged), binds to INADDR_ANY go to 127.0.0.1 when the local test server is
+// on this machine, and datagrams / connections from other addresses are dropped.
 //
 // Every host socket is non-blocking; the game's blocking calls wait here in short polls with the calling thread's
 // core given up (kernel_host_wait_begin), so the rest of the game runs. Errno numbers are FreeBSD's (hostsock.h).
@@ -83,6 +84,13 @@ static hsock_t unpark(uint16_t guest) {
 static void result(IpcResp *resp, int32_t ret, uint32_t err) {
     OUT(int32_t, 0) = ret, OUT(uint32_t, 4) = ret < 0 ? err : 0;
     resp_size(resp, 8);
+}
+
+// RECOMP_BSD_TRACE=1: every socket call with its result (protocol study)
+static bool bsd_trace(void) {
+    static int on = -1;
+    if (on < 0) { const char *e = getenv("RECOMP_BSD_TRACE"); on = e && *e && *e != '0'; }
+    return on;
 }
 
 static void result_len(IpcResp *resp, int32_t ret, uint32_t err, uint32_t len) {
@@ -356,6 +364,12 @@ static void do_poll(IpcReq *req, IpcResp *resp) {
     int16_t *ev = malloc((nfds + 1) * 2), *rev = malloc((nfds + 1) * 2);
     for (uint32_t i = 0; i < nfds; i++) fds[i] = *(int32_t *)(f + 8 * i), ev[i] = *(int16_t *)(f + 8 * i + 4);
     int ready = poll_fds(fds, ev, rev, nfds, timeout);
+    if (bsd_trace()) {
+        char line[200];
+        int o = snprintf(line, sizeof line, "[bsd] poll %u fds, timeout %d ms -> %d ready:", nfds, timeout, ready);
+        for (uint32_t i = 0; i < nfds && o < (int)sizeof line - 24; i++) o += snprintf(line + o, sizeof line - o, " fd %d %#x->%#x", fds[i], ev[i], rev[i]);
+        LOG("%s\n", line);
+    }
     for (uint32_t i = 0; i < nfds; i++) *(int16_t *)(f + 8 * i + 6) = rev[i];
     if (out && out->size >= nfds * 8ull) memcpy((void *)(uintptr_t)out->addr, f, nfds * 8u);
     free(f), free(fds), free(ev), free(rev);
@@ -382,6 +396,12 @@ static void do_select(IpcReq *req, IpcResp *resp) {
         if (e) fds[n] = f, ev[n++] = e;
     }
     poll_fds(fds, ev, rev, n, ms);
+    if (bsd_trace()) {
+        char line[200];
+        int k = snprintf(line, sizeof line, "[bsd] select %d fds, %lld ms:", nfds, (long long)ms);
+        for (uint32_t i = 0; i < n && k < (int)sizeof line - 24; i++) k += snprintf(line + k, sizeof line - k, " fd %d %#x->%#x", fds[i], ev[i], rev[i]);
+        LOG("%s\n", line);
+    }
     uint8_t o[3][128] = {{0}};
     int ready = 0;
     for (uint32_t i = 0; i < n; i++) {
@@ -400,6 +420,8 @@ static void do_select(IpcReq *req, IpcResp *resp) {
 }
 
 // ---- data
+static bool dest_ok(const BsdSock *s, uint32_t ip) { return s->type == 2 ? net_dest_allowed_udp(ip) : net_dest_allowed(ip); }
+
 static void do_send(BsdSock *s, int fd, IpcReq *req, IpcResp *resp) {
     uint32_t flags = req->cmd == 24 ? 0 : IN(uint32_t, 4);
     IpcBuf *d = in_buf(req, 0);
@@ -410,7 +432,7 @@ static void do_send(BsdSock *s, int fd, IpcReq *req, IpcResp *resp) {
     struct sockaddr_in to;
     bool has_to = false;
     if (req->cmd == 11 && get_addr(in_buf(req, 1), &ip, &port)) has_to = true;
-    if ((has_to || s->peer_ip) && !net_dest_allowed(ip)) { log_refused("send to", ip, port); result(resp, -1, BSD_ENETUNREACH); return; }
+    if ((has_to || s->peer_ip) && !dest_ok(s, ip)) { log_refused("send to", ip, port); result(resp, -1, BSD_ENETUNREACH); return; }
     if (has_to) host_addr(&to, ip, net_dest_port(ip, port));
     int hflags = MSG_NOSIGNAL | (flags & 1 ? MSG_OOB : 0);
     bool nb = s->nonblock || (flags & 0x80);
@@ -445,7 +467,7 @@ static void do_recv(BsdSock *s, int fd, IpcReq *req, IpcResp *resp) {
                           (struct sockaddr *)&from, &fl);
         if (n >= 0) {
             uint32_t sip = ntohl(from.sin_addr.s_addr);
-            if (s->type == 2 && !net_dest_allowed(sip)) continue;  // (a datagram from outside: dropped)
+            if (s->type == 2 && !net_dest_allowed_udp(sip)) continue;  // (a datagram from outside: dropped)
             got += (size_t)n;
             if (all && n > 0 && got < cap) continue;
             uint32_t alen = 0;
@@ -485,7 +507,7 @@ static void do_socket(IpcReq *req, IpcResp *resp) {
 }
 
 static uint32_t bind_ip_for(uint32_t ip) {
-    if (ip) return ip;
+    if (ip || net_backend() != NET_BACKEND_LOCAL_NEX) return ip;  // (nextendo: INADDR_ANY, the internet is the peer)
     return (net_test_server_ip() >> 24) == 127 ? 0x7f000001 : 0;  // (INADDR_ANY: loopback when the test server is here)
 }
 
@@ -544,7 +566,7 @@ static void do_connect(BsdSock *s, int fd, IpcReq *req, IpcResp *resp) {
     if (!get_addr(in_buf(req, 0), &ip, &port)) { result(resp, -1, BSD_EINVAL); return; }
     char t[16];
     ip_to_str(ip, t);
-    if (!net_dest_allowed(ip)) { log_refused("connect to", ip, port); result(resp, -1, BSD_ENETUNREACH); return; }
+    if (!dest_ok(s, ip)) { log_refused("connect to", ip, port); result(resp, -1, BSD_ENETUNREACH); return; }
     struct sockaddr_in a;
     uint16_t hport = net_dest_port(ip, port);  // (the test server's own port for 443)
     host_addr(&a, ip, hport);
@@ -562,8 +584,10 @@ static void do_connect(BsdSock *s, int fd, IpcReq *req, IpcResp *resp) {
         err = BSD_EINPROGRESS;
     }
     if (!s->guest_port) s->guest_port = host_port_of(s->h);
-    LOG("[bsd] connect %d (%s) to %s:%u%s: %s\n", fd, s->type == 1 ? "TCP" : "UDP", t, port, hport != port ? " (test server port)" : "",
-        r == 0 ? "connected" : err == BSD_EINPROGRESS ? "in progress" : "failed");
+    LOG("[bsd] connect %d (%s) to %s:%u%s: %s%s\n", fd, s->type == 1 ? "TCP" : "UDP", t, port, hport != port ? " (test server port)" : "",
+        r == 0 ? "connected" : err == BSD_EINPROGRESS ? "in progress" : err == BSD_EISCONN ? "already connected" : "failed",
+        s->nonblock ? " (non-blocking)" : "");
+    if (r != 0 && bsd_trace()) LOG("[bsd]   connect error %u\n", err);
     result(resp, r == 0 ? 0 : -1, err);
 }
 
@@ -590,7 +614,16 @@ static void do_accept(BsdSock *s, IpcReq *req, IpcResp *resp) {
     }
 }
 
+static void bsd_host_client_1(IpcReq *req, IpcResp *resp);
+
 void bsd_host_client(IpcReq *req, IpcResp *resp) {
+    bsd_host_client_1(req, resp);
+    if (bsd_trace() && req->cmd != 5 && req->cmd != 6 && req->cmd != 14)  // (poll, select and connect say it themselves)
+        LOG("[bsd] cmd %u fd %d -> %d (errno %u)\n", req->cmd, req->data_size >= 4 ? IN(int32_t, 0) : -1,
+            resp->data_size >= 8 ? OUT(int32_t, 0) : 0, resp->data_size >= 8 ? OUT(uint32_t, 4) : 0);
+}
+
+static void bsd_host_client_1(IpcReq *req, IpcResp *resp) {
     int32_t fd = req->data_size >= 4 ? IN(int32_t, 0) : -1;
     switch (req->cmd) {
     case 0: OUT(uint64_t, 0) = 0; resp_size(resp, 8); return;  // RegisterClient
@@ -612,7 +645,13 @@ void bsd_host_client(IpcReq *req, IpcResp *resp) {
     case 14: do_connect(s, fd, req, resp); break;
     case 15: case 16: {  // GetPeerName / GetSockName
         bool peer = req->cmd == 15;
-        if (peer && !s->peer_ip) { result_len(resp, -1, BSD_ENOTCONN, 0); break; }
+        struct sockaddr_in pa;
+        hsocklen_t pn = sizeof pa;
+        // (not connected yet, or a non-blocking connect still in progress: the host socket knows)
+        if (peer && (!s->peer_ip || (s->type == 1 && getpeername(s->h, (struct sockaddr *)&pa, &pn) != 0))) {
+            result_len(resp, -1, BSD_ENOTCONN, 0);
+            break;
+        }
         uint32_t ip = peer ? s->peer_ip : s->bound_ip;
         uint16_t port = peer ? s->peer_port : s->guest_port ? s->guest_port : host_port_of(s->h);
         result_len(resp, 0, 0, put_addr(out_buf(req, 0), ip, port));
@@ -642,11 +681,12 @@ void bsd_host_client(IpcReq *req, IpcResp *resp) {
         result(resp, 0, 0);
         break;
     }
-    case 20: {  // Fcntl(fd, cmd, flags): F_GETFL 3, F_SETFL 4 (O_NONBLOCK 4)
+    case 20: {  // Fcntl(fd, cmd, flags): F_GETFL 3, F_SETFL 4. O_NONBLOCK is Linux's 0x800 (FreeBSD's 4 is taken too)
         int32_t cmd = IN(int32_t, 4), fl = IN(int32_t, 8);
         int32_t ret = 0;
-        if (cmd == 3) ret = (s->nonblock ? 4 : 0) | 2;  // (O_RDWR)
-        else if (cmd == 4) s->nonblock = (fl & 4) != 0;
+        if (cmd == 3) ret = (s->nonblock ? 0x800 : 0) | 2;  // (O_RDWR)
+        else if (cmd == 4) s->nonblock = (fl & (0x800 | 4)) != 0;
+        if (bsd_trace()) LOG("[bsd] fcntl %d cmd %d flags %#x -> %#x (non-blocking %d)\n", fd, cmd, fl, ret, s->nonblock);
         result(resp, ret, 0);
         break;
     }

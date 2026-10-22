@@ -294,3 +294,267 @@ the app on 2026-10-20, which replaces phase N0's Discord step.
   one course downloads and plays. If the login is refused, fetch `/api/online-status`, show its reason in the status
   row, and record it.
 - [ ] **Step 4:** update the records and commit `Nextendo: live sign-in and Course World (records)`.
+
+---
+
+## Addendum (2026-10-20): Nextendo for multiplayer only (owner's decision)
+
+After Task 5's live login, the owner chose **Nextendo for multiplayer only**. Network Play (co-op and versus:
+matchmaking, rooms, the course the server picks, PIA) goes through Nextendo. Course World browsing and download,
+the Endless Challenge and 100 Mario stay answered by the mod from TGRCode or our server, and 100 Mario stays on. This
+is spec §3.4 / phase N8.
+
+Findings from reading the code (the planning pass):
+- **The mod's wrappers can keep answering while NEX is logged in.** They replace the function the network worker
+  calls (mod.h), never read the session, and write results under the same NetObj+0x20 lock.
+- **Four answers depend on what the stubbed login wrote:** the config keys 0..3, the Endless unlocks, the Endless
+  bests (+0x114) and the player's own PID. So GetApplicationConfig and GetUsers (own) run the game's own call and
+  then merge ours on top.
+- **GetObject has no caller context,** so the source of a course is remembered per data ID: the mod's listings note
+  "ours", the battle search's results note "backend", and an ID the mod never listed counts as the backend's.
+
+### Task 6: Hybrid mode: Course World, Endless and 100 Mario stay ours while the game logs in to Nextendo
+
+**Files:**
+- Create: `recomp/games/smm2/mods/hybrid.h`, `recomp/games/smm2/mods/hybrid.c` (plain C11, no guest headers)
+- Create: `recomp/tools/test_hybrid.c`, `recomp/tools/test_hybrid.sh`
+- Modify: `recomp/games/smm2/mods/mod.h`, `settings.c`, `online.c`, `endless.c`, `backend.c` (top comment)
+- Modify: `recomp/runtime/net/netcfg.c` (the Nextendo option's description only)
+- Modify: `recomp/docs/mods.md`, `DECISIONS.md`
+
+**Interfaces:**
+- Produces (`hybrid.h`):
+  ```c
+  typedef struct { bool world, login, hybrid; } HyMode;
+  // backend: the NetBackend in effect (0 ours, 1 local-nex, 2 nextendo); hundred: hundred=1;
+  // course_world: "" (unset), "mod" or "backend" (any other value counts as unset)
+  HyMode hy_mode(int backend, bool hundred, const char *course_world);
+  ```
+  - ours → `{hundred, hundred, false}`
+  - local-nex → `course_world == "mod" ? {1,0,1} : {0,0,0}`
+  - nextendo → `course_world == "backend" ? {0,0,0} : {1,0,1}` (Nextendo means hybrid, whatever `hundred` says)
+- Produces (`mod.h`, `settings.c`):
+  - `ModSettings` gains `char course_world[16]` (ini `course_world=`, env `RECOMP_MOD_COURSE_WORLD`) and
+    `bool courses_set` (set by `set("courses", …)`).
+  - `bool mod_hundred(void)` returns `.world`. New `bool mod_hybrid(void)` returns `.hybrid`, and
+    `bool mod_answers_login(void)` returns `.login`. All three use
+    `hy_mode(net_backend(), g_mod.hundred, g_mod.course_world)`.
+  - `net_pretend_online()` returns `mod_answers_login() || RECOMP_PRETEND_ONLINE`.
+  - In hybrid with `courses_set` false, `courses` is `tgrcode`, logged as
+    `[mod] hybrid: courses from TGRCode (courses= not set)`.
+  - `start_builtin_server()`: with backend nextendo and no `RECOMP_USER_NAME`, the local account is named after
+    `nextendo_username()`.
+- Produces (`endless.c`): `void mod_set_backend_pid(uint64_t pid)`. In hybrid, once it is set,
+  `pid_of_maker_id(own_maker_id)` returns it, so `mod_player_pid()`, `mod_maker_id()` and the maker of the player's
+  own courses on our server all use the backend PID. Never log it.
+- `online.c`:
+  - `enl_login_ready`, `enl_login` and the eight login-sequence `LOCAL_WRAPPER`s (get_user_name_ng_type,
+    sync_user_profile, get_mii_clothes, login_check, update_last_login, post_activity_quest, get_new_notification,
+    get_event_course_status): `if (!mod_answers_login())` → run the game's own.
+  - `get_application_config` (a plain function, not the macro). Ours: as today. Hybrid:
+    1. save `no = c->x[0]` and run `guest_call_orig(c, MAIN_ADDR(0x14ce2f0))`;
+    2. if `g32(no + 0x60) == 0`, set `+0x737b0 + 4*d = 1` for d 0..3 under `netobj_lock` and log
+       `[mod] GetApplicationConfig: the backend's, Endless on`;
+    3. return the original's `x0`.
+  - `get_my_user`, hybrid:
+    1. save `no` and run the game's own;
+    2. if the status is 0 and `g32(no + 0x78) >= 1`, call `mod_account_info()` before taking the lock (it sets the
+       unlocks);
+    3. under the lock, write `best[d]` to `g64(no + 0x68) + 0x114 + 4*d`, then
+       `mod_set_backend_pid(g64(g64(no + 0x68) + 0x58))`;
+    4. don't write a Maker avatar name;
+    5. log `[mod] GetUsers (own): the backend's record, our Endless bests` and return the original's `x0`.
+- netcfg.c, the Nextendo description: "Network Play (online co-op and versus) on Nextendo's community servers. Course
+  World, the Endless Challenge and 100 Mario stay on your course source (TGRCode or your server). Needs a Nextendo
+  account (sign in below)."
+
+- [ ] **Step 1: write `tools/test_hybrid.c`** (named cases; exit 1 on a failure; print `ALL PASS`) and
+  `tools/test_hybrid.sh`. The script runs
+  `clang -std=c11 -Wall -Werror -O1 -g -pthread -fsanitize=address,undefined games/smm2/mods/hybrid.c tools/test_hybrid.c -o build/hybrid_test/test_hybrid`
+  and then the binary. Case `mode_table` asserts these (backend, hundred, course_world) → {world, login, hybrid}:
+  - `(0,false,"")` → `{0,0,0}`
+  - `(0,true,"")` → `{1,1,0}`
+  - `(0,true,"backend")` → `{1,1,0}`
+  - `(1,true,"")` → `{0,0,0}`
+  - `(1,false,"mod")` → `{1,0,1}`
+  - `(2,false,"")` → `{1,0,1}`
+  - `(2,true,"mod")` → `{1,0,1}`
+  - `(2,true,"backend")` → `{0,0,0}`
+  - `(2,true,"bogus")` → `{1,0,1}`
+- [ ] **Step 2: run `recomp/tools/test_hybrid.sh`.** Expected: FAIL (no hybrid.c).
+- [ ] **Step 3: implement** hybrid.c, the settings / online / endless changes and the description.
+- [ ] **Step 4: run `tools/test_hybrid.sh`.** Expected: `ALL PASS`. Then `make -s -C recomp GAME=smm2 -j8 runtime-objs`,
+  `scripts/check.sh` and `cd recomp && make GAME=smm2 -j10 all`.
+- [ ] **Step 5: regression.**
+  - Backend ours, with mods.md's "Test recipe" (server 8650, `RECOMP_MOD_FLOW_TEST=0`, `RECOMP_MOD_TRACE=1`) into
+    `ours6.log`. Pass: `enl session … logged in (no NEX connection)`, `New Game: easy, hundred rules, 100 lives`,
+    `course start`, and at least one `clear`.
+  - Local-nex without `course_world` (mods.md "Try it"). Pass: Course World's top screen opens, and there is no
+    `[mod]` override line (Proof 2).
+- [ ] **Step 6: offline hybrid.**
+  - Start `python3 -m tools.nex_test_server --name NexName --config 0=0 --config 1=0 --config 2=0 --config 3=0 --log recomp/private/smm2/build/nex6.log`.
+  - Run with Step 5's environment, minus `RECOMP_MOD_100MARIO`, plus
+    `RECOMP_NET_BACKEND=local-nex RECOMP_MOD_COURSE_WORLD=mod RECOMP_MOD_COURSES=server RECOMP_NET_LOG=1`, plus a
+    `LARECOMP_HOST_INPUT` shot on Course World's top screen. Log to `hy6.log`. Re-time `LARECOMP_INPUT` if the boot
+    login moves the menus.
+  - Pass, in `nex6.log`: `ValidateAndRequestTicketWithParam`, `GetUsers` and `SyncUserProfile` are decoded, and
+    there are no DataStore 0x73 requests beyond the login sequence (47/48/49/63/65/125/154).
+  - Pass, in `hy6.log`: no `no NEX connection`; present are `GetApplicationConfig: the backend's, Endless on`,
+    `GetUsers (own): the backend's record`, `New Game: easy, hundred rules, 100 lives`, `course start` and a `clear`.
+    This must hold with the server's Endless keys off.
+  - Pass, in the shot: the Maker card says `NexName`.
+  - Compare `grep 'not answered by the mod' hy6.log | sort -u` with ours6.log. Any wrapper that now returns status 0
+    from the backend goes into the commit message and mods.md.
+- [ ] **Step 7: matchmaking passes (offline).** Same environment, driven to Course World → Network Play → Co-op
+  (Proof 3's driver, `/Volumes/SSD/smm-work/recomp-net/cycle.sh`). Pass: nex6.log has
+  `AutoMatchmakeWithParam_Postpone`, and the game log has no `enl command` line. The room is not expected to form.
+- [ ] **Step 8: live.** Use the owner's stored sign-in in this data folder; the owner has OK'd live tests on their
+  account. Run `RECOMP_NET_BACKEND=nextendo RECOMP_NET_LOG=1 RECOMP_MOD_LOG=1` with `courses` unset.
+  Pass:
+  - no `[acc] Nextendo: no game token` and no login error;
+  - `hybrid: courses from TGRCode` is logged;
+  - the Maker card shows the Nextendo username;
+  - Courses → Popular logs `course list (popular, page 0): N courses` with N > 0, and one course plays;
+  - Challenge Modes → 100 Mario → New Game starts a course;
+  - Network Play → Co-op reaches the game's search screen;
+  - TCP goes only to 51.178.29.194 and 164.132.111.120.
+- [ ] **Step 9: records.**
+  - mods.md: the Backends row for nextendo, the `course_world=` setting, and a "Hybrid" paragraph (what goes where,
+    plus the wrappers found in Step 6).
+  - DECISIONS.md: a 2026-10-20 entry "Nextendo for multiplayer only".
+  - backend.c's top comment.
+  - Commit `smm2 mods: hybrid backend - Course World, Endless and 100 Mario ours while the game's NEX logs in to Nextendo`.
+
+**Exit check:** Steps 6–7 pass offline, and Step 8 passes live.
+
+### Task 7: Hybrid routing: Network Play's course search, download and players from the backend
+
+**Files:**
+- Modify: `recomp/games/smm2/mods/hybrid.h`, `hybrid.c` (course registry), `mod.h`, `endless.c`, `world.c`, `edit.c`
+- Modify: `recomp/tools/test_hybrid.c`, `recomp/docs/mods.md`
+
+**Interfaces:**
+- Produces (`hybrid.h`):
+  ```c
+  typedef enum { HY_UNKNOWN = 0, HY_OURS = 1, HY_BACKEND = 2 } HySource;
+  void hy_note(uint64_t data_id, HySource src);  // latest note wins; 4096 ids (oldest forgotten); id 0 ignored; mutex
+  HySource hy_source(uint64_t data_id);
+  void hy_forget_all(void);                       // (tests)
+  ```
+- Produces (`mod.h`):
+  ```c
+  bool mod_course_ours(uint64_t data_id);  // !mod_hybrid() || hy_source(id) == HY_OURS  (unlisted -> backend's)
+  bool mod_pid_ours(uint64_t pid);         // !mod_hybrid() || (pid != mod_player_pid() && the makers table has pid)
+  ```
+- endless.c:
+  - `NMAKERS` goes from 512 to 4096.
+  - `fill_course` calls `hy_note(id, HY_OURS)`. Test hook: `RECOMP_MOD_TEST_BACKEND_IDS=<code>[,<code>]` re-notes
+    those IDs as `HY_BACKEND`.
+  - `search_courses`: in hybrid, types 11..13 run `guest_call_orig(c, MAIN_ADDR(0x14d8550))`, then note every ID in
+    the result ring (+0x30780, entries 0x548 apart, ID at +0) as `HY_BACKEND`. Log
+    `[mod] route battle search (type %u): backend, %u courses`.
+  - `get_course_file`: if `!mod_course_ours(id)`, then `hy_note(id, HY_BACKEND)`, set `last_dl_ours = false`, log
+    `[mod] route GetObject <code>: backend` and run the game's own. Otherwise set `last_dl_ours = true`, log the same
+    line ending in `ours`, and carry on as today.
+  - `course_list_info`: the game's own when `!last_dl_ours`.
+  - `id_check`, `course_post`: by `g64(no + 0x141480)`.
+  - `get_courses`: the game's own if any listed ID isn't ours.
+- world.c:
+  - The game's own whenever `!mod_course_ours(id)`, for: `search_comments` (+0x8e680), `post_comment` (+0x8e688),
+    `can_rate` (+0xe8578), `post_rating` (+0xe8548) and `post_play_result` (+0x8e618).
+  - `get_users_list`: the game's own when no PID in the request is `mod_pid_ours`.
+  - `get_user_page`: the game's own when `!mod_pid_ours(g64(no + 0x73a30))`.
+  - `world_search` types 6/8/9: the game's own when the PID is neither `mod_pid_ours` nor `mod_player_pid()`.
+  - `search_users` kind 2 in hybrid: the game's own.
+- edit.c `relation_get`: the game's own when the download ID (+0x8e5f0, if non-zero) or any ring ID isn't ours.
+- Every backend route logs `[mod] route <request> …: backend`, with a course code or "a backend player". PIDs are
+  never logged.
+
+- [ ] **Step 1: add these cases** to `test_hybrid.c`:
+  - `registry_latest_wins`: OURS → BACKEND → OURS on id 100, read back after each.
+  - `registry_unknown_and_zero`: `hy_source(12345) == HY_UNKNOWN`; id 0 stays `HY_UNKNOWN` after `hy_note(0, HY_OURS)`.
+  - `registry_capacity`: ids 1..4097 noted OURS → id 1 is `HY_UNKNOWN`; ids 2 and 4097 are `HY_OURS`.
+  - `registry_threads`: 4 threads × 10000 notes, with no sanitizer report and only valid enum values.
+- [ ] **Step 2: run `tools/test_hybrid.sh`.** Expected: the new cases FAIL.
+- [ ] **Step 3: implement** the registry and the routes.
+- [ ] **Step 4: run `tools/test_hybrid.sh`.** Expected: `ALL PASS`. Then runtime-objs, `scripts/check.sh` and
+  `make all`. Then repeat Task 6 Step 6. Pass: every `route` line says `ours`, and the test server saw no
+  PrepareGetObject.
+- [ ] **Step 5: offline, a forced backend course.**
+  - Get CODE, the head of the Endless queue, from `GET /api/endless/easy/next?count=1&ruleset=hundred` on server 8650
+    with the token.
+  - Run Task 6 Step 6 with `RECOMP_MOD_TEST_BACKEND_IDS=$CODE`.
+  - Pass: `route GetObject $CODE: backend`; the test server logs a DataStore 0x73 request for that ID (answered
+    NotImplemented); the game shows its own error.
+- [ ] **Step 6: live pre-check, all Nextendo.** With `course_world=backend`, download and play one Nextendo course.
+  If the net log shows "no such name" or a TLS refusal, stop and record the host; fixing it is a separate netcfg task.
+- [ ] **Step 7 (needs the owner and a second Nextendo client): a co-op room.**
+  - Setup: the recomp on account A (hybrid), and Ryujinx-Nextendo or a second recomp on account B. Both choose
+    Network Play → Co-op at the same time (random matchmaking).
+  - Pass: one room; `route … GetObject …: backend`; the course plays on both; a like logs
+    `route PostRatingInfo …: backend`. In the same session, Popular still lists TGRCode courses and 100 Mario still
+    starts.
+- [ ] **Step 8 (owner): one versus match.** Pass: VR is shown, and Leaderboards → Versus is answered by the game's own
+  code.
+- [ ] **Step 9: records.** mods.md: the routing table and the evidence. Commit
+  `smm2 mods: hybrid routing - Network Play's course search, download and players from the backend`.
+
+**Exit check:** Steps 4–5 pass offline, and Step 7 passes live.
+
+### Known risks (carried, not fixed here)
+- **Course World needs the Nextendo login in hybrid.** If the login fails (Nextendo's gates, an outage, an expired
+  token), the player gets the game's login error, even for TGRCode courses. A fallback to the stubs after a failed
+  login is a follow-up.
+- **A Nextendo course download is unproven** (Task 7 Step 6), and the Network Play search/download paths are
+  inferred (confirm with `RECOMP_MOD_TRACE=1`).
+- **ID collisions.** A guest that never searched could fetch a room course from us if a TGRCode course with the same
+  ID was listed earlier.
+- **Unanswered wrappers reach Nextendo with mixed IDs** (Ninji, Super Worlds, follows, notifications).
+- **Split identity.** Name, Mii and PID are Nextendo's, while uploads and likes go to our server's account.
+
+### Task 6b: Kernel: a timed-out condition-variable wait returns without the mutex (Horizon semantics)
+
+Root cause of the Co-op search freeze. The full report is in the SDD workspace (`coop-freeze-report.md`); the
+summary follows.
+- `svc_wait_process_wide_key` (`recomp/runtime/kernel.c:454-461`) takes the mutex back after a timeout.
+- Horizon returns 0xEA01 **without** the mutex, and the game's SDK (`f_700432f240`) then locks it itself.
+- With our kernel the thread already owns it, so `svc_arbitrate_lock` (`kernel.c:421`) waits on itself forever.
+- Matchmaking's workers poll with 5 ms timed waits, so they deadlock on the first timeout, and the main thread
+  freezes behind them during the error teardown.
+- A latent race in `block_current` (`kernel.c:411-415`): a wake that lands as the deadline passes is overwritten
+  with `R_TIMEOUT`.
+
+**Files:**
+- Modify: `recomp/runtime/kernel.c`
+- Create: `recomp/tools/test_kernel_condvar.c`, `recomp/tools/test_kernel_condvar.sh` (only if `kernel.c` can be
+  linked into a small harness without the whole runtime. If not, say why in the report and rely on Step 4.)
+- Modify: `recomp/docs/mods.md` (the Network Play notes: the freeze and its fix)
+
+**Interfaces:** none new.
+
+- **`svc_wait_process_wide_key`:** only `R_OK` returns holding the mutex. On a timeout or cancel it returns the
+  error without reacquiring. Delete the reacquire block and fix the comment above it.
+- **`block_current`:** after `kwait`, `if (t->wait_kind == WAIT_NONE) break;` comes before the timeout check, so the
+  waker's result (R_OK, perhaps with the mutex) wins.
+- **`svc_arbitrate_lock`:** if `owner == t_cur->handle`, log once per address
+  `"[kernel] guest locks a mutex it already owns (addr %llx lr %llx)"`. Logging only; behaviour is unchanged.
+
+- [ ] **Step 1: a failing harness**, if it's feasible. One thread locks the mutex, then waits on the condition
+  variable with a 1 ms timeout. It expects 0xEA01 and a mutex word ≠ its own handle, then locks again without
+  blocking (a 1 s watchdog fails the test).
+- [ ] **Step 2: implement.**
+- [ ] **Step 3: run the harness** (if one exists), then `scripts/check.sh` and `make GAME=smm2 -j10 all`.
+- [ ] **Step 4: offline Co-op.** Use the freeze report's offline command (local-nex, Course World overrides off,
+  muted and hidden). Pass:
+  - `[metal] t=` lines keep coming after `enl cSilentError`;
+  - the game returns to the Network Play menu (shot);
+  - the test server keeps getting PINGs;
+  - no `already owns` log line.
+- [ ] **Step 5: regressions.**
+  - Input replays still in sync: `tools/replay_sync.py` as PROGRESS.md / recomp docs describe (the 31-session
+    suite, or as many sessions as run in under an hour), with all updates identical.
+  - One normal `ours` boot to Course World, with one course played.
+  - The mods.md 100 Mario "Test recipe" with at least one clear.
+- [ ] **Step 6: live, once** (only when no other `smm2recomp` is running with `RECOMP_NET_BACKEND=nextendo`). Co-op
+  gets past the NAT check stage without the window freezing. Record what the game shows next.
+- [ ] **Step 7: commit** `recomp kernel: a timed-out condition-variable wait returns without the mutex (Horizon); fixes the Co-op search freeze`.

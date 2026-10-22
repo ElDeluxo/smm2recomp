@@ -29,7 +29,8 @@ Environment variables, or `smm2mods.ini` (`key=value` lines) in the data folder 
 | `RECOMP_MOD_SERVER=<url>` | `server=` | the course server, plain `http://` (default `http://127.0.0.1:8080`) |
 | `RECOMP_MOD_TOKEN=<token>` | `token=` | your account's token on that server (see below); keep it private |
 | `RECOMP_MOD_RULESET=hundred\|smm2` | `ruleset=` | `hundred` (default): 100 Mario is offered: Course World's Endless Challenge button opens SMM1's 100 Mario Challenge, and B on its difficulty select leads on to SMM2's own Endless Challenge (both in one build; SMM2's rules there until the player leaves that menu); `smm2`: the button opens SMM2's own Endless Challenge only |
-| `RECOMP_MOD_COURSES=server\|tgrcode` | `courses=` | `server` (default): the server above; `tgrcode` (iOS default, with the mod on): a course server built into the app on a loopback port, with a local account, fed from TGRCode's archive of SMM2 courses (needs the course key table: the mod writes it once from your game into `mods-generated/course_table.bin`, private); falls back to `server=` when the build has no built-in server. Also in the Mods tab ("Courses: TGRCode"), from the next start |
+| `RECOMP_MOD_COURSES=server\|tgrcode` | `courses=` | `server` (default): the server above; `tgrcode` (iOS default, with the mod on; hybrid's default, below): a course server built into the app on a loopback port, with a local account, fed from TGRCode's archive of SMM2 courses (needs the course key table: the mod writes it once from your game into `mods-generated/course_table.bin`, private); falls back to `server=` when the build has no built-in server. Also in the Mods tab ("Courses: TGRCode"), from the next start |
+| `RECOMP_MOD_COURSE_WORLD=mod\|backend` | `course_world=` | only with another online backend than `ours` (below): `mod` (nextendo's default): **hybrid**, the mod answers Course World, the Endless Challenge and 100 Mario while the game's own NEX client logs in to the backend; `backend`: all of Course World from the backend, the mod's online overrides off. With `local-nex` only `mod` turns hybrid on |
 | `RECOMP_MOD_TIMEOUT_MS=<n>` | `timeout_ms=` | per request (default 8000) |
 | `RECOMP_MOD_LOG=1` | `log=1` | log every request and answer |
 
@@ -59,7 +60,7 @@ leaderboards) and SMM2-rule high scores.
 |---|---|---|
 | HTTP client | `runtime/net/http.c` | blocking HTTP/1.1, timeouts, sockets (Winsock on Windows); one connection per request |
 | JSON | `runtime/net/json.c` | a small reader for the server's answers |
-| Pretend online | `runtime/net/online.h`, `services/nifm.c`, `acc.c`, `mii.c` | with the mod on: nifm reports a connection, acc a network service account (a local placeholder token), mii a default Mii; nothing talks to Nintendo |
+| Pretend online | `runtime/net/online.h`, `services/nifm.c`, `acc.c`, `mii.c` | with the mod on (backend `ours`; hybrid has a real connection): nifm reports a connection, acc a network service account (a local placeholder token), mii a default Mii; nothing talks to Nintendo |
 | Login | `games/smm2/mods/online.c` | the game's network session ("enl") logs in without NEX; Course World's login sequence gets neutral answers and the player's record (name from the server, a default Mii, registered) |
 | Endless | `games/smm2/mods/endless.c` | the Endless Challenge's request functions answered from the server (below) |
 | Bridge | `games/smm2/mods/bridge.c`, `hundred.h` | 100 Mario: SMM1's screens on top, SMM2's play underneath |
@@ -554,6 +555,7 @@ straight away; the Course Maker is reached with `LARECOMP_HOST_INPUT` (L + R, A,
 and in the Ryujinx trace build (`tools/replay_sync.py`'s comparison): 606 of 606 player updates identical, the whole
 12 KB player object and the input block too.
 
+## The game's own network stack (backends local-nex and nextendo): a local NEX server and Nextendo Network
 ## SMW goal wipe (`games/smm2/mods/smw_goal.c`)
 
 In Super Mario World style courses, a goal-tape clear in real play ends the way SMW's levels do: once the fanfare is
@@ -719,44 +721,98 @@ now" (`lanky.c`).
 
 The mod above *fakes* being online: nifm / acc / friends / mii answer locally, the enl session logs in without NEX,
 and the game's request functions are answered from our HTTP server. The runtime also has a **real network stack**
-for the game's own NEX client, so that SMM2's NEX code can one day talk to a community server (Nextendo Network)
-or our own NEX server. For now it is **offline: local test server only**. Nothing reaches Nextendo's servers until
-the owner has their permission and an app registration, and nothing ever reaches Nintendo's.
+for the game's own NEX client, so that SMM2's NEX code talks to a NEX server: a local test server (`local-nex`), or
+the community servers of Nextendo Network (`nextendo`, with a signed-in Nextendo account). Nothing ever reaches
+Nintendo's servers: only the redirect table's names resolve, every other name is "no such name".
 
 ### Backends
 
 | `backend=` (smm2mods.ini) / `RECOMP_NET_BACKEND` | What runs |
 |---|---|
 | `ours` (default) | the mod path above; the game's sockets stay off (only the virtual LAN), every name lookup fails |
-| `local-nex` | the mod's online overrides switch **off** (`mod_hundred()` is false), so the game's own enl / NEX code runs on real host sockets against a local NEX test server |
-| `nextendo` | refused (logged: awaiting registration); the backend stays `ours` |
+| `local-nex` | the mod's online overrides switch **off** (`mod_hundred()` is false), so the game's own enl / NEX code runs on real host sockets against a local NEX test server; with `course_world=mod`: hybrid (below), the offline test of the nextendo setup |
+| `nextendo` | with a signed-in Nextendo account (`runtime/net/nextendo.h`): **hybrid** (below): the game's own NEX client logs in to Nextendo's SMM2 server, Network Play is theirs, and the mod keeps answering Course World, the Endless Challenge and 100 Mario (courses from TGRCode unless `courses=` says otherwise; `hundred=` doesn't matter). `course_world=backend`: all of Course World from Nextendo, the mod's online overrides off. Not signed in: logged ("not signed in; using our server") and the backend is `ours` |
 
-In the Mods tab: "Online: local NEX test server (developers)" (the next start). For the coming app-level settings
-page, `net_backend_options()` / `net_backend_select()` (`runtime/net/netcfg.h`) list the three with Nextendo greyed
-out ("awaiting registration").
+In the Mods tab's Online section: the "Online backend" choice (the next start) and the Nextendo account (Sign in / Sign out). For the app-level settings page,
+`net_backend_options()` / `net_backend_select()` (`runtime/net/netcfg.h`) list the three; Nextendo can be chosen
+while an account is signed in.
+
+### Hybrid: Network Play from the backend, Course World from the mod (`games/smm2/mods/hybrid.h`)
+
+The owner's choice for Nextendo (DECISIONS.md 2026-10-20 "Nextendo for multiplayer only"). With `backend=nextendo`
+(or `local-nex` with `course_world=mod`, for offline tests) the mod answers Course World but not the login:
+
+| What | Answered by |
+|---|---|
+| nifm / acc / mii, the enl session's login, Course World's login sequence (GetUserNameNgType, SyncUserProfile (a blank name filled, below), GetMiiClothes, LoginCheck, UpdateLastLoginInfo, PostActivityQuest, GetNewNotification, GetEventCourseStatus) | the game's own NEX client, against the backend (`mod_answers_login()` is false) |
+| GetApplicationConfig | the backend's (Utility.GetIntegerSettings(0): Network Play's switches), then the mod switches the Endless Challenge's four keys (+0x737b0, 0..3) on: `GetApplicationConfig: the backend's, Endless on` |
+| GetUsers (own) | the backend's record of the player (name, Mii, maker code, registration, player id), then the mod writes our server's Endless bests into it (entry +0x114) and sets the 100 Mario unlocks; its player id (entry +0x58) becomes the player's own id in the mod's answers (`mod_set_backend_pid`: "my course", "me", the player's courses on our server; never logged). No Maker avatar name is written; a blank record name becomes the Nextendo user name (below): `GetUsers (own): the backend's record, our Endless bests` |
+| Course World's lists, makers, downloads, uploads, comments, likes; the Endless Challenge; 100 Mario | the mod (`mod_hundred()` is true whatever `hundred=` says): TGRCode by default (`courses=` unset: `hybrid: courses from TGRCode (courses= not set)`; the built-in server's local account is named after the Nextendo user), or `courses=server` |
+| Network Play (matchmaking, rooms, PIA) | the game's own NEX client (Task 7 of the Nextendo plan routes its course search and download) |
+
+[obs, 2026-10-20] Offline (`local-nex`, `course_world=mod`, the test server's Endless keys 0..3 off): the login
+(ValidateAndRequestTicketWithParam), GetIntegerSettings, GetUsers, GetUsernameNgType, SyncUserProfile, GetMiiClothes,
+GetNewNotification, GetEventCourseStatus and, on opening Challenge Modes, UpdateLastLoginTime (59) reach the test
+server; no other DataStore request does. With RECOMP_MOD_TRACE=1 no wrapper outside the mod's answers ran ("not
+answered by the mod": none, as with backend `ours`), so no other Course World request is answered by the backend.
+New Game, course start and a clear came from our server; Network Play's Co-op reached
+MatchmakeExtension.AutoMatchmakeWithParam_Postpone with no `enl command` line. Live on Nextendo: the NEX login,
+TGRCode's Popular list and a course played, 100 Mario (New Game, a course with 100 lives); the game's TCP went only
+to 51.178.29.194. The NAT check's names come to sfdnsres as `nncs1-%` / `nncs2-%`: `net_resolve` reads `%` as nsd's
+environment (`lp1`), so `nncs2-%` reaches the NAT check (164.132.111.120, [obs] live) and `nncs1-%` the game server.
+**The Co-op search freeze (fixed).** [obs] The Co-op search screen stopped presenting frames for good about 10 s
+after AutoMatchmake, offline (also with the mod off) and live alike. It was the runtime's kernel, not the network
+code: matchmaking's two worker threads poll a condition variable with 5 ms timed waits, and a timed-out
+svcWaitProcessWideKeyAtomic took the mutex back. Horizon returns 0xEA01 without it, and the game's SDK (nn::os
+TimedWait, sdk+0x32f240) then locks it itself, so each worker waited on itself (ArbitrateLock with itself as owner) at
+its first timeout; when matchmaking failed, the main thread blocked behind them in the error teardown. Now a
+timed-out wait returns without the mutex (`runtime/kernel.c`; tests: `tools/test_kernel_condvar.sh`), and a lock on a
+mutex the thread already owns is logged (`[kernel] guest locks a mutex it already owns`). [obs] offline the search
+now ends in the game's own error path (MatchMaking.2 is not implemented by the test server: enl `cSilentError`, a
+NEX disconnect) and the game is back on the Network Play menu at 60 fps. [obs] Live (Nextendo) the kernel deadlock is
+gone too, but Co-op still stops: the NAT check gets no UDP reply, the game tries again twice (enl `cSilentError`,
+`cLogIn`, `cAutoMatchReady`, about 17 s each), then goes to netplay `cError`, and from there it draws nothing new
+(the "Finding players" screen stays, the window stays responsive and NEX keeps pinging; the main thread waits in
+WaitForAddress, called from main+0x75f5b0). Not looked into yet.
+
+**The player's name.** SyncUserProfile (main+0x14cef40) sends the name in the NetObj string at +0x738e0 (buffer
++0x738e8, capacity +0x738f0; 10 characters), the save's Maker name; a save whose avatar was made without the
+console's Mii editor has a blank one (empty or spaces), and the backend would then show the player without a name.
+In hybrid a blank name is replaced, for that request only (the save isn't written by the mod), by the backend's
+name for the player: nextendo's user name, or (local-nex) the name in the backend's record of the player
+(`SyncUserProfile: the save's Maker name is blank; sending the backend's name`). A name the player set is sent as
+it is. GetUsers (own) likewise fills a blank name in the record (entry +0x30) with the Nextendo user name, so the
+card shows it before the backend has the synced one. [obs] offline the profile shows the test server's `--name`,
+live the Nextendo user name.
+
+The net log's TLS plaintext dump masks the player id in NEX station URLs (`PID=<hidden>`, `net_log_redact`).
 
 ### Settings (all in smm2mods.ini, or the environment)
 
 | ini key | Variable | Meaning |
 |---|---|---|
 | `backend=` | `RECOMP_NET_BACKEND` | above |
+| `course_world=` | `RECOMP_MOD_COURSE_WORLD` | `mod` / `backend`: who answers Course World with these backends (hybrid, above) |
 | `nex_test_server=` | `RECOMP_NET_TEST_SERVER` | `ip[:port]` of the test server (default `127.0.0.1:44300`); local addresses only (loopback, private, link-local, 100.64/10). The game's TCP connections to it on 443 go to that port |
 | `net_hosts=` | `RECOMP_NET_HOSTS` | extra redirect entries, `name=ip;*.domain=ip` (local addresses only) |
-| `tls_trust=` | `RECOMP_NET_TLS_TRUST` | `local-ca` (default): the server must present a certificate from the local test CA (`net/test-ca.pem`); `any`: any certificate, only towards local addresses |
+| `tls_trust=` | `RECOMP_NET_TLS_TRUST` | local-nex: `local-ca` (default): the server must present a certificate from the local test CA (`net/test-ca.pem`); `any`: any certificate, only towards local addresses. (nextendo: always the pin) |
 | `tls_ca=` | `RECOMP_NET_TLS_CA` | another CA file |
+| `nextendo_server=` | `RECOMP_NEXTENDO_SERVER` | nextendo: the game server's address (default `51.178.29.194`) |
+| `nextendo_nat=` | `RECOMP_NEXTENDO_NAT` | nextendo: the NAT check's address (default `164.132.111.120`) |
+| `nextendo_tls_pin=` | `RECOMP_NEXTENDO_TLS_PIN` | nextendo: the game server certificate's SPKI SHA-256 (64 hex digits) |
 | `id_token_file=` | `RECOMP_NET_ID_TOKEN_FILE` | a backend-issued ID token to send instead of the local one |
-| `nex_token_file=` | `RECOMP_NET_NEX_TOKEN_FILE` | a backend's NEX login token (Nextendo's `nx2.` token), carried in the local ID token's `nnex` claim; a secret: never logged |
+| `nex_token_file=` | `RECOMP_NET_NEX_TOKEN_FILE` | local-nex: a backend's NEX login token, carried in the local ID token's `nnex` claim; a secret: never logged (nextendo: the signed-in account's own) |
 | `net_log=1` | `RECOMP_NET_LOG=1` | log every socket, name, TLS and token call (TLS plaintext: the first 160 bytes of each read / write) |
 
 ### Pieces
 
 | Piece | Where | What |
 |---|---|---|
-| Configuration | `runtime/net/netcfg.c` | backend, **deny-by-default redirect table** (with `local-nex`: `*.nintendo.net`, `*.nintendo.com`, `*.nintendowifi.net`, `*.nintendo.co.jp`, `*.nintendoswitch.cn` → the test server; every other name: no such name), destination policy (a game socket reaches loopback and the table's targets only), TLS trust |
-| Sockets | `runtime/services/bsd_host.c` (bsd.c dispatches) | `bsd:u` / `bsd:s` on host sockets (POSIX and Winsock, `runtime/net/hostsock.h`): TCP and UDP, non-blocking I/O, poll / select, socket options, accept / listen, FreeBSD errno numbers. Blocking calls wait in 50 ms slices with the guest thread's core released (`kernel_host_wait_begin`). A UDP port the game binds that is taken on the host gets another host port, and the game keeps seeing its own, the same pair again on a rebind (two instances on one machine). A UDP socket the game bound and closes is **parked** for 10 s and handed back when the game binds that port again (PIA closes and rebinds after its NAT check; the NAT mapping must survive). Connects / sends elsewhere: `ENETUNREACH`, logged. The virtual LAN keeps its own path |
+| Configuration | `runtime/net/netcfg.c` | backend, **deny-by-default redirect table** (`net_hosts=` first; with `local-nex`: `*.nintendo.net`, `*.nintendo.com`, `*.nintendowifi.net`, `*.nintendo.co.jp`, `*.nintendoswitch.cn` → the test server; with `nextendo`: `nncs2-lp1.n.n.srv.nintendo.net` → their NAT check, the same five domains → their game server; every other name: no such name), destination policy (local-nex: loopback and the table's targets; nextendo: TCP to their game server and NAT check only, UDP anywhere for PIA's peers), TLS trust |
+| Sockets | `runtime/services/bsd_host.c` (bsd.c dispatches) | `bsd:u` / `bsd:s` on host sockets (POSIX and Winsock, `runtime/net/hostsock.h`): TCP and UDP, non-blocking I/O, poll / select, socket options, accept / listen, FreeBSD errno numbers. Blocking calls wait in 50 ms slices with the guest thread's core released (`kernel_host_wait_begin`). A UDP port the game binds that is taken on the host gets another host port, and the game keeps seeing its own, the same pair again on a rebind (two instances on one machine). A UDP socket the game bound and closes is **parked** for 10 s and handed back when the game binds that port again (PIA closes and rebinds after its NAT check; the NAT mapping must survive). Connects / sends elsewhere: `ENETUNREACH`, logged (UDP: `net_dest_allowed_udp`). With nextendo a bind to INADDR_ANY stays INADDR_ANY. The virtual LAN keeps its own path |
 | Names | `runtime/services/names.c` | `nsd:u` / `nsd:a` (`%` → `lp1`: the game asks for `g22306d00-%.s.n.srv.nintendo.net`) and `sfdnsres` (GetAddrInfo(WithOptions), GetHostByName(WithOptions)) from the redirect table only; the host's DNS is never asked |
-| TLS | `runtime/services/ssl.c` + `third_party/mbedtls` (3.6.7 LTS, Apache-2.0) | `ssl`: contexts, connections over the game's socket, handshake (TLS 1.2), read / write / peek / pending / poll, ALPN (http/1.1 only), server certificate out. The **runtime's** trust policy decides (the game's own CAs and client certificates are ignored); when the game names an address as the host, the name last resolved to it is used for SNI and the check ("rebuilt") |
-| Account | `runtime/net/token.c`, `services/acc.c` | a local network service account ID (`GetAccountId`; the game logs in with it as its NEX user name) and an ID token: a JWT (HS256, `kid` `recomp-local`, claims shaped like a network service account's plus `tv` = the game version and, with `nex_token_file=`, `nnex`) signed with a local key, both kept in `net/account.txt` in the data folder (private). `id_token_file=` plugs a whole backend-issued token in instead |
+| TLS | `runtime/services/ssl.c` + `third_party/mbedtls` (3.6.7 LTS, Apache-2.0) | `ssl`: contexts, connections over the game's socket, handshake (TLS 1.2), read / write / peek / pending / poll, ALPN (http/1.1 only), server certificate out. The **runtime's** trust policy decides (the game's own CAs and client certificates are ignored); when the game names an address as the host, the name last resolved to it is used for SNI and the check ("rebuilt"). With nextendo the chain is not checked (their certificate is self-signed) but the certificate's public key must match the pin (`ssl_pin_check`), else the connection is refused before the game sends anything |
+| Account | `runtime/net/token.c`, `services/acc.c` | a local network service account ID (`GetAccountId`; the game logs in with it as its NEX user name) and an ID token: a JWT (HS256, `kid` `recomp-local`, claims shaped like a network service account's plus `tv` = the game version and, with `nex_token_file=`, `nnex`) signed with a local key, both kept in `net/account.txt` in the data folder (private). `id_token_file=` plugs a whole backend-issued token in instead. With nextendo: the account's PID, its user name as the nickname, and an RS256 ID token (below) |
 | Test server | `tools/nex_test_server/` (Python, standard library + the `openssl` command) | a local NEX server: TLS on a local address, the HTTP/1.1 WebSocket upgrade, PRUDP Lite (SYN, CONNECT, acks, pings, fragments, resends), RMC, the Kerberos-style ticket (RC4 + HMAC-MD5), the secure server on PRUDP port 2, and enough of SMM2's DataStore for Course World's login (table below). Every request is logged and decoded where known; the token's signature is checked with `net/account.txt` and masked in the log. Makes the local test CA and its certificate in `recomp/private/smm2/net/` on first run (git-ignored; the proprietary guard blocks keys and certificates) |
 
 ### What the game does [obs, v3.0.3, backend local-nex]
@@ -799,18 +855,35 @@ lists, course downloads and the rest of DataStore are not answered yet (they log
 The server logs the game's TLS connection, the upgrade, the PRUDP handshakes, the decoded login (the token's
 signature masked) and every request; then go to Course World: its top screen opens.
 
-### Before a real Nextendo connection (research/specs/recomp-nextendo.md)
+### The Nextendo backend (research/specs/recomp-nextendo.md)
 
-- the owner's go-ahead: Nextendo's permission and **an app registration** (a client ID for the recomp; their
-  developer portal is team-only, and their first-party client ID must not be used);
-- **app-level sign-in**: OAuth 2.0 with PKCE (loopback redirect on desktop, `ASWebAuthenticationSession` on iOS),
-  then their NEX token each launch (24 h); it goes into the ID token's `nnex` claim (`nex_token_file=` today);
-  `GetAccountId` must return their PID (today: the local account's ID);
-- **trust and addresses**: their CA pinned (a third `tls_trust` mode) and redirect entries to their public
-  addresses, both behind an explicit setting (today every redirect target must be a local address and nothing
-  else is reachable); UDP to arbitrary peers for PIA (today: refused);
+The app is registered with Nextendo (a public OAuth client). The player signs in once in the browser
+(`runtime/net/nextendo.c`: OAuth 2.0 + PKCE; the refresh token in the Keychain or a private file); `backend=nextendo`
+then takes effect at the next start.
+
+- **Names and addresses** (`netcfg.c`): `nncs2-lp1.n.n.srv.nintendo.net` → their NAT check `164.132.111.120`; every
+  other name under the five Nintendo domains → their game server `51.178.29.194` (the game's NEX host is
+  `g22306d00-lp1.s.n.srv.nintendo.net`). Only these built-in targets (and `nextendo_server=` / `nextendo_nat=`) may be
+  public; `net_hosts=` stays local-only. TCP reaches those two addresses only (not `net_hosts=` targets); UDP any address (PIA peer to peer).
+- **TLS** (`ssl.c`): their game server's certificate is self-signed (`CN=nintendo-private-server`), so it is pinned:
+  after the handshake the SHA-256 of its SubjectPublicKeyInfo must be
+  `d2e7388e48ee30cfbecfbeb522874f2cc6b85f7aa1105c57669f3c2aa85fb30e` (`nextendo_tls_pin=` replaces it). A mismatch
+  (a new certificate, or someone in between) logs "certificate pin mismatch (expected Nextendo's game server);
+  refused" and fails the handshake; there is no fallback to "any".
+- **Account** (`acc.c`): `GetAccountId` is the Nextendo PID (the game logs in with it as its NEX user name), the
+  profile's nickname is the Nextendo user name (cut to 32 bytes on a character boundary). `LoadIdTokenCache` first
+  makes sure a game token is ready (`nextendo_prepare_game_login`, at most 10 s with the guest core free; cached
+  for 24 h); without one the game gets no ID token (size 0) and shows its own login error.
+- **ID token** (`token.c`): an RS256 JWT shaped like a network service account's (`kid` `nextendo-baas-key-1`, the
+  BaaS issuer and audience, `sub` = the PID, a kept device id in `di` / `bs:did`, `tv` = the game version) whose
+  `nnex` claim carries the game token; that is what their server checks. The RSA-2048 key is made once and kept in
+  `net/nextendo-jwt-key.pem` (private). No game token (offline, the sign-in ended): no ID token, and the game shows
+  its own login error. The PID, the game token and the ID token are never logged (lengths only).
 - the rest is the game's own code: NAT check (`nncs1/2`), MatchmakeExtension, PIA peer-to-peer; their gates (a
   verified e-mail, one device at a time) show as login errors.
+
+Tests: `tools/test_net.sh` (`tools/test_netcfg.c`: routing, destinations, the ID token's signature, the pin;
+`NET_TEST_LIVE=1` adds a real handshake with their game server through the pin check).
 
 ### Proof 3 (two recomp instances in one Network Play lobby): where this stands (WIP, paused 2026-10-19)
 
