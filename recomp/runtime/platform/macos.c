@@ -43,6 +43,9 @@ void plat_init(void) {
         snprintf(path, sizeof path, "%s/Documents", home ? home : "/tmp");
         mkdir(path, 0755);
         snprintf(path, sizeof path, "%s/Documents/smm2recomp.log", home ? home : "/tmp");
+        char prev[1100];  // (the last session's log is kept beside it: a crash's is gone otherwise at the next start)
+        snprintf(prev, sizeof prev, "%s/Documents/smm2recomp.previous.log", home ? home : "/tmp");
+        rename(path, prev);
         if (freopen(path, "w", stderr)) { setvbuf(stderr, NULL, _IOLBF, 0); dup2(fileno(stderr), 1); }
     }
 #else
@@ -59,6 +62,11 @@ void plat_init(void) {
             mkdir(dir, 0755);
             snprintf(path, sizeof path, "%s/" GAME_ID "recomp.log", dir);
             bool append = getenv("LASRECOMP_LOG_APPEND") != NULL;  // (a re-exec for the guest window: the same log)
+            if (!append) {  // (the last session's log is kept beside it: a crash's is gone otherwise at the next start)
+                char prev[1100];
+                snprintf(prev, sizeof prev, "%s/" GAME_ID "recomp.previous.log", dir);
+                rename(path, prev);
+            }
             if (freopen(path, append ? "a" : "w", stderr)) {
                 setvbuf(stderr, NULL, _IOLBF, 0);
                 dup2(fileno(stderr), 1);

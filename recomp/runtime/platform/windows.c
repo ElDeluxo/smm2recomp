@@ -134,6 +134,12 @@ static void log_to_file_without_console(void) {
     if (slash) slash[1] = 0;
     snprintf(g_log_path, sizeof g_log_path, "%s" GAME_EXE ".log", exe);
     bool append = getenv("LASRECOMP_LOG_APPEND") != NULL;
+    if (!append) {  // (the last session's log is kept beside it: a crash's is gone otherwise at the next start)
+        char prev[MAX_PATH + 16];
+        snprintf(prev, sizeof prev, "%s" GAME_EXE ".previous.log", exe);
+        remove(prev);
+        rename(g_log_path, prev);
+    }
     if (!freopen(g_log_path, append ? "ab" : "wb", stderr)) { g_log_path[0] = 0; return; }
     setvbuf(stderr, NULL, _IONBF, 0);
     _dup2(_fileno(stderr), _fileno(stdout));

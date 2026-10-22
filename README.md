@@ -48,7 +48,8 @@ checks it, recompiles the game code on your computer, and then runs it.
 
 **If something goes wrong,** please open an [issue](https://github.com/smm2recomp/smm2recomp/issues)
 and attach the log files from the program's data folder: `smm2recomp.log` (the program) and
-`logs/setup.log` (the setup's steps). Neither contains key values. The data folder is:
+`logs/setup.log` (the setup's steps). Neither contains key values. After a crash, the next start keeps the crashed
+session's log as `smm2recomp.previous.log`: attach that one. The data folder is:
 
 | System | Data folder |
 |---|---|

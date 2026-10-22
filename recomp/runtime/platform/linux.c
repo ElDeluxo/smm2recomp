@@ -139,6 +139,11 @@ static void log_to_file_without_terminal(void) {
     if (!dir) return;
     mkdir(dir, 0755);
     snprintf(g_log_path, sizeof g_log_path, "%s/" GAME_EXE ".log", dir);
+    {  // (the last session's log is kept beside it)
+        char prev[sizeof g_log_path + 16];
+        snprintf(prev, sizeof prev, "%s/" GAME_EXE ".previous.log", dir);
+        rename(g_log_path, prev);
+    }
     if (!freopen(g_log_path, "w", stderr)) { g_log_path[0] = 0; return; }
     dup2(STDERR_FILENO, STDOUT_FILENO);
     int rd = open(g_log_path, O_RDONLY | O_CLOEXEC);
@@ -174,6 +179,11 @@ static void log_to_file_without_terminal(void) {
     mkdir(dir, 0755);
     snprintf(g_log_path, sizeof g_log_path, "%s/" GAME_EXE ".log", dir);
     bool append = getenv("LASRECOMP_LOG_APPEND") != NULL;
+    if (!append) {  // (the last session's log is kept beside it: a crash's is gone otherwise at the next start)
+        char prev[sizeof g_log_path + 16];
+        snprintf(prev, sizeof prev, "%s/" GAME_EXE ".previous.log", dir);
+        rename(g_log_path, prev);
+    }
     if (!freopen(g_log_path, append ? "a" : "w", stderr)) { g_log_path[0] = 0; return; }
     dup2(STDERR_FILENO, STDOUT_FILENO);
     setenv("LASRECOMP_LOG_APPEND", "1", 1);
