@@ -28,8 +28,8 @@ checks it, recompiles the game code on your computer, and then runs it.
 
    | System | Package | Also needs |
    |---|---|---|
-   | Windows 10 / 11, x64 | `SMM2Recomp-windows-x86_64.zip` | a CPU with AVX2, a Vulkan 1.3 graphics driver ([docs/windows.md](docs/windows.md)) |
-   | Linux, x64 or arm64 | `SMM2Recomp-linux-x86_64.tar.gz`, `-linux-aarch64.tar.gz` | SDL3 3.2+ and a Vulkan 1.3 driver from your distribution (Debian 13, Ubuntu 25.04, Fedora 41, Arch or newer); x64: AVX2 |
+   | Windows 10 / 11, x64 | `SMM2Recomp-windows-x86_64.zip` | a CPU with x86-64-v2 (AVX2 used when available), a Vulkan 1.3 graphics driver ([docs/windows.md](docs/windows.md)) |
+   | Linux, x64 or arm64 | `SMM2Recomp-linux-x86_64.tar.gz`, `-linux-aarch64.tar.gz` | SDL3 3.2+ and a Vulkan 1.3 driver from your distribution (Debian 13, Ubuntu 25.04, Fedora 41, Arch or newer); x64: x86-64-v2 (AVX2 used when available) |
    | macOS 15+, Apple silicon | `SMM2Recomp-macos-arm64.zip` (`Super Mario Maker 2.app`) | nothing; the app isn't notarized: right-click > Open the first time (macOS then checks the whole app once, which can take a few minutes) |
 
 2. **Unpack it and start it** (`smm2recomp.exe`, `./smm2recomp` or `Super Mario Maker 2.app`). Windows

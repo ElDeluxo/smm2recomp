@@ -18,7 +18,7 @@ game files. Its setup screen takes your dump, checks it, and recompiles the game
 
 - **Windows and hardware:**
   - Windows 10 or 11, 64-bit.
-  - A CPU with AVX2: Intel Haswell (2013) or newer, AMD Zen or Excavator or newer.
+  - A CPU with x86-64-v2: Intel Nehalem (2008) or newer, AMD Bulldozer or newer. AVX2 (Intel Haswell / 2013 or newer, AMD Zen or Excavator or newer) is used when available, but not required.
   - A graphics driver with **Vulkan 1.3**. Current NVIDIA, AMD and Intel drivers have it.
 - **Your own dump of Super Mario Maker 2 with the 3.0.3 update**, either of:
   - the game's **NSP or XCI** and the **3.0.3 update's NSP** (NSZ / XCZ must be decompressed first), or
@@ -123,7 +123,7 @@ To also build the game code on the Mac from your own dump (for testing; never sh
 
 ## Troubleshooting
 
-- **"needs a CPU with AVX2"**: the game code is compiled for x86-64-v3, so older CPUs can't run it.
+- **"needs a CPU with x86-64-v2"**: the game code needs at least x86-64-v2 (pre-2008 CPUs can't run it). It builds for v2 and upgrades to x86-64-v3 (AVX2) where available.
 - **The setup screen says a file can't be used / the version is wrong:** it names the problem. The recomp needs
   exactly 3.0.3: add the update's NSP (or its extracted ExeFS) next to the base game.
 - **"hactool failed" / no system titles in the firmware:** `prod.keys` must be your console's, dumped after the

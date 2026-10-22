@@ -102,12 +102,12 @@ EOF
         linux-*) cat >> "$f" <<EOF
 
 Linux needs SDL3 3.2 or newer and a Vulkan 1.3 driver from your distribution (Debian 13, Ubuntu 25.04, Fedora 41,
-Arch or newer: e.g. sudo apt install libsdl3-0 mesa-vulkan-drivers). x86-64 needs a CPU with AVX2.
+Arch or newer: e.g. sudo apt install libsdl3-0 mesa-vulkan-drivers). x86-64 needs a CPU with x86-64-v2 (AVX2 used when available).
 EOF
         ;;
         windows-*) cat >> "$f" <<EOF
 
-Windows 10 / 11, 64-bit, a CPU with AVX2 and a graphics driver with Vulkan 1.3.
+Windows 10 / 11, 64-bit, a CPU with x86-64-v2 (AVX2 used when available) and a graphics driver with Vulkan 1.3.
 EOF
         ;;
         macos-*) cat >> "$f" <<EOF

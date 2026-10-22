@@ -192,7 +192,7 @@ else ifeq ($(PLATFORM),linux)
 EXE      := $(B)/$(GAME_ID)recomp
 DEPINC   := $(if $(DEPS),-I$(DEPS)/include)
 ifeq ($(ARCH),x86_64)
-GENARCH  ?= $(if $(CROSS_CC),-mcpu=x86_64_v3,-march=x86-64-v3)  # AVX2 + FMA for the lifted FP/SIMD code (checked at startup; zig: -mcpu)
+GENARCH  ?= $(if $(CROSS_CC),-mcpu=x86_64_v2,-march=x86-64-v2)  # baseline for the lifted FP/SIMD code (gamebuild.c upgrades to v3 where the CPU has AVX2/FMA/BMI2; startup only requires v2)
 endif
 GENFLAGS += $(GENARCH) -fPIC
 OSFLAGS  := -Wno-format
@@ -210,7 +210,7 @@ else
 EXE      := $(B)/$(GAME_ID)recomp.exe
 DEPINC   := $(if $(DEPS),-I$(DEPS)/include)
 OSFLAGS  := -D_FILE_OFFSET_BITS=64 -D_POSIX_THREAD_SAFE_FUNCTIONS -D_CRT_RAND_S -DWIN32_LEAN_AND_MEAN -DNOMINMAX
-GENARCH  ?= $(if $(CROSS_CC),-mcpu=x86_64_v3,-march=x86-64-v3)
+GENARCH  ?= $(if $(CROSS_CC),-mcpu=x86_64_v2,-march=x86-64-v2)  # (baseline; gamebuild.c upgrades to v3 where available)
 GENFLAGS += -D_FILE_OFFSET_BITS=64 $(GENARCH)
 LDFLAGS  := $(LLD) -Wl,--stack,16777216 $(if $(DEPS),-L$(DEPS)/lib) -lSDL3 $(FFMPEG_LIBS) \
             -lvulkan-1 -lwinmm -lole32 -lshell32 -lcomdlg32 -luuid -lshaderc_shared -lws2_32 -lbcrypt
