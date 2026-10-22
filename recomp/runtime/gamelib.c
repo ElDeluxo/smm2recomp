@@ -11,6 +11,9 @@
 #endif
 
 #include "paths.h"
+#if defined(__x86_64__)
+#include "platform/x86_cpu.h"
+#endif
 #include "rt.h"
 
 static const GameLibTables *g_tables;
@@ -33,16 +36,27 @@ bool gamelib_load(const char *game_dir, char *why, size_t why_size) {
 }
 #else
 
-// The library's id file (<library>.id, written next to it by the build): its GAMELIB_ID, read without loading it.
+// The library's id file (<library>.id, written next to it by the build): its GAMELIB_ID, read without loading it. On
+// x86-64 the CPU level it was built for follows ("x86-64-v3", "x86-64-v2", "forced"; gamebuild.c): a v3 build, or one
+// from before the level was written (it may be v3), needs a CPU with AVX2 / FMA / BMI2, else it is built again.
 static bool id_matches(const char *lib) {
-    char path[1100], id[128] = {0};
+    char path[1100], id[160] = {0};
     snprintf(path, sizeof path, "%s.id", lib);
     FILE *f = fopen(path, "rb");
     if (!f) return false;
     size_t n = fread(id, 1, sizeof id - 1, f);
     fclose(f);
     while (n && (id[n - 1] == '\n' || id[n - 1] == '\r')) id[--n] = 0;
-    return !strcmp(id, GAMELIB_ID);
+    char *level = strchr(id, ' ');
+    if (level) *level++ = 0;
+    if (strcmp(id, GAMELIB_ID)) return false;
+#if defined(__x86_64__)
+    if ((!level || !strcmp(level, "x86-64-v3")) && !x86_cpu_has_v3()) {
+        LOG("[gamelib] the game code was built for a CPU with AVX2 (x86-64-v3); this one hasn't: building it again\n");
+        return false;
+    }
+#endif
+    return true;
 }
 
 static bool exists(const char *p) {

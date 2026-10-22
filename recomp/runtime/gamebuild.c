@@ -562,7 +562,14 @@ bool gamebuild_run(const char *game_dir, const GameBuildOpts *o, char *why, size
         char idp[1100];
         snprintf(idp, sizeof idp, "%s.id", lib);
         FILE *f = NULL;
-        if (rename(tmp, lib) != 0 || !(f = fopen(idp, "wb")) || fprintf(f, "%s\n", GAMELIB_ID) < 0) {
+        // (x86-64: the level it was built for follows the id, gamelib.c id_matches: a v3 build moved to a CPU without
+        // AVX2 is built again instead of failing on its first AVX2 instruction)
+        const char *level = "";
+#if defined(__x86_64__)
+        const char *forced = getenv("LARECOMP_GENARCH");
+        level = forced && *forced ? " forced" : gamebuild_cpu_has_v3() ? " x86-64-v3" : " x86-64-v2";
+#endif
+        if (rename(tmp, lib) != 0 || !(f = fopen(idp, "wb")) || fprintf(f, "%s%s\n", GAMELIB_ID, level) < 0) {
             snprintf(why, why_size, "the game code couldn't be saved");
             ok = false;
         }

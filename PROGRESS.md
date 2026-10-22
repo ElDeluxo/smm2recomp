@@ -454,8 +454,10 @@ Setup failures first, since they block new players:
 - ✅ **Applying the update crashed (access violation)** (#7, v0.3.1): fixed in v0.3.2.
 - ⬜ **Steam Deck runs slowly** (#13, v0.3.2): needs the frame rate and render scale; try a lower render scale.
 - ✅ **PR #8 merged** (2026-10-22, x86-64-v2 baseline, gamebuild.c builds v3 where the CPU has AVX2; in v0.4.1).
-  Follow-up, minor: the game code's id comes from the v2 flags, so a data folder moved from an AVX2 machine to an
-  older CPU keeps its v3 build (illegal instruction). Put the chosen level in the id when it matters.
+  Follow-up done (2026-10-23): the game code's id file now names the CPU level it was built for (`x86-64-v3` /
+  `x86-64-v2` / `forced`), and a v3 build (or one from before, which may be v3) on a CPU without AVX2 is built
+  again instead of failing on its first AVX2 instruction (`gamelib.c` id_matches). Compiled for x86-64; not run on
+  an x86 machine here.
 - ✅ **100 Mario run start: the Peach-carried-away demo** (owner, 2026-10-22: "on Normal the animation seems to be
   missing; Easy showed it"): the SMM1 layout player kept at most 48 animations per layout and dropped any more
   without a word. A world map on the select screen holds its dots, Mario, the castles and the beat bounce on Course
