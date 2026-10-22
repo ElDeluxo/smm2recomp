@@ -571,16 +571,22 @@ static void fill_course(uint64_t e, Json *m, uint32_t data_id, uint32_t difficul
     s8(e + 0x171, (uint8_t)json_num(json_get(m, "theme"), 0));
     s64(e + 0x178, (uint64_t)json_num(json_get(m, "uploaded"), 0));
     s32(e + 0x180, difficulty);
-    // +0x188: the player's own relation to the course (NEX CourseInfo +0x179; course global main+0x2c4b710 +0x1b8):
-    // 0 none, 1 played, 2 cleared, 3 liked, 4 booed [inf: PostRatingInfo's answer sets 3 / 4 / 2 for like / boo /
-    // take back, main+0x151fd00]. The clear screen's Boo / I like it (main+0x1be73b0) take input only at 1 or 2 and
-    // show 3 / 4 as chosen; SMM2 learns it from the course record it asks for again after PostPlayResult. From the
-    // server's `you` (signed in).
+    // The player's own standing with the course, from the server's `you` (signed in; 0 for both without it):
+    // +0x184 their play state (the larger of NEX CourseInfo +0x178 / +0x17a, converter main+0x14daf60): 1 not played,
+    // 2 played without a clear, 3 cleared. +0x188 their rating (NEX +0x179; course global main+0x2c4b710 +0x1b8): 1 not
+    // played, 2 played (may rate), 3 liked, 4 booed. After a play the game asks for the record again and moves both on
+    // itself in case the server is behind (main+0x151a520): state 1 -> 2, or 3 on a clear, 2 -> 3 on a clear; rating
+    // 1 -> 2 (and PostRatingInfo's answer, main+0x151fd00: 3 / 4, or 2 taken back). Course cards show the state (3: the
+    // red cleared flag, 0: a white flag) and a heart at rating 0 [obs]. The clear screen's Boo / I like it
+    // (main+0x1be73b0) take input at rating 1 or 2 and show 3 / 4 as chosen. Comments with "Require course clear to
+    // view" are shown to a player at state 3 (in the course, main+0x17f2a30 / main+0x17f39e0 via the display's
+    // +0x356, main+0x17f5fd4; the comment list, main+0x171b850), besides their poster and the course's maker.
     Json *you = json_get(m, "you");
     int vote = (int)json_num(json_get(you, "vote"), 0);
-    uint32_t mine = vote > 0 ? 3 : vote < 0 ? 4 : json_bool(json_get(you, "cleared"), false) ? 2
-                  : json_bool(json_get(you, "played"), false) ? 1 : 0;
-    s32(e + 0x184, 0), s32(e + 0x188, mine), s32(e + 0x18c, 0);
+    bool cleared = json_bool(json_get(you, "cleared"), false), played = cleared || json_bool(json_get(you, "played"), false);
+    uint32_t state = !you ? 0 : cleared ? 3 : played ? 2 : 1;
+    uint32_t mine = !you ? 0 : vote > 0 ? 3 : vote < 0 ? 4 : played ? 2 : 1;
+    s32(e + 0x184, state), s32(e + 0x188, mine), s32(e + 0x18c, 0);
     s8(e + 0x190, 0), s8(e + 0x191, 0);
     s32(e + 0x194, 0), s32(e + 0x198, 0), s32(e + 0x19c, 0), s32(e + 0x1a0, 0);  // no clear condition
     s32(e + 0x1a4, 0);

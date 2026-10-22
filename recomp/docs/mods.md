@@ -119,9 +119,9 @@ served: Ninji speedruns, notifications, follows, Network Play.
 **Likes and boos** (checked in game 2026-10-23, two accounts: one player's course liked / booed by the other). SMM2
 offers them on the clear screen (Boo! / I like it!) and nowhere else in Course World: a course's card has none. Two
 things decide whether the hearts take input (main+0x1be73b0): the player's own relation to the course, which the
-game keeps in the course record (+0x188 of a list entry, the course global main+0x2c4b710 +0x1b8: 0 none, 1 played,
-2 cleared, 3 liked, 4 booed [inf: PostRatingInfo's answer, main+0x151fd00, sets 3 / 4 / 2 for like / boo / take
-back]), and the CanPostRatingAndComment answer (rating +0xe8580: u8 +8 and u32 state +0xc). The hearts are live at
+game keeps in the course record (+0x188 of a list entry, the course global main+0x2c4b710 +0x1b8: 1 not played, 2
+played, 3 liked, 4 booed [inf: PostRatingInfo's answer, main+0x151fd00, sets 3 / 4 / 2 for like / boo / take back;
+after a play the game moves 1 to 2 itself, main+0x151a520]), and the CanPostRatingAndComment answer (rating +0xe8580: u8 +8 and u32 state +0xc). The hearts are live at
 relation 1 or 2 with state other than 2 [obs]; state 2 greys them [obs], relation 0 leaves them drawn but dead [obs:
 before this, the relation was always 0: "took no test input"], 3 / 4 show the choice made. The
 game asks for the course record again after PostPlayResult (GetCourses), so it learns it from the server: every
@@ -137,7 +137,7 @@ and time, shown under the clear screen, a drawing fetched in a new session, one'
 "comments on" (user record +0x98, the course's +0x830 / course global +0x860: `fill_user` sets it) and the comment
 answer's two allowances (+0xe8530 +0x10 / +0x11: 10) above the player's comment count on the course. Post a Comment's
 three tabs post through three requests (main+0x17f88e0; NetAppTask 0x20 / 0x21 / 0x22) with one request record:
-course +0x8e688, posted after a clear +0x8e690, type +0x8e694 (0 drawing, 1 text, 2 stamp), where the player was
+course +0x8e688, posted from the clear screen +0x8e690, type +0x8e694 (0 drawing, 1 text, 2 stamp), where the player was
 +0x8e698 / +0x8e69c, in the sub area +0x8e6a0, the face picked for the Mii +0x8e6a1, "Require course clear to view"
 +0x8e6a2, then the text (UTF-16, 75 characters) at *(+0x8e6b0), the stamp's number +0x8e758, or the drawing at
 *(+0x8f400) (its size +0x8e75c; the game's own compressed data [obs: 944 bytes], the picture it keeps; a second
@@ -154,6 +154,25 @@ each NEX tick, main+0x21710, from the connection): with no connection it stays u
 layout's placeholder, "5分前"; the mod's tick sets it from this machine's clock (`nex_tick`). The software keyboard
 now shows the game's own text as its title (ShowKeyboardArg header / sub / guide text: "Please input the Course ID
 or Maker ID you want to search for."), and takes up to the game's length (a comment's 75; the dialog stopped at 8).
+
+**Comments in the course, "Require course clear to view", the maker's view** (checked in game 2026-10-23 with three
+accounts: the poster, the course's maker and a player who had not cleared it; `evidence/mods/world-social/
+comments-in-course/`). The course start asks for the comments (SearchComments mode 1) and the game shows the ones
+posted from the pause menu (record +0x58 0) as bubbles at the place they were posted (x / y in pixels, 16 to a block):
+text, stamps and drawings, with the poster's Mii and face, the maker's framed; they open one at a time and the ones
+near the player stay closed (the game's own display, main+0x17f39e0). The ones posted from the clear screen (+0x58 1)
+show there instead. The pause menu's Comment posts from where the player stands, and its Display Comments switches
+them. "Require course clear to view" is the game's own: it hides such a comment, in the course and in the list ("You
+can view comments for this course after clearing it."), from a player whose play state for the course (course record
++0x184) isn't 3, unless they posted it or made the course. That state was always 0, so nobody but the poster and the
+maker saw them, even after a clear: `fill_course` now gives it from the server's `you` (1 not played, 2 played, 3
+cleared), and the rating +0x188 1 for a course not played (0 drew a heart on its card; the red cleared flag shows at
+3). The server sends every comment, as Nintendo's did (DECISIONS 2026-10-23). The maker sees all of them, with Delete
+on their own and Report on the others': SMM2 offers the maker nothing more on their course's comments (the server
+would take the uploader's DELETE). Drawings: the drawing canvas is a pitch-linear texture (NVN flag
+LINEAR_RENDER_TARGET, 0x40) that the runtime read as block-linear, with a 4096-byte row (device integer 57, the linear
+row alignment, now 32): a drawn line showed as dashes or a column of blocks, thin ones not at all; the scripted drags
+were fine. Drawings posted before the fix (test data only) show the game's broken-picture sign.
 
 **Thumbnails** (a course's picture on its card and course page, its whole-course map under More info): the server
 keeps them as JPEGs (`thumbnails/<code>.jpg`, `<code>-entire.jpg` in its folder). For a course from TGRCode's archive

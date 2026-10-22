@@ -2064,3 +2064,15 @@ image and a copy of the build; Docker is already installed, starts in a second, 
 packages (no game data, never pushed).
 **What would change it:** a real Linux machine with a GPU for the testers' cases (lavapipe is software and has quirks
 of its own: the MRT split, the eye NaN), or an x86-64 need (the same script with an amd64 image under emulation).
+
+## 2026-10-23 — "Require course clear to view": the server sends every comment, the game hides them
+**Decision (agent):** our server gives every comment on a course to every player, as Nintendo's did, and leaves
+"Require course clear to view" to the game: SMM2 itself hides such a comment, in the course and in the comment list
+("You can view comments for this course after clearing it."), from a player whose play state for the course isn't
+"cleared", unless they posted it or made the course. What the mod has to get right is that play state (course record
++0x184), which it now fills from the server's `you` (1 not played, 2 played, 3 cleared).
+**Why:** the game needs the hidden comments in its list to show their "clear required" placeholder and to count them,
+and it already knows the poster and the maker; filtering on the server would need the same three rules twice and
+would drop the placeholder. The comments are not secret, only spoilers.
+**What would change it:** another client of `/api/courses/<code>/comments` (a web view, SMM1 / SMCraft) that doesn't
+apply the rule itself (then a `?for=<viewer>` filter on the server).

@@ -270,7 +270,11 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     SMM2 has no like on the card), ✅ comments (2026-10-23: text, stamp and drawn comments posted with SMM2's whole
     comment - place, face, "require clear" - listed with name, Mii and "X minute(s) ago" (the game's server time,
     from this machine's clock), shown under the clear screen, a drawing fetched in a new session, one's own deleted;
-    the keyboard takes 75 characters and shows the game's own prompt), ✅ the ID search (a course, a maker, "not
+    the keyboard takes 75 characters and shows the game's own prompt; in the course: text, stamp and drawn comments
+    as bubbles where they were posted, posted from the pause menu too; "Require course clear to view" hidden until
+    the player clears the course (the play state the server now gives with every course; the red cleared flag on
+    cards follows); the maker sees them all, with Delete only on their own as on a console; drawings now draw and
+    show (the canvas texture's pitch-linear layout), `evidence/mods/world-social/comments-in-course/`), ✅ the ID search (a course, a maker, "not
     found") and maker pages (`recomp/docs/mods.md` "Likes and boos", "Comments"; `evidence/mods/world-social/`);
     ✅ uploads from the Course Maker (2026-10-22: the course, its credit and its picture;
     New Courses lists it with the picture), ✅ a player's Played Courses (the run's courses too); ✅ Super Worlds

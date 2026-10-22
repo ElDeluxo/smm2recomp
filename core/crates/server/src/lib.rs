@@ -267,7 +267,7 @@ pub struct Comment {
     pub face: u8,
     /// Shown only to players who cleared the course ("Require course clear to view").
     pub clear_required: bool,
-    /// Posted after clearing the course.
+    /// Posted from the clear screen (SMM2 shows these there, the others in the course).
     pub cleared: bool,
     /// A drawing's picture is held (`comments/<id>.bin`).
     pub picture: bool,

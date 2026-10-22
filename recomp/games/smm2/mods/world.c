@@ -503,14 +503,22 @@ static void json_escape(const char *s, char *out, size_t cap) {
 
 // A comment as SMM2 keeps one: the 0x390-byte record its converter (main+0x14b7720) fills from a NEX CommentInfo,
 // and the game's own copy of a comment it just posted (main+0x14b8030, from the post's request) shows which request
-// field lands where: id (UTF-8) +0x08; +0x58 posted after a clear (request +0x8e690: the Post a Comment screen opened
-// from the clear screen [inf]); +0x5c type (0 drawing, 1 text, 2 stamp: the screen's three tabs, request +0x8e694,
-// main+0x17f88e0); the poster's player id +0x60; where the player was, x / y +0x68 / +0x6c (request +0x8e698 /
-// +0x8e69c); +0x70 in the sub area (+0x8e6a0); +0x71 the face picked for the Mii (+0x8e6a1); +0x72 "Require course
-// clear to view" (+0x8e6a2) [obs: ticked, 1]; posted time +0x78 (Unix seconds [obs: "5 minutes ago"]); the text
-// (UTF-16) +0x88; the stamp's number +0x130 (+0x8e758); a drawing's picture (a relation object, +0x140); the
-// poster's name (UTF-16) +0x2c8 and Mii +0x2f0; +0x388 valid. A comment with type 0 has its picture fetched
-// (main+0x14b8930 picks records with +0x5c == 0, main+0x14eaf30 downloads them).
+// field lands where: id (UTF-8) +0x08; +0x58 posted from the clear screen (request +0x8e690 [obs: 1 from the clear
+// screen, 0 from the pause menu]): those show under the clear screen and not in the course, the others in the course
+// (main+0x17f2a30 takes +0x58 == 0; the pause menu's Display Comments counts them, main+0x1861360); +0x5c type (0
+// drawing, 1 text, 2 stamp: the screen's three tabs, request +0x8e694, main+0x17f88e0); the poster's player id +0x60
+// (the course's maker gets the framed bubble, the poster their own Delete); where the player was, x / y +0x68 /
+// +0x6c in pixels, 16 to a block, y up (request +0x8e698 / +0x8e69c; shown at least 70 / 3 in and inside the area
+// [obs: (0, 0) at 4.4 blocks]); +0x70 in the sub area (+0x8e6a0); +0x71 the face picked for the Mii (+0x8e6a1);
+// +0x72 "Require course clear to view" (+0x8e6a2) [obs: ticked, 1]: the game itself hides such a comment, in the
+// course and in the list ("You can view comments for this course after clearing it."), from a player whose own play
+// state isn't 3 (course record +0x184, endless.c fill_course) unless they posted it or made the course; posted time
+// +0x78 (Unix seconds [obs: "5 minutes ago"]); the text (UTF-16) +0x88; the stamp's number +0x130 (+0x8e758); a
+// drawing's picture (a relation object, +0x140); the poster's name (UTF-16) +0x2c8 and Mii +0x2f0; +0x388 valid. A
+// comment with type 0 has its picture fetched (main+0x14b8930 picks records with +0x5c == 0, main+0x14eaf30
+// downloads them). While a course plays (SearchComments mode 1 at its start, +0x8e678; the list asks mode 0, pages
+// of 100 from +0x737a8) the game copies them to the course-play globals (main+0x150bd10, *(main+0x2c115e0)
+// +0x15f818, drawings' pictures +0x1b8940) and shows them as bubbles that open one by one, none near the player.
 #define COMMENT_PICTURE 0x1c200  // a drawn comment's picture as the game keeps it
 static void comment_fields(uint64_t no, char *out, size_t cap) {
     snprintf(out, cap, "\"x\":%d,\"y\":%d,\"sub_area\":%s,\"face\":%u,\"clear_required\":%s,\"cleared\":%s",
