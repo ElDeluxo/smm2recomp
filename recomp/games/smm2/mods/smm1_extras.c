@@ -69,9 +69,9 @@ static bool shown[NSETTINGS];  // what the tab last showed, to see which one cha
 int smm1_extras_toggles(GameModToggle *out, int room) {
     static const GameModToggle toggles[] = {
         {"Mid-air shell jumps (SMM1)",
-         "SMM1's timing for landing on a shell: a flat stomp window when falling (SMM2 narrows it at slow falls and "
-         "widens it at fast ones), and after a mid-air kick off a wall only SMM1's short no-touch time, so the shell "
-         "coming back can be landed on. Immediately.",
+         "SMM1's timing for landing on a shell: after a mid-air kick off a wall only SMM1's short no-touch time (5 "
+         "frames, SMM2 16), so the shell coming back off the wall can be landed on, and a flat stomp window when "
+         "falling (SMM2 narrows it by up to 3 px at slow falls). Immediately.",
          &shown[0], false},
         {"Overlapping pipes (SMM1)",
          "Pipes may overlap other pipes, in the Course Maker and in courses, as in SMM1 (SMM2 refuses the placement "
@@ -111,6 +111,18 @@ static bool in_shell(uint64_t enemy) {
     return on_heap(st) && g32(st + 0x28) == 1;
 }
 
+// RECOMP_SMM1_LOG: after a mid-air kick without a window, the kicker's no-hit window on that shell is logged at each of
+// the player's next 20 updates (smm1_extras_player_frame, from games/smm2/trace.c), so the 5 / 16 can be seen counting
+static uint64_t watch_tab;
+static int watch_idx, watch_left;
+
+void smm1_extras_player_frame(void) {
+    if (watch_left <= 0) return;
+    watch_left--;
+    if (!on_heap(watch_tab)) return;
+    LOG("[smm1]   kicker's no-hit window on that shell: %d\n", (int)g32(watch_tab + 0x1f8 + 4 * (uint64_t)watch_idx));
+}
+
 static float f32v(Cpu *c, int r) { float f; memcpy(&f, &c->v[r], 4); return f; }
 static float g32f(uint64_t a) { float f; uint32_t w = g32(a); memcpy(&f, &w, 4); return f; }
 
@@ -121,13 +133,21 @@ void smm1_extras_after(Cpu *c, uint64_t addr) {
     switch (addr - MAIN_ADDR(0)) {
     case 0x1267ce8:  // stomp test, cmp w11, #1 ("falling") before SMM2's step for ordinary-size targets
         if (!in_shell(g64(c->x[20] + 0xa8))) break;
-        if (dbg) {  // the window both ways: s0 the table's, s8 the extra; SMM2 adds -3 + the player's fall this frame
-            uint64_t p = c->x[19];
+        if (dbg) {  // the window both ways: s0 the table's, s8 the extra; SMM2 adds -3 + the player's fall this frame,
+                    // at most 3 (fmax(dy, -3)), so its window is never wider than SMM1's
+            uint64_t p = c->x[19], shell = g64(c->x[20] + 0xa8);
             float w = f32v(c, 0), extra = f32v(c, 8), dy = g32f(p + 0x234) - g32f(p + 0x308);
+            float fall = dy < 0 ? (-dy < 3 ? -dy : 3) : 0;
             bool step = FLAG_Z(c) && (uint32_t)c->x[9] == 0;  // falling, ordinary-size target
-            LOG("[smm1] shell stomp test: falling %d, window SMM1 %.3f, SMM2 %.3f (player y %.3f dy %.3f)%s\n",
-                (int)FLAG_Z(c), w + extra, step ? w - 3 + extra + (dy < 0 ? -dy : 0) : w + extra, g32f(p + 0x234), dy,
-                shell_jumps ? " -> SMM1" : "");
+            bool minus3 = (c->x[8] & 1) || (int32_t)c->x[10] < 1;  // (w8 | w10 < 1: the -3, as the next lines test)
+            LOG("[smm1] shell stomp test: falling %d, window SMM1 %.3f, SMM2 %.3f (player x %.3f y %.3f dy %.3f, "
+                "shell x %.3f y %.3f vx %.3f)%s\n"
+                "[smm1]   centres: player %+.2f %+.2f shell %+.2f %+.2f, shell state %d, grounded %d\n",
+                (int)FLAG_Z(c), w + extra, step ? w - (minus3 ? 3 : 0) + extra + fall : w + extra, g32f(p + 0x230),
+                g32f(p + 0x234),
+                dy, g32f(shell + 0x230), g32f(shell + 0x234), g32f(shell + 0x23c), shell_jumps ? " -> SMM1" : "",
+                g32f(p + 0x2f8), g32f(p + 0x2fc), g32f(shell + 0x2f8), g32f(shell + 0x2fc), (int)g32(shell + 0x3f8),
+                (int)(g32(shell + 0x658) & 1));
         }
         if (shell_jumps) (void)subs32(c, 0, 1);  // -> b.ne: the flat window
         break;
@@ -142,7 +162,15 @@ void smm1_extras_after(Cpu *c, uint64_t addr) {
     }
     case 0x1202c88:  // enemy contact, kick accepted with no window written: mov w9, #16
         if (!in_shell(g64(c->x[23]))) break;
-        if (dbg) LOG("[smm1] mid-air kick without a no-hit window: %s\n", shell_jumps ? "5 frames (SMM1)" : "16 frames (SMM2)");
+        if (dbg) {
+            uint64_t p = c->x[22], shell = g64(c->x[23]);
+            // (x21 holds the same per-player no-hit table, [shell+0x6b0], where the contact's epilogue, main+0x1203868,
+            // turns an empty window into 5)
+            LOG("[smm1] mid-air kick without a no-hit window: %s (player x %.3f y %.3f, shell x %.3f y %.3f%s)\n",
+                shell_jumps ? "5 frames (SMM1)" : "16 frames (SMM2)", g32f(p + 0x230), g32f(p + 0x234),
+                g32f(shell + 0x230), g32f(shell + 0x234), c->x[21] == c->x[24] ? "" : ", other no-hit table");
+            watch_tab = c->x[24], watch_idx = (int8_t)g8(p + 0x288), watch_left = 20;
+        }
         if (shell_jumps) c->x[9] = 0;  // -> the epilogue's 5 frames
         break;
     }

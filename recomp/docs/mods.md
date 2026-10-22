@@ -436,32 +436,69 @@ other part is "solid" (main+0xfe8490: pipes count); a solid part whose shape ove
   jumps up onto the tall one it overlaps].
 - A course saved with overlapping pipes needs the setting to load (SMM2, and the setting off, treat it as broken).
 
-**Mid-air shell jumps** (in progress: hooks in place, the test course is not done). SMM1's shell code is SMM2's (the
-kicks, the mid-air kick off a wall with its 3.52 hop, the speeds) except two rules [obs, Block.rpx v208 against
-SMM2]; on a shell the setting applies SMM1's:
-- the stomp window when the player is falling onto an ordinary-size target: SMM1 a flat 10 px; SMM2 3 px less plus
-  the player's fall this frame (main+0x1267ce8: the "falling?" compare before that step reads "no");
+**Mid-air shell jumps.** SMM1's shell code is SMM2's (the kicks, the speeds, and the mid-air kick off a wall: the
+"wall assist", below) except two rules [obs, Block.rpx v208 against SMM2]; on a shell the setting applies SMM1's:
 - the kicker's no-hit time after a mid-air kick off a wall: SMM1 5 frames (the contact's own minimum), SMM2 16
-  (main+0x1202c88: the 16 becomes 0, so the 5 applies). The shell coming back off the wall can be landed on sooner.
+  (main+0x1202c88: the 16 becomes 0, and the contact's epilogue, main+0x1203868, turns 0 into 5). The shell coming
+  back off the wall can be landed on 11 frames sooner. This is the rule that makes the shell jump work [obs, below].
+- the stomp window when the player is falling onto an ordinary-size target: SMM1 a flat 10 px; SMM2 3 px less plus
+  the player's fall this frame, at most 3 (`fmax(dy, -3)`), so 7-10 px, never wider than SMM1's (main+0x1267ce8: the
+  "falling?" compare before that step reads "no").
 
-SMM1 applied the flat window to every small enemy; the setting limits it to shells.
+SMM1 applied the flat window to every small enemy; the setting limits both rules to shells.
 
-**Test courses.** Made at run time from the player's own data, never in the repository: our pipe courses are built
-from SMCraft's flat test course, the SMM1 one copies the pipes, ground and blocks of SMM1's sample course 95 from the
-player's SMM1 dump into an SMM2 SMB1-style course. Installed as the title course (`RECOMP_MOD_DIR`) they play straight
-away; the Course Maker is reached with `LARECOMP_HOST_INPUT` (L + R, A, then taps; `frame:drag:x0/y0/x1/y1:frames`
-moves a finger across the touch screen).
+The wall assist (SMM2 main+0x105a2d0, the shell's kick handler; SMM1 the same [obs]). A still shell kicked by a player
+in the air and falling counts as a kick off a wall when: nothing solid is within 16 px under the player's feet just
+ahead, nor within 16 px under the shell's centre one tile behind it (the shell is at the edge of its ledge), and a wall
+faces the shell 10-16 px from its centre in the kick's direction (twice that for a big shell). Then the shell is
+kicked into the wall and records a stop point one tile short of it, the player gets a small hop (3.51855, a stomp's
+0.9), and no no-hit window is written. Off the wall the shell brakes (0.5 a frame) and parks at the stop point while
+the player is in the air, ready to be landed on.
 
-**Where this stands (2026-10-19).**
+**The test course** (`tools/shell_jump_course.py`, our own course; the script writes it as the ten title courses of
+a mod folder, encrypted with the key table from the player's own executable, and the input): SMB1 style, a plateau
+with a low ceiling, a 2-tile pit, a 1-tile ledge against a wall 8 tiles high that leads to the goal, and a Buzzy Shell
+on the ledge 14 px from the wall (centre 354 px; where the wall assist itself parks a shell, between tiles, so not a
+Course Maker position). The only way up the wall is a shell jump. The input, one line per player update
+(`RECOMP_PAD_SCRIPT`): 60 nothing, 199 RIGHT, 25 RIGHT + A, 120 RIGHT. Mario walks off the plateau, falls past the
+ledge and his side touches the shell at update 255: the wall assist (the hook logs it), a hop; A from update 259.
+
+| update | switch off (SMM2) | switch on (SMM1) |
+|---|---|---|
+| 255 | the mid-air kick off the wall; no-hit window 16 | the same; no-hit window 5 |
+| 256-260 | the window counts 15 ... 11 | 4 ... 0 |
+| 260 | the shell, back off the wall (vx -2.75), passes under Mario: no contact | the contact: Mario bounces off the shell (vy 3.9095, the stomp bounce; A held) |
+| peak | y 65 (feet; the shell's top is at 64) | y 144 |
+| after | back on the ledge at update 283, under the wall (top at 128) | on top of the wall at update 303, and on to the goal |
+
+[obs] The two traces (the whole 0x2800-byte player object per update) are identical through update 259; each run
+repeats itself exactly (trace files byte for byte). Evidence (private, from the dump):
+`research/evidence/smm1-shell-jump/` (the side-by-side frames, both traces and logs, the input). How it was run:
+
+    python -I tools/shell_jump_course.py --romfs recomp/private/smm2/extracted/romfs --elf <main.elf> --out <dir>
+    cd recomp/private/smm2 && LARECOMP_NO_AUDIO=1 LARECOMP_HIDDEN=1 RECOMP_MOD_DIR=<dir> SMM2_SEED=4 \
+        RECOMP_SMM1_SHELL_JUMPS=0|1 RECOMP_SMM1_LOG=1 RECOMP_PAD_SCRIPT=<dir>/shell_jump.pad \
+        RECOMP_TRACE_OUT=trace.bin RECOMP_TRACE_EXIT=1 RECOMP_TRACE_SHOT=250,255,259,261,266,285,310 \
+        ../../tools/run_for.sh 120 ../../build/smm2/smm2recomp extracted
+
+`RECOMP_SMM1_LOG=1` logs each stomp test on a shell (both windows, the player and the shell), each mid-air kick off a
+wall, and the kicker's no-hit window for the 20 updates after it. Notes:
+- The course plays as the title course: the title screen's own course play (SMM2's player, enemies and contact code).
+- In the SMB1 style SMM2's Mario does not pick a shell up (in the title course he kicks it; in SMW style he carries
+  it [obs]), so the SMB1 shell jump is this kick off a wall, not a thrown shell.
+- The stomp-window rule makes no difference in this run (the contacts there fall at 4 px a frame, or rise): not shown
+  separately in play; the log shows both windows at every test.
+
+**Other test courses.** Made at run time from the player's own data, never in the repository: our pipe courses are
+built from SMCraft's flat test course, the SMM1 one copies the pipes, ground and blocks of SMM1's sample course 95 from
+the player's SMM1 dump into an SMM2 SMB1-style course. Installed as the title course (`RECOMP_MOD_DIR`) they play
+straight away; the Course Maker is reached with `LARECOMP_HOST_INPUT` (L + R, A, then taps;
+`frame:drag:x0/y0/x1/y1:frames` moves a finger across the touch screen).
+
+**Where this stands (2026-10-22).**
 - Overlapping pipes: done. It covers the Course Maker drag, the course load and play, and the off-case replay.
-- Mid-air shell jumps: the hooks are in, and `RECOMP_SMM1_LOG=1` shows both windows at every shell stomp test. No
-  test course yet shows a mid-air shell jump that works with the setting on and fails with it off. The candidate is
-  a ledge course: Mario drops off a 2-tile start onto a shell sliding back from a wall, and the frame he walks off
-  is swept.
-  - [obs] Dropping at updates 441-447, the shell meets him while he falls at 1.5-2.5 px a frame. SMM2's window
-    there is 8.5-9.5 px against SMM1's 10.
-  - Left: the same sweep with the setting off, to find the frame where the outcome differs.
-  - Left: an off-case replay with shell contacts. The replay so far has pipes but no enemy contact.
+- Mid-air shell jumps: done. The test course above: on, the shell jump works; off, SMM2's.
+  - Left: an off-case replay against Ryujinx with shell contacts (the replay so far has pipes but no enemy contact).
 - More SMM1 behaviours from research/specs/smm1-extras* are not started: pipe spawn rates per enemy, spawn caps,
   Clown Car weights, attack reactions. They are EnemyDB data changes.
 

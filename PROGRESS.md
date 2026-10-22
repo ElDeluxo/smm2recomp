@@ -211,10 +211,13 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     course whose pipes overlap and plays a blank one, and its Course Maker snaps a pipe dragged onto another back;
     with the setting on, both test courses (ours and the pipes of SMM1's sample course 95, read from the SMM1
     dump) load and play, and a pipe dragged onto another stays; with it off, a replay against Ryujinx is
-    identical in 606 / 606 updates and the whole player object; both switches on screen in the Mods tab: `evidence/smm1-extras/`); 🔄 "Mid-air shell
-    jumps (SMM1)" (hooks in place: SMM1's flat falling stomp window on shells, main+0x1267ce8, and the 5-frame
-    instead of 16-frame no-hit window after a mid-air kick off a wall, main+0x1202c88; ⬜ a test course where
-    the SMM1 jump works with it on); ⬜ more from research/specs/smm1-extras*
+    identical in 606 / 606 updates and the whole player object; both switches on screen in the Mods tab: `evidence/smm1-extras/`); ✅ "Mid-air shell
+    jumps (SMM1)" (SMM1's flat falling stomp window on shells, main+0x1267ce8, and the 5-frame instead of
+    16-frame no-hit window after a mid-air kick off a wall, main+0x1202c88; ✅ test course `tools/shell_jump_course.py`
+    with a scripted input, 2026-10-22: Mario kicks a shell off a wall in mid-air; on, he lands on it as it comes
+    back and bounces onto the wall top; off, it passes under him (16-frame window) and he can't climb; traces equal
+    to update 259, reruns byte-identical; `research/evidence/smm1-shell-jump/`; ⬜ an off-case Ryujinx replay with
+    shell contacts); ⬜ more from research/specs/smm1-extras*
   - 🔄 **Edit any course** (`games/smm2/mods/edit.c`, `recomp/docs/mods.md` "Edit any course"; WIP, paused):
     ✅ Course World's Download into the Coursebot against our server (stand-in thumbnail); ✅ SMM2's Make in the
     Coursebot window of a downloaded course (SMM1's Edit placement), the Course Maker opens with the course, an edit
@@ -461,7 +464,7 @@ Setup failures first, since they block new players:
      (Lanky Mario now, a chosen costume now, later others), for the current player in a course, greyed out
      elsewhere; a small registry in the mods code (name, available(), trigger()). A try-it-out helper kept apart from
      the normal game: off in 100 Mario / Endless runs (no records). The costume trigger comes with item 4
-3. ⬜ Mid-air shell jumps (finish, with the test course)
+3. ✅ Mid-air shell jumps (finished 2026-10-22: the test course shows the SMM1 jump on, SMM2 off)
 4. ⬜ Mystery Mushroom costumes: a hit removes the costume, the taunt, the reward window, more than one per course
 5. ⬜ Edit any course: the d-pad onto Make, the upload credit, Edit on the course card / Endless
 6. ⬜ Course World thumbnails: check whether they already work; fix only if not
