@@ -389,7 +389,10 @@ bool gamebuild_run(const char *game_dir, const GameBuildOpts *o, char *why, size
                         char last[300];
                         log_tail(g->log, last, sizeof last);
                         LOG("[gamebuild] generator (%s) failed: %s\n", g->name, last);
-                        snprintf(why, why_size, "the game code couldn't be prepared");
+                        snprintf(why, why_size, strstr(last, "MemoryError")
+                                     ? "the computer ran out of memory preparing the game code (it needs about 4 GB "
+                                       "of free memory: close other programs and try again)"
+                                     : "the game code couldn't be prepared");
                         ok = false;
                     }
                 }

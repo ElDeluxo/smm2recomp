@@ -64,6 +64,8 @@ def why_none():
     """What hactool said about the NCAs it couldn't read: a crash (no output, an exit code), or its last words."""
     if not FAILS:
         return ''
+    if any('Invalid NCA header' in out for rc, out in FAILS):  # (masked() drops it: "Are keys correct?")
+        return ' (prod.keys doesn\'t open them: the header key is missing or wrong)'
     silent = [rc for rc, out in FAILS if not out.strip()]
     if len(silent) == len(FAILS):
         code = silent[0] & 0xFFFFFFFF

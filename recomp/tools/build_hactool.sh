@@ -53,6 +53,36 @@ for a, b in fixes:
     s = s.replace(a, b)
 open(p, 'w').write(s)
 EOF
+# ... and extkeys.c: a key file line it can't read (a known key with a value of the wrong length, a title key listed
+# twice) stopped it outright, printing the value. Emulators' key files often have such a line that nothing else
+# minds: skip it instead, without the value. (The command line's keys stay strict.)
+python3 - "$SRC/extkeys.c" <<'EOF'
+import re, sys
+p = sys.argv[1]
+s = open(p).read()
+s = s.replace('void parse_hex_key(unsigned char *key,',
+    'static int ishex(char c);\n'
+    'static int key_value_ok(const char *hex, unsigned int len) {\n'
+    '    int ok = strlen(hex) == 2 * len;\n'
+    '    for (unsigned int i = 0; ok && i < 2 * len; i++) ok = ishex(hex[i]);\n'
+    '    if (!ok) fprintf(stderr, "[WARN] a key file value is not %"PRIu32" hex digits: skipped\\n", 2 * len);\n'
+    '    return ok;\n'
+    '}\n\n'
+    'void parse_hex_key(unsigned char *key,', 1)
+tk = ('                parse_hex_key(rights_id, key, sizeof(rights_id));\n'
+      '                parse_hex_key(titlekey, value, sizeof(titlekey));\n'
+      '                settings_add_titlekey(settings, rights_id, titlekey);\n')
+assert s.count(tk) == 1, 'titlekeys'
+s = s.replace(tk, '                if (key_value_ok(key, sizeof(rights_id)) && key_value_ok(value, sizeof(titlekey))) {\n'
+                  + tk.replace('                ', '                    ') + '                }\n')
+s, n = re.subn(r'(?m)^(\s*)parse_hex_key\(([^;]+), value, (sizeof\([^;]*\))\);',
+               r'\1if (key_value_ok(value, \3)) parse_hex_key(\2, value, \3);', s)
+assert n > 30, n
+dup = '        fprintf(stderr, " already has a corresponding titlekey!\\n");\n        exit(EXIT_FAILURE);\n'
+assert s.count(dup) == 1, 'duplicate'
+s = s.replace(dup, '        fprintf(stderr, " is listed twice: the first is used\\n");\n        return;\n')
+open(p, 'w').write(s)
+EOF
 rm -rf "$OUT" && mkdir -p "$OUT/obj"
 export ZIG_GLOBAL_CACHE_DIR=$PWD/build/zig-cache ZIG_LOCAL_CACHE_DIR=$PWD/build/zig-cache
 CF=(-target "$ZT" -O2 -std=gnu11 -w -I"$SRC/mbedtls/include"
