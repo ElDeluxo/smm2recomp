@@ -393,8 +393,12 @@ static NvnTexture *texture_from_builder(uint64_t b) {
     return t;
 }
 
+// a game's look at the textures it makes and drops (runtime/game_hooks.c; SMM2's costumes find their models' textures)
+void game_texture_init(uint64_t addr, uint32_t width, uint32_t height, uint32_t format);
+void game_texture_final(uint64_t addr);
 NVN(nvnTextureInitialize) {
     NvnTexture *t = texture_from_builder(A(1));
+    game_texture_init(t->addr, t->width, t->height, t->format);
     if (t->flags & 2)
         LOG("[nvn] video texture %p: %ux%u fmt %#x flags %#x target %u addr %llx stride %llu\n", t, t->width, t->height,
             t->format, t->flags, t->target, t->addr, t->stride);
@@ -403,7 +407,7 @@ NVN(nvnTextureInitialize) {
 }
 NVN(nvnTextureFinalize) {
     NvnTexture *t = HOST(NvnTexture, A(0));
-    if (t) { backend_texture_destroyed(t); free(t); }
+    if (t) { game_texture_final(t->addr); backend_texture_destroyed(t); free(t); }
     SET_HOST(A(0), 0);
 }
 NVN(nvnTextureSetDebugLabel) {

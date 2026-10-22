@@ -1867,3 +1867,36 @@ hammering it.
 **Would change:** a source with a full world list, or world thumbnails we may fetch or render ourselves (the server
 could then serve a picture and the thumbnail request answer it).
 
+## 2026-10-22 — Mystery Mushroom costumes: a new costume at each pickup by rewriting the model's texels
+
+**Decision:** a pickup draws a new costume as SMM1 does (uniform over the owned costumes minus the one worn) and puts
+it on mid-course by writing its texels over the loaded costume model's 25 textures, instead of loading another model
+or preloading several. Every costume model is the same template (SMM2's small SMB1 Mario: skeleton, material,
+animations, SMM1's 24 x 24 quad) with other texels, so a costume is its texel data alone. The runtime tells the game
+code about each texture made and dropped (`game_texture_init` / `game_texture_final`, weak hooks: nothing for other
+games); the costume mod notes the 24 x 24 textures the builder makes for slot 12 (in place in the loaded file, in the
+BNTX's order) and checks them against what it wrote last before every write (never writing a dropped texture or
+reused memory). The taunt pose uses the same path (the costume's appeal frame on every texture for 120 updates).
+**Why:** the owner's item ("more than one per course"). Loading a model mid-course means building a model holder
+outside the game's own course set-up (the builder allocates and binds resources through the game's heaps and the
+renderer's pools [inf]); preloading needs one form slot per costume, and the SMB1 row has 9 spare slots, one of which
+Lanky Mario uses, while the size-class table (read inline at about 100 sites) would have to be patched for each.
+Texels need neither: the renderers already re-upload a texture whose data changes, as for any texture the game
+rewrites.
+**Would change:** a costume whose model differs from the template in more than texels (SMM1's Inkling squid
+`_W` and Block `_L` sets, not used), or a renderer that stops noticing texel changes.
+
+## 2026-10-22 — "Mystery Mushroom costume now": every costume in its row, a pickup through the game's request
+
+**Decision:** the costume trigger's choice row lists every SMM1 costume of the player's dump (100), by its English
+name (SMM1's `Cmn_CharaMarioName`), sorted by name, owned or not; choosing one doesn't add it to the owned costumes
+(the random draws and 100 Mario's rewards still go by `costumes-owned.txt`). Pressing it gives player 1 a Mystery
+Mushroom with that costume through the game's own form change request (as a pickup: from Super / Fire the shrink
+plays), so it is greyed out with a power-up the Mystery Mushroom doesn't take (anything but small, Super and Fire),
+besides the triggers' rule (no switch, no SMB1 course being played, Endless / 100 Mario runs). The Mystery Mushroom
+item itself is taken as small, Super or Fire Mario (SMM1 takes it from any form).
+**Why:** the trigger is a try-it-out helper (DECISIONS 2026-10-22, mod triggers): a list of only the owned costumes
+would hide most of them until many 100 Mario runs are won, which is what trying a costume out is for; not counting
+the choice as owned keeps SMM1's unlock game intact.
+**Would change:** the owner wanting the row limited to the owned costumes (a one-line filter in `fill_choices`), or
+the trigger counting as an unlock.

@@ -190,23 +190,33 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
         NSMBU ending's perspective camera; 🔄 Cemu side-by-sides (Cemu runs the owner's SMM1 here, frames
         captured; reaching the ending scene in progress)
   - 🔄 **Settings, one toggle per SMM1 feature** (overlay menu's Mods tab, kept in `smm2mods.ini`):
-    ✅ "100 Mario Challenge (SMM1)" (on screen in the Mods tab: `evidence/mods/mods_tab.png`); 🔄 "Mystery Mushroom costumes" (`mods/costume.c`: models generated from both dumps, worn as small
-    Mario in SMB1 courses; in game: the costume on from the start (Peach, Samus), the pickup (Super Mushroom
-    → Block costume, its power-up sound), the goal and death sounds, the reward window after the ending
-    (`evidence/reward/006_reward.png`, private), jump / landing / taunt sounds from the player's motion;
-    ⬜ SMM2's own jump sound muted under the costume's, the taunt pose, more than one costume per course).
-    **Where this stands (WIP, paused 2026-10-19):** in game (cos9, private log): costume worn, Super Mushroom
-    pickup keeps it, jump sounds, goal and death sounds play. ⬜ A hit taking the costume off is still unseen:
-    every test death so far was a pit (the hook at 0x15a50a4 is in place). ⬜ The taunt fired once right after a
-    goal (the Up byte at player +0x560 is [inf]: check it). ⬜ The reward window's lower-right frame looks cut off
-    (`evidence/reward/006_reward.png`). **Crash ("Pure virtual function called", WorkerMgr, main+0x4d2f50: a
+    ✅ "100 Mario Challenge (SMM1)" (on screen in the Mods tab: `evidence/mods/mods_tab.png`); ✅ "Mystery Mushroom costumes" (`mods/costume.c`, `recomp/docs/mods.md` "Mystery Mushroom
+    costumes"; finished 2026-10-22, checked in game on a test course, `tools/costume_course.py`): models generated
+    from both dumps, worn as small Mario in SMB1 courses; the Mystery Mushroom (the SMB1 Big Mushroom) taken as small,
+    Super or Fire Mario; ✅ **more than one costume per course**: a new costume drawn at each pickup (SMM1's draw:
+    owned minus the one worn), put on by writing its texels over the loaded model's textures (every costume model is
+    the same template; the textures found through the runtime's new `game_texture_init` hook) - seen: Peach, then
+    Pikachu / Yoshi at the second pickup; ✅ **a hit removes the costume**: a Koopa's hit (test course `--variant
+    hit`) takes it off through the Super → small power-down (the costume flickers, then small Mario blinking); ✅ **the
+    taunt**: Up held 8 updates standing still → the costume's appeal frame for 120 updates (Peach's parasol, Samus
+    facing front) and its appeal sound; not after the goal; ✅ **the reward window**: its lower-right frame was cut off
+    by the layout player's four-frame window texcoords (a flipped frame mirrored about its middle); now anchored at
+    the frame's corner as nw::lyt does (`lyt_player.c` `frame4_uv`); the other 100 Mario screens render identically
+    (63 frames compared); ✅ **"Mystery Mushroom costume now"** in Try it now with a costume choice row (every costume,
+    DECISIONS 2026-10-22): MarioGold given mid-course; the power-up sound now comes from the costume's Static bank.
+    ⬜ SMM2's own jump sound muted under the costume's; sub-areas: whether the player object (and so the costume
+    worn) survives a pipe to a sub-area is unchecked [?]; the Mystery Mushroom's own look (`M1_Item_CharaKinoko`).
+    Note: the data folders' SMM1 subset link has no `Sound/CharaMario`, so costume sounds log "none" there (the full
+    disc dump has them). **Crash ("Pure virtual function called", WorkerMgr, main+0x4d2f50: a
     queued object destroyed while its request was pending)** seen twice with costumes on (entering Course World;
     a course start). The costume pack was 38 MB against the game's 5 MB (stored zstd blocks); it is now
     compressed (8.4 MB, generator "costumes" v2). Since then 5 of 5 runs with costumes on entered Course World
     and started a course without the crash (before: 2 crashes in about 6 such runs; logs `crash1-3.log`,
     `cos8.log`, `cos9.log`, private). Likely fixed by the smaller pack [inf: consistent, not proven; the SMM1
-    audio mix is host-only and touches no guest object]. Paused by the owner: the hit test, the reward frame,
-    the sounds; the SMM1 extras (`mods/smm1_extras.c`, all off by default, `recomp/docs/mods.md` "SMM1 extras"):
+    audio mix is host-only and touches no guest object]; not seen in the 2026-10-22 runs (about 15 with costumes on;
+    the one crash there was a test set-up's: a mod folder without the generated pack, and a missing costume model
+    stops the builder; the builder now only loads a costume whose model it finds in the pack);
+    the SMM1 extras (`mods/smm1_extras.c`, all off by default, `recomp/docs/mods.md` "SMM1 extras"):
     ✅ "Overlapping pipes (SMM1)" (one hook in the game's placement check, main+0xfe827c: SMM2 rejects a
     course whose pipes overlap and plays a blank one, and its Course Maker snaps a pipe dragged onto another back;
     with the setting on, both test courses (ours and the pipes of SMM1's sample course 95, read from the SMM1
@@ -472,9 +482,15 @@ Setup failures first, since they block new players:
    own look (`M1_Item_kinokofunny`)
    - with it: **mod triggers** (owner, 2026-10-22): the overlay menu's "Try it now" rows from a small registry
      (`mods/triggers.c`); "Lanky Mario now" registered; greyed out without the switch, outside an SMB1 course and in
-     100 Mario / Endless runs. The costume trigger comes with item 4
+     100 Mario / Endless runs. The costume trigger came with item 4
 3. ✅ Mid-air shell jumps (finished 2026-10-22: the test course shows the SMM1 jump on, SMM2 off)
-4. ⬜ Mystery Mushroom costumes: a hit removes the costume, the taunt, the reward window, more than one per course
+4. ✅ Mystery Mushroom costumes (2026-10-22, checked in game, `mods/costume.c`; docs/mods.md, DECISIONS 2026-10-22):
+   a Koopa's hit takes the costume off (the Super → small power-down); the taunt (Up standing still: the costume's
+   appeal pose 120 updates and its sound, not after the goal); the reward window's lower-right frame fixed (the layout
+   player's flipped four-frame window); a new costume at each pickup, put on mid-course by rewriting the loaded
+   model's textures (every costume model is one template with other texels); the Mystery Mushroom taken as Super /
+   Fire too (SMM1). With it: "Mystery Mushroom costume now" in Try it now, a choice row of every costume. Open: SMM2's
+   jump sound under the costume's, a sub-area pipe with a costume on [?], the Mystery Mushroom's own look
 5. ✅ Edit any course: ✅ the d-pad onto Make, ✅ the upload credit, ✅ Edit on the course card (Download again);
    ⬜ the card's "Edit" text, ⬜ Endless / 100 Mario "save for later" (design in mods.md)
 6. ✅ Course World thumbnails (2026-10-22): they were blank when TGRCode was busy (it allows about one request per

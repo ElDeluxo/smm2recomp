@@ -6,11 +6,14 @@
 // 24 x 24 and its quad grows from (-8, 0)-(8, 16) to (-12, 0)-(12, 24) (SMM1's costume quad). Skeleton, material and
 // animations stay SMM2's, so every animation the game plays works; SMM2's texture names are mapped onto the costume's
 // frames (walk.0-2 -> walk.0-2, CourseIn / dead / held -> wait.0, ...) [inf: the costume frames SMM2 has no slot for -
-// b_dash, jump_fall, pole, appeal - are not used yet].
+// b_dash, jump_fall, pole - are not used yet]. The appeal frame (the taunt) is kept apart (below).
 //
 // Written once, by the mods' shared RomFS overlay (mods/romfs_overlay.h: generator "costumes"), as Pack/M1_Model.pack
 // (the original pack's files plus Model/M1_Player_Chara_<res>{,_2,_3,_4}.Nin_NX_NVN.zs, one data blob under four
-// names), which replaces the game's. The .zs files are compressed with zstd (level 3), as the game's own are.
+// names), which replaces the game's. The .zs files are compressed with zstd (level 3), as the game's own are. With them,
+// Mods/CostumeAppeal.bin (ours, nothing of the game's reads it): each costume's appeal frame as a model texture holds
+// it. Since every model is the template with other texels, costume_look gives mods/costume.c a costume's texels to
+// write over a loaded model's (another costume mid-course, the taunt pose).
 #ifndef SMM1UI_STANDALONE
 #include "../../../../runtime/platform.h"  // (mkdir with a mode and plat_remove_tree on every host)
 #endif
@@ -236,6 +239,8 @@ static uint8_t *bfres_patch(const uint8_t *f, size_t n, const Bfres *c, size_t *
 
 // ---------------------------------------------------------------- generation
 #define PACK "Pack/M1_Model.pack"
+#define APPEAL "Mods/CostumeAppeal.bin"  // (ours: the taunt frames, read by costume_look; nothing of the game's)
+#define APPEAL_REC (48 + TEX_BYTES)
 #ifdef SMM1UI_STANDALONE  // (tools/test_smm1ui --costumes: the files of the data folder)
 #define OUT_PACK "mods-generated/costume-test/" PACK
 static uint8_t *read_pack(size_t *n) { return smm1_read_file("extracted/romfs/" PACK, n); }
@@ -353,9 +358,15 @@ bool costume_generate(void) {
     char (*cnames)[96] = calloc((size_t)(4 * g_ncostumes) + 1, sizeof *cnames);
     for (int i = 0; i < norig; i++) names[nn] = orig[i].name, blob_of[nn++] = nblob, blob[nblob] = orig[i].d, blob_n[nblob++] = orig[i].n;
     int made = 0;
+    // the taunt's frames (APPEAL file: per costume its name, then its appeal.0 as the model's textures hold a frame)
+    uint8_t *appeal = calloc((size_t)g_ncostumes + 1, APPEAL_REC);
+    int nappeal = 0;
     for (int c = 0; c < g_ncostumes; c++) {
         Bfres *cb = costume_bfres(g_costumes[c]);
         if (!cb) { fprintf(stderr, LOGC "%s: not readable\n", g_costumes[c]); continue; }
+        uint8_t *rec = appeal + (size_t)nappeal++ * APPEAL_REC;
+        snprintf((char *)rec, 48, "%s", g_costumes[c]);
+        frame_pixels(cb, "appeal.0", rec + 48);
         size_t fn;
         uint8_t *nf = bfres_patch(inner[ibfres].d, inner[ibfres].n, cb, &fn);
         if (!nf) { fprintf(stderr, LOGC "%s: the template could not be patched\n", g_costumes[c]); continue; }
@@ -388,8 +399,9 @@ bool costume_generate(void) {
 #ifdef SMM1UI_STANDALONE
     bool ok = made > 0 && write_file(OUT_PACK, out, on);
 #else
-    bool ok = made > 0 && rov_write(PACK, out, on);
+    bool ok = made > 0 && rov_write(PACK, out, on) && rov_write(APPEAL, appeal, (size_t)nappeal * APPEAL_REC);
 #endif
+    free(appeal);
     fprintf(stderr, LOGC "%d costumes generated into " PACK " (%.1f MB)\n", made, on / 1e6);
     for (int b = norig; b < nblob; b++) free((void *)blob[b]);
     free(out), free(names), free(blob_of), free(blob), free(blob_n), free(cnames);
@@ -405,7 +417,7 @@ static bool costume_overlay(void) {
     remove_old();
     return costume_generate();
 }
-ROV_GENERATOR("costumes", 2, costume_overlay)  // (2: the models compressed)
+ROV_GENERATOR("costumes", 3, costume_overlay)  // (2: the models compressed; 3: the taunt frames)
 #endif
 
 // ---------------------------------------------------------------- Lanky Mario's Slim model (mods/lanky.c)
@@ -770,6 +782,49 @@ bool lanky_sheet(const char *path) {
 bool lanky_on(void);  // (mods/lanky.c: the Slim models only with the mod on)
 static bool lanky_overlay(void) { return !lanky_on() || lanky_generate(); }
 ROV_GENERATOR("lanky", 1, lanky_overlay)
+
+// ---------------------------------------------------------------- a costume's look, as its model's textures hold it
+// (mods/costume.c: another costume or the taunt pose mid-course, written over the loaded model's textures)
+// The texel data of the costume's generated model, read back from the overlay's pack: one TEX_BYTES block per texture
+// in the BNTX's order (the order the game makes the textures in, each block where the game's texture reads it); with
+// appeal, every block is the costume's appeal frame instead. The count, 0 if there is no such costume; *out malloc'd.
+// (Game thread only: the pack stays loaded once read.)
+int costume_look(const char *res, bool appeal, uint8_t **out) {
+    static RovSarc *pack;
+    static RovBuf frames;
+    *out = NULL;
+    if (!pack) pack = rov_sarc_load(PACK);
+    char name[160];
+    snprintf(name, sizeof name, "Model/M1_Player_Chara_%s.Nin_NX_NVN.zs", res);
+    RovBuf *z = pack ? rov_sarc_member(pack, name) : NULL;
+    ModelZs m;
+    if (!z || !model_open(&m, z->d, z->n)) {
+        if (z) model_close(&m);
+        return 0;
+    }
+    size_t bn;
+    const uint8_t *b = bfres_bntx(m.bfres, m.bn, &bn);
+    int count = 0;
+    if (b && bn >= 0x60 && !memcmp(b, "BNTX", 4)) {
+        uint32_t k = le32(b + 0x24);
+        size_t brtd = (size_t)le64(b + 0x30);
+        if (k && k <= 64 && brtd + 0x10 + (size_t)k * TEX_BYTES <= bn && !memcmp(b + brtd, "BRTD", 4)) {
+            count = (int)k;
+            *out = malloc((size_t)k * TEX_BYTES);
+            memcpy(*out, b + brtd + 0x10, (size_t)k * TEX_BYTES);
+        }
+    }
+    model_close(&m);
+    if (count && appeal) {
+        if (!frames.d && !rov_read(APPEAL, &frames)) frames.n = 0;
+        const uint8_t *f = NULL;
+        for (size_t o = 0; o + APPEAL_REC <= frames.n && !f; o += APPEAL_REC)
+            if (!strncmp((const char *)frames.d + o, res, 48)) f = frames.d + o + 48;
+        if (!f) { free(*out), *out = NULL; return 0; }
+        for (int i = 0; i < count; i++) memcpy(*out + (size_t)i * TEX_BYTES, f, TEX_BYTES);
+    }
+    return count;
+}
 #endif
 
 // ---------------------------------------------------------------- the costume table (SMM1's Mush/CharaMarioTable.byaml)

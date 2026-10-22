@@ -234,26 +234,14 @@ static void mushroom_create(Cpu *c) {
 volatile bool g_lanky_requesting;  // (make_lanky's own form request: not a power-up item, costume.c leaves it alone)
 
 // ---------------------------------------------------------------- guest calls from the player's update
-// (at the update's first instruction after its prologue: only x0 and the argument registers are live; everything
-// caller-saved is put back, the scratch below sp)
-static uint64_t call(Cpu *c, uint64_t fn, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t x8) {
-    uint64_t x[19], nzcv = c->nzcv, sp = c->sp;
-    static __thread __uint128_t v[32];
-    memcpy(x, c->x, sizeof x), memcpy(v, c->v, sizeof v);
-    c->x[0] = a0, c->x[1] = a1, c->x[2] = a2, c->x[8] = x8;  // (x8: where a returned struct goes)
-    guest_call(c, fn);
-    uint64_t r = c->x[0];
-    memcpy(c->x, x, sizeof x), memcpy(c->v, v, sizeof v);
-    c->nzcv = nzcv, c->sp = sp;
-    return r;
-}
+// (pm_call, player_model.c: everything caller-saved is put back; the scratch goes below sp)
 static int request_form(Cpu *c, uint64_t player, uint32_t form) {
     uint64_t sp = c->sp;
     c->sp -= 0x40;
     uint64_t arg = c->sp + 0x20;
     s32(arg, form);
     g_lanky_requesting = true;
-    int r = (int)(uint32_t)call(c, FORM_REQUEST, player, arg, 0, 0);
+    int r = (int)(uint32_t)pm_call(c, FORM_REQUEST, player, arg, 0, 0);
     g_lanky_requesting = false;
     c->sp = sp;
     return r;
@@ -266,7 +254,7 @@ static void play(Cpu *c, uint64_t player, const char *key) {
     c->sp -= 0x40;
     uint64_t handle = c->sp + 0x20;
     s64(handle, 0), s64(handle + 8, 0);
-    call(c, SOUND_PLAY, u, (uint64_t)(uintptr_t)key, 0, handle);
+    pm_call(c, SOUND_PLAY, u, (uint64_t)(uintptr_t)key, 0, handle);
     if (g_debug) LOG("[lanky] sound %s: handle %#llx\n", key, (unsigned long long)g64(handle));
     c->sp = sp;
 }

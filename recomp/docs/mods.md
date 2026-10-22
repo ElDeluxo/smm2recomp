@@ -711,6 +711,63 @@ is played the way Play Together plays: Mario, Luigi, Toad and Toadette, each on 
 - **Tests**: `RECOMP_COOP_TEST=<n>` plays as if n players were connected; `LARECOMP_INPUT2` scripts player 2.
   The log says `co-op: <n> players in this course`, and at each miss request every player's state.
 
+## Mystery Mushroom costumes (`games/smm2/mods/costume.c`)
+
+A Mods-tab switch, "Mystery Mushroom costumes", off by default (`costumes=0/1` in `smm2mods.ini`,
+`RECOMP_MOD_COSTUMES`). It takes effect at the next start: the costume models are made then from the SMM1 dump
+(research/specs/recomp-mods.md §3, smm1-extras-costume.md for SMM1's rules).
+
+- **The form:** a player in costume is small Mario (form 0) for the game: size, physics, hit boxes, block and power-up
+  rules (SMM1's costume Mario is small too).
+- **Models:** for each SMM1 costume, SMM2's small SMB1 Mario model with the costume's 24 x 24 frames in its 25 textures
+  and SMM1's 24 x 24 quad (`smm1/costume_gen.c`, overlay generator `costumes` v3: `Pack/M1_Model.pack` gets
+  `Model/M1_Player_Chara_<res>{,_2,_3,_4}`; `Mods/CostumeAppeal.bin` holds each costume's appeal frame). The builder
+  (`player_model.c`) loads one into the SMB1 row's spare slot 12 (Balloon: size class 1, unused in SMB1), drawn once
+  per course from the owned costumes; slot 12 is shown where the game asks for slot 0 while a costume is worn.
+- **Another costume mid-course** (SMM1 draws one at each pickup): all the models are the same template, so a costume is
+  only texels. The builder's slot-12 textures are noted as the game makes them (runtime hook `game_texture_init`,
+  `runtime/nvn/objects.c`: 25 textures of 24 x 24, their texels in place in the loaded file, 4096 bytes apart), and
+  another costume is put on by writing its texels over them (`costume_look`: the generated model's own bytes); the
+  renderers re-upload a texture whose texels change, as for any the game rewrites. Before a write the texels are
+  compared with what was written last (a texture since dropped, `game_texture_final`, or reused memory is never
+  written). The game keeps a loaded model for later courses, so the builder puts a reused one back to its own costume.
+- **Pickup:** SMM1's Mystery Mushroom is the SMB1 skin of the style power-up, the Big Mushroom (`costume_item=super`:
+  the Super Mushroom, as SMCraft did). Taken as small, Super or Fire Mario (SMM1 takes it from any form; SMM2's SMB1
+  has no other form that would), the form change it asks for (hook point main+0x15a94a0) becomes one to small: from
+  small the costume is on at once, from Super / Fire the game's shrink plays (about 30 updates of big Mario's frames,
+  seen) and the costume follows. The
+  costume is drawn at each pickup as SMM1 does: uniform over the owned costumes minus the one worn. Its power-up sound
+  plays (the costume's Static bank). Another power-up takes the costume off.
+- **Hit:** the damage function's form load (hook point main+0x15a50a4) reads 1 for a player in costume, so a hit
+  takes the costume off with SMM2's Super -> small power-down and its invulnerability (SMM1: costume -> small); the
+  power-down's big frames show the costume (90 updates).
+- **Taunt:** Up held 8 updates standing still, in costume (Up: the input block at player +0x550, +0x10): the costume's
+  appeal frame on every texture of its model for 120 updates (moving, jumping, a hit or a new costume end it) and its
+  `appeal` sound. Not after the goal (the goal fanfare's request ends taunts until the next course).
+- **Sounds:** jump / jump2 (half and half), landing, power-up, taunt, goal and death from SMM1's
+  `Sound/CharaMario/CharaMario_<res>{,Static}.bars` (host mixer); SMM2's goal and death fanfares give way to the
+  costume's. A dump without `Sound/CharaMario` (the subset some data folders link) has no costume sounds; the log says
+  `<event> sound (<res>): none`.
+- **Reward:** after a won 100 Mario run, SMM1's costume window (`Cmn_CMListWindow_01`, `smm1/ending.c`) shows one
+  costume not owned yet, from SMM1's pools by difficulty; owned costumes are kept in `costumes-owned.txt`. The
+  window's frame is a four-frame window whose bottom frame is flipped; the layout player now anchors each frame's
+  texture at its corner as nw::lyt does (`lyt_player.c` `frame4_uv`), which drew the lower-right frame cut off
+  before. `RECOMP_HUNDRED_TEST_REWARD=<res>` with `test_smm1ui --flow <out> ending:0:2:0 2440 2440` renders it.
+- **Try it now:** "Mystery Mushroom costume now" with a "Costume" row (every SMM1 costume by its English name, owned
+  or not; it isn't added to the owned ones): player 1 takes a Mystery Mushroom with that costume, through the game's
+  own form change request. Greyed out without the switch, outside an SMB1 course being played, in Endless / 100 Mario
+  runs, and with a power-up the Mystery Mushroom doesn't take.
+- **Co-op:** each player wears their own costume (each character's model is its own file, so its own textures).
+- **Tests:** `RECOMP_COSTUME=<res>` wears that costume from each course's start (and every pickup gives it);
+  `RECOMP_COSTUME_TRY=<frame>:<res>` presses "Mystery Mushroom costume now" at that presented frame;
+  `RECOMP_COSTUME_DEBUG=1` logs forms, model textures, looks and every sound. `tools/costume_course.py` makes a test
+  course as the title courses (`RECOMP_MOD_DIR`, `SMM2_SEED=1`; link the mod folder's `romfs/Pack/M1_Model.pack` and
+  `romfs/Mods/CostumeAppeal.bin` to the ones in `mods-generated/romfs/`): pens with a Super Mushroom, two Mystery
+  Mushrooms and a Koopa, and its pad script (`--variant hit`: a Koopa walking to a player in costume who taunts first).
+  Checked (2026-10-22): Super Mario takes a Mystery Mushroom (Peach), taunts (her parasol pose), takes the second
+  (Pikachu, then Yoshi: a new draw each), "costume now" gives Mario (Gold) mid-course, a Koopa's hit takes it off
+  (the costume flickers, then small Mario).
+
 ## Lanky Mario (SMM1's Weird Mushroom) (`games/smm2/mods/lanky.c`)
 
 A Mods-tab switch, "Lanky Mario (Weird Mushroom)", off by default (`lanky=0/1` in `smm2mods.ini`, `RECOMP_MOD_LANKY`).
@@ -757,8 +814,10 @@ The overlay menu's Mods tab has a "Try it now" section under the switches: one b
 asked for at once (runtime `game_mod_triggers`, drawn by `runtime/ui/menu.mm` `tab_mods`). A mod adds its rows with
 `mod_trigger_add` from a constructor (label, description, `available()`, `trigger(choice)`, optional choices). The
 rule each row follows (DECISIONS 2026-10-22): a try-it-out helper, greyed out outside a course and in Endless /
-100 Mario runs; `trigger()` only records the request and the mod applies it on the game's thread. Rows: "Lanky Mario
-now" (`lanky.c`).
+100 Mario runs; `trigger()` only records the request and the mod applies it on the game's thread. Rows: "Mystery
+Mushroom costume now" with its "Costume" choice row (`costume.c`), "Lanky Mario now" (`lanky.c`). A row's choices
+may be filled in after start-up through the row `mod_trigger_add` returns (the costume names are read from the SMM1
+dump at the first course); the menu reads them at each draw.
 
 ## The game's own network stack (backend local-nex): groundwork for Nextendo and a local NEX server
 

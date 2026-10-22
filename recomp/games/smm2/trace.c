@@ -113,8 +113,8 @@ static void finish(const char *why) {
 
 void smm2_player_hook(Cpu *c) {
     uint64_t self = c->x[0];
-    extern void costume_player_frame(uint64_t player);  // (mods/costume.c: the Mystery Mushroom pickup)
-    costume_player_frame(self);
+    extern void costume_player_frame(Cpu *c, uint64_t player);  // (mods/costume.c: costumes, the taunt, the trigger)
+    costume_player_frame(c, self);
     extern void lanky_player_frame(Cpu *c, uint64_t player);  // (mods/lanky.c: Lanky Mario's update)
     lanky_player_frame(c, self);
     extern void quick_retry_player(uint64_t player);  // (mods/quick_retry.c: the restart after a miss)

@@ -90,11 +90,14 @@ typedef struct {
     const char *const *choices;
     int nchoices;
 } GameModTrigger;
-void mod_trigger_add(const GameModTrigger *t);
+GameModTrigger *mod_trigger_add(const GameModTrigger *t);  // the stored row (its choices may be filled in later)
 
 // ---- the player model holder's builder and visual slot setter (player_model.c, shared by costume.c and lanky.c: an
 // address takes one override)
 typedef struct { uint64_t addr, val, was; } PmSwap;  // a guest pointer set to val for the builder's call
+// a guest function called from the player's update (games/smm2/trace.c: after its prologue only x0 and the argument
+// registers are live): the caller-saved state is put back after; x8 where a returned struct goes. Its x0.
+uint64_t pm_call(Cpu *c, uint64_t fn, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t x8);
 bool smb1_course(void);          // costume.c: the course being played or edited is SMB1-style
 bool lanky_on(void);             // lanky.c: Lanky Mario is on (the switch at start-up)
 bool bridge_endless_course(void);  // bridge.c: the course being played is an Endless / 100 Mario run's

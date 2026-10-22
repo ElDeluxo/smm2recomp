@@ -9,6 +9,8 @@
 // the style's row from the model name table (0x7102c17638, SafeString {vtable, char *} [style * 16 + slot]: the file,
 // with the style's prefix and the character's suffix) and the FMDL name table (0x7102c17b38, the same layout).
 // Setter 0x710155fcc0 (holder, int *slot): holder +0x478 = *slot, the only writer of the slot the holder draws.
+#include <string.h>
+
 #include "mod.h"
 
 #define BUILDER MAIN_ADDR(0x155fcd0)
@@ -16,6 +18,7 @@
 
 int costume_model_swaps(uint64_t holder, uint32_t style, uint32_t character, PmSwap *out);  // costume.c
 int32_t costume_visual_slot(uint64_t holder, int32_t slot);
+void costume_model_building(uint64_t holder, uint32_t style);  // (the holder being built, 0 after: its textures)
 int lanky_model_swaps(uint64_t holder, uint32_t style, uint32_t character, PmSwap *out);  // lanky.c
 int32_t lanky_visual_slot(uint64_t holder, int32_t slot);
 
@@ -26,8 +29,23 @@ static void builder(Cpu *c) {
     int n = costume_model_swaps(holder, style, character, s);
     n += lanky_model_swaps(holder, style, character, s + n);
     for (int i = 0; i < n; i++) s[i].was = g64(s[i].addr), s64(s[i].addr, s[i].val);
+    costume_model_building(holder, style);
     guest_call_orig(c, BUILDER);
+    costume_model_building(0, style);
     for (int i = n - 1; i >= 0; i--) s64(s[i].addr, s[i].was);
+}
+
+// (mod.h; lanky.c's and costume.c's form requests and sounds)
+uint64_t pm_call(Cpu *c, uint64_t fn, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t x8) {
+    uint64_t x[19], nzcv = c->nzcv, sp = c->sp;
+    static __thread __uint128_t v[32];
+    memcpy(x, c->x, sizeof x), memcpy(v, c->v, sizeof v);
+    c->x[0] = a0, c->x[1] = a1, c->x[2] = a2, c->x[8] = x8;
+    guest_call(c, fn);
+    uint64_t r = c->x[0];
+    memcpy(c->x, x, sizeof x), memcpy(c->v, v, sizeof v);
+    c->nzcv = nzcv, c->sp = sp;
+    return r;
 }
 
 static void setter(Cpu *c) {

@@ -36,6 +36,12 @@ typedef struct {
     int nchoices;
 } GameModTrigger;
 WEAK int game_mod_triggers(const GameModTrigger **out) { *out = NULL; return 0; }
+// ... and a look at the textures the game makes and drops (runtime/nvn/objects.c, on the game's thread): the guest
+// address of the texels, the size and the NVN format. SMM2's costumes find the textures of their models with it.
+WEAK void game_texture_init(uint64_t addr, uint32_t width, uint32_t height, uint32_t format) {
+    (void)addr, (void)width, (void)height, (void)format;
+}
+WEAK void game_texture_final(uint64_t addr) { (void)addr; }
 
 // ---- once per frame on the game's main thread (runtime/hle/input.c), and per presented frame (renderers)
 WEAK void warp_game_tick(Cpu *c) { (void)c; }
