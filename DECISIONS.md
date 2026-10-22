@@ -1900,3 +1900,20 @@ would hide most of them until many 100 Mario runs are won, which is what trying 
 the choice as owned keeps SMM1's unlock game intact.
 **Would change:** the owner wanting the row limited to the owned costumes (a one-line filter in `fill_choices`), or
 the trigger counting as an unlock.
+
+## 2026-10-22 — Costume sounds replace SMM2's at the game's own requests, with SMM1's fallback; the item keeps its size
+
+**Decision:** (1) SMM2's jump sound is muted under a costume at the game's own jump sound request (the player's jump
+sound function reads its request as silent; one state that plays "jump" itself gets a sound user without an
+instance), and the costume's jump plays at that request instead of on a detected take-off. (2) As in SMM1, an event
+the costume has no sound for keeps the normal sound: a costume without `jump`, `goal` or `down` leaves SMM2's jump
+sound and fanfares alone (before, a costume without them made the goal and the miss silent). (3) The Mystery
+Mushroom's look is SMM1's "?" mushroom drawn into the item model's own texture at one texel a pixel (bottom middle);
+the item stays the Big Mushroom's 2 x 2 for the game.
+**Why:** (1) the request is where SMM2 decides a jump makes a sound (a stomp bounce or a spring doesn't), so the
+costume's sound comes exactly where SMM2's would, and muting there touches nothing else (the sound links stay the
+game's); a global "mute this key" in the SLink play call would need a hook in a function every object calls. (2)
+SMM1's rule (smm1-extras-costume.md §7). (3) Changing the item's size or hit box means another object (SMM2 has no
+16 x 16 Mystery Mushroom); the texture alone needs no game code and shows SMM1's art at SMM1's size.
+**Would change:** a 16 x 16 Mystery Mushroom object (its own actor and course id), or another place SMM2 plays the
+player's jump sound found playing under a costume (the audio log shows SMB1's jump wave, 0x341a bytes).

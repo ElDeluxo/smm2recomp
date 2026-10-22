@@ -19,6 +19,8 @@ pen 2 and walk into the Mystery Mushroom as Super Mario (a costume, through the 
 taunt: the appeal pose and sound), jump into pen 3 and take the second (another costume: SMM1 draws one at each
 pickup), then jump into pen 4 and stand, where the Koopa's hit takes the costume off. RECOMP_COSTUME_TRY presses the
 overlay menu's "Mystery Mushroom costume now" at a presented frame (e.g. while standing in pen 3).
+--variant subarea: a warp pipe facing left at tiles 12-13 of the main area and the same of the sub-area (warp id 1), for
+a player in costume (RECOMP_COSTUME) who walks right into it, comes out in the sub-area, and walks back in.
 """
 
 from __future__ import annotations
@@ -45,6 +47,8 @@ PAD = {
                "100 RIGHT\n16 RIGHT A\n20 RIGHT\n300 -\n",
     "hit": "# Mystery Mushroom costumes, the hit (tools/costume_course.py --variant hit): one line per player update\n"
            "20 -\n160 UP\n400 -\n",
+    "subarea": "# Mystery Mushroom costumes, a pipe to the sub-area and back (tools/costume_course.py --variant subarea)\n"
+               "200 -\n240 RIGHT\n200 -\n60 LEFT\n240 RIGHT\n200 -\n",
 }
 
 
@@ -57,32 +61,48 @@ def build(variant: str) -> bytes:
     for area in c.areas:
         area.header.boundary_right, area.header.boundary_top = COLUMNS * 16, 432
     a = c.main
-    a.header.liquid_start_height = a.header.liquid_end_height = 1
+    for area in c.areas:
+        area.header.liquid_start_height = area.header.liquid_end_height = 1
     h.start_y, h.goal_y, h.goal_x = GROUND, GROUND, (COLUMNS - 10) * 10 + 5
+
+    def ground(area, cols: dict[int, int]) -> None:
+        g = {(x, y) for x, height in cols.items() for y in range(height)}
+
+        def tile_id(x: int, y: int) -> int:  # the SMB1 ground ids (top / sides / fill), from the neighbours
+            up, left, right = (x, y + 1) in g, (x - 1, y) in g, (x + 1, y) in g
+            if not up:
+                return 59 if left and right else 58 if right else 60 if left else 29
+            return 62 if left and right else 61 if right else 63 if left else 29
+
+        for x, y in sorted(g):
+            t = course.GroundTile()
+            t.x, t.y, t.id, t.background_id = x, y, tile_id(x, y), 0
+            area.ground.items.append(t)
+
+    def put(obj_id: int, x: int, size: int = 1, area=a, flags: int = 0x06000040) -> course.CourseObject:
+        o = course.CourseObject()  # one object standing on the ground from tile x
+        o.x, o.y = x * 160 + 80 * size, GROUND * 160 + 80 * size
+        o.width = o.height = size
+        o.flags, o.child_flags, o.extended_data = flags, 0x06000040, 0
+        o.id, o.child_id, o.link_id, o.sound_effect_id = obj_id, -1, -1, -1
+        area.objects.items.append(o)
+        return o
+
+    if variant == "subarea":
+        # a pipe facing left (direction 1, flags bits 5-6) with warp id 1 (bits 20-23) on the ground at tiles 12-13 of
+        # each area (its anchor is the right-hand tile's centre, its length 2): walking right into one leads to the
+        # other area's, out of whose mouth the player comes walking left
+        ground(a, {x: GROUND for x in range(7, COLUMNS - 10)})
+        ground(c.sub, {x: GROUND for x in range(0, 40)})
+        for area in c.areas:
+            pipe = put(9, 13, area=area, flags=0x06000000 | 1 << 5 | 1 << 20)
+            pipe.width = pipe.height = 2  # (height: its length)
+        return c.to_bytes()
 
     cols = {x: GROUND for x in range(7, COLUMNS - 10)}
     for x in (13, 22, 31, 40):
         cols[x] = GROUND + 2
-    g = {(x, y) for x, height in cols.items() for y in range(height)}
-
-    def tile_id(x: int, y: int) -> int:  # the SMB1 ground ids (top / sides / fill), from the neighbours
-        up, left, right = (x, y + 1) in g, (x - 1, y) in g, (x + 1, y) in g
-        if not up:
-            return 59 if left and right else 58 if right else 60 if left else 29
-        return 62 if left and right else 61 if right else 63 if left else 29
-
-    for x, y in sorted(g):
-        t = course.GroundTile()
-        t.x, t.y, t.id, t.background_id = x, y, tile_id(x, y), 0
-        a.ground.items.append(t)
-
-    def put(obj_id: int, x: int, size: int = 1) -> None:  # one object standing on the ground from tile x
-        o = course.CourseObject()
-        o.x, o.y = x * 160 + 80 * size, GROUND * 160 + 80 * size
-        o.width = o.height = size
-        o.flags, o.child_flags, o.extended_data = 0x06000040, 0x06000040, 0
-        o.id, o.child_id, o.link_id, o.sound_effect_id = obj_id, -1, -1, -1
-        a.objects.items.append(o)
+    ground(a, cols)
 
     if variant == "hit":
         put(1, 11)  # a Koopa, walking to the start
@@ -102,8 +122,9 @@ def main() -> int:
     src.add_argument("--table", type=Path, help="the course key table (smmfmt.smm2.keyfind output)")
     ap.add_argument("--out", type=Path, required=True, help="the mod folder to write (RECOMP_MOD_DIR)")
     ap.add_argument("--variant", choices=sorted(PAD), default="pickups",
-                    help="pickups (the course above) or hit: pen 1 holds a Koopa walking to the start, for a player in "
-                         "costume from the start (RECOMP_COSTUME) who holds Up (the taunt), then waits for its hit")
+                    help="pickups (the course above); hit: pen 1 holds a Koopa walking to the start, for a player in "
+                         "costume from the start (RECOMP_COSTUME) who holds Up (the taunt), then waits for its hit; "
+                         "subarea: a pipe to the sub-area and back, for a player in costume")
     args = ap.parse_args()
 
     names = ["title_course_data_%02d" % n for n in range(10)]

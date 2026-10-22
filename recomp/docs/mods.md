@@ -738,6 +738,13 @@ A Mods-tab switch, "Mystery Mushroom costumes", off by default (`costumes=0/1` i
   seen) and the costume follows. The
   costume is drawn at each pickup as SMM1 does: uniform over the owned costumes minus the one worn. Its power-up sound
   plays (the costume's Static bank). Another power-up takes the costume off.
+- **The item's look:** the Mystery Mushroom item's model in the generated pack (`Model/M1_Item_special` and
+  `M1_Item_special2`, the Big Mushroom's; `M1_Item_kinoko` with `costume_item=super`) has its texture redrawn with
+  SMM1's "?" mushroom (`Add_kinoko` of `Model/M1_Item_CharaKinoko`, `Pack/StaticSkin.pack` of the SMM1 dump; the
+  update's `M1_Item_CharaKinoko2`), bottom middle at one texel a pixel, so it is SMM1's size; quad, material and
+  animation stay SMM2's (`mystery_item`, generator `costumes` v4; `costume item:super` in the overlay's identity
+  regenerates it when the item changes). The item is still the Big Mushroom's 2 x 2 for the game (its hit box), and
+  the Course Maker's palette icon is still the Big Mushroom's.
 - **Hit:** the damage function's form load (hook point main+0x15a50a4) reads 1 for a player in costume, so a hit
   takes the costume off with SMM2's Super -> small power-down and its invulnerability (SMM1: costume -> small); the
   power-down's big frames show the costume (90 updates).
@@ -745,9 +752,17 @@ A Mods-tab switch, "Mystery Mushroom costumes", off by default (`costumes=0/1` i
   appeal frame on every texture of its model for 120 updates (moving, jumping, a hit or a new costume end it) and its
   `appeal` sound. Not after the goal (the goal fanfare's request ends taunts until the next course).
 - **Sounds:** jump / jump2 (half and half), landing, power-up, taunt, goal and death from SMM1's
-  `Sound/CharaMario/CharaMario_<res>{,Static}.bars` (host mixer); SMM2's goal and death fanfares give way to the
-  costume's. A dump without `Sound/CharaMario` (the subset some data folders link) has no costume sounds; the log says
-  `<event> sound (<res>): none`.
+  `Sound/CharaMario/CharaMario_<res>{,Static}.bars` (host mixer). SMM2's goal and death fanfares and its jump sound
+  give way to the costume's, as in SMM1, where an event the costume has no sound for plays the normal one: a costume
+  without `goal`, `down` or `jump` keeps SMM2's (Goomba, Block, the Pokémon). The jump: the player's jump sound
+  (main+0x15c78b0, called from the jump states) returns at once when its request's silent byte (+0x24a4) is set; hook
+  point main+0x15c78c4 reads it as set for a player in costume where SMM2 would play "jump" or "voice_jump_high"
+  (request kinds 1 and 4; 2 is `jump_high`, not SMB1's), and the costume's jump plays there; one player state's enter
+  (main+0x15cfe70) plays "jump" itself, and hook point main+0x15cfe90 hands it a sound user without an instance (the
+  play call returns an empty handle). Nothing changes without a costume worn. A dump without `Sound/CharaMario` (the
+  subset some data folders link) has no costume sounds; the log says `<event> sound (<res>): none`.
+- **Sub-areas:** the player object and its model stay through a pipe to the sub-area and back, so the costume stays
+  on (checked: main → sub → main → sub on the test course's `--variant subarea`).
 - **Reward:** after a won 100 Mario run, SMM1's costume window (`Cmn_CMListWindow_01`, `smm1/ending.c`) shows one
   costume not owned yet, from SMM1's pools by difficulty; owned costumes are kept in `costumes-owned.txt`. The
   window's frame is a four-frame window whose bottom frame is flipped; the layout player now anchors each frame's
@@ -763,7 +778,13 @@ A Mods-tab switch, "Mystery Mushroom costumes", off by default (`costumes=0/1` i
   `RECOMP_COSTUME_DEBUG=1` logs forms, model textures, looks and every sound. `tools/costume_course.py` makes a test
   course as the title courses (`RECOMP_MOD_DIR`, `SMM2_SEED=1`; link the mod folder's `romfs/Pack/M1_Model.pack` and
   `romfs/Mods/CostumeAppeal.bin` to the ones in `mods-generated/romfs/`): pens with a Super Mushroom, two Mystery
-  Mushrooms and a Koopa, and its pad script (`--variant hit`: a Koopa walking to a player in costume who taunts first).
+  Mushrooms and a Koopa, and its pad script (`--variant hit`: a Koopa walking to a player in costume who taunts first;
+  `--variant subarea`: a warp pipe in each area, walked into, out of and into again). With `RECOMP_MOD_DIR` the
+  romfs index is made at start, before the overlay is generated (lazily, at the first costume model), so after a
+  change to the generated pack the links show the previous start's: start once more.
+  Checked (2026-10-22, later): SMM2's jump sound muted under Peach's (`LARECOMP_AUDIO_LOG=1`: SMB1's jump wave, 0x341a
+  bytes, 5 times in 5 jumps with costumes off, 0 in Peach, 5 in Goomba), the costume through the sub-area pipe and
+  back, the "?" item with the Big and the Super Mushroom as the Mystery Mushroom.
   Checked (2026-10-22): Super Mario takes a Mystery Mushroom (Peach), taunts (her parasol pose), takes the second
   (Pikachu, then Yoshi: a new draw each), "costume now" gives Mario (Gold) mid-course, a Koopa's hit takes it off
   (the costume flickers, then small Mario).

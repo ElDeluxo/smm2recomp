@@ -13,7 +13,8 @@
 // names), which replaces the game's. The .zs files are compressed with zstd (level 3), as the game's own are. With them,
 // Mods/CostumeAppeal.bin (ours, nothing of the game's reads it): each costume's appeal frame as a model texture holds
 // it. Since every model is the template with other texels, costume_look gives mods/costume.c a costume's texels to
-// write over a loaded model's (another costume mid-course, the taunt pose).
+// write over a loaded model's (another costume mid-course, the taunt pose). The pack's Mystery Mushroom item model
+// (the Big Mushroom's, or the Super Mushroom's with costume_item=super) gets SMM1's look (mystery_item, below).
 #ifndef SMM1UI_STANDALONE
 #include "../../../../runtime/platform.h"  // (mkdir with a mode and plat_remove_tree on every host)
 #endif
@@ -322,6 +323,9 @@ static Bfres *costume_bfres(const char *res) {
     return b;
 }
 
+static uint8_t *mystery_item(const uint8_t *z, size_t zn, size_t *out_n);
+bool costume_item_model(const char *name);
+
 bool costume_generate(void) {
     list_costumes();
     if (!g_ncostumes) {
@@ -357,6 +361,15 @@ bool costume_generate(void) {
     size_t *blob_n = calloc((size_t)(norig + g_ncostumes) + 1, sizeof *blob_n);
     char (*cnames)[96] = calloc((size_t)(4 * g_ncostumes) + 1, sizeof *cnames);
     for (int i = 0; i < norig; i++) names[nn] = orig[i].name, blob_of[nn++] = nblob, blob[nblob] = orig[i].d, blob_n[nblob++] = orig[i].n;
+    // the Mystery Mushroom item: its model with SMM1's look (in place of the original's blob)
+    uint8_t *item[4] = {NULL};
+    for (int i = 0, k = 0; i < norig && k < 4; i++)
+        if (costume_item_model(orig[i].name)) {
+            item[k] = mystery_item(orig[i].d, orig[i].n, &blob_n[i]);
+            if (item[k]) blob[i] = item[k];
+            else blob_n[i] = orig[i].n;
+            fprintf(stderr, LOGC "the Mystery Mushroom (%s): %s\n", orig[i].name, item[k++] ? "SMM1's look" : "not made (its own look)");
+        }
     int made = 0;
     // the taunt's frames (APPEAL file: per costume its name, then its appeal.0 as the model's textures hold a frame)
     uint8_t *appeal = calloc((size_t)g_ncostumes + 1, APPEAL_REC);
@@ -404,6 +417,7 @@ bool costume_generate(void) {
     free(appeal);
     fprintf(stderr, LOGC "%d costumes generated into " PACK " (%.1f MB)\n", made, on / 1e6);
     for (int b = norig; b < nblob; b++) free((void *)blob[b]);
+    for (int k = 0; k < 4; k++) free(item[k]);
     free(out), free(names), free(blob_of), free(blob), free(blob_n), free(cnames);
     free(pack), free(orig), free(tarc), free(inner);
     return ok;
@@ -417,7 +431,7 @@ static bool costume_overlay(void) {
     remove_old();
     return costume_generate();
 }
-ROV_GENERATOR("costumes", 3, costume_overlay)  // (2: the models compressed; 3: the taunt frames)
+ROV_GENERATOR("costumes", 4, costume_overlay)  // (2: the models compressed; 3: the taunt frames; 4: the item's look)
 #endif
 
 // ---------------------------------------------------------------- Lanky Mario's Slim model (mods/lanky.c)
@@ -511,6 +525,77 @@ static uint8_t *model_store(const ModelZs *m, size_t *zn) {  // the archive agai
     uint8_t *zs = zstd_store(arc, an, zn);
     free(arc);
     return zs;
+}
+
+// ---------------------------------------------------------------- the Mystery Mushroom's look
+// SMM1 draws the Mystery Mushroom with Model/M1_Item_CharaKinoko (Pack/StaticSkin.pack of the SMM1 dump; the update's
+// M1_Item_CharaKinoko2): a 24 x 24 quad whose texture Add_kinoko is the "?" mushroom, 16 x 16 at the bottom middle.
+// In SMM2 the Mystery Mushroom is the SMB1 skin of the style power-up, the Big Mushroom (Model/M1_Item_special, the
+// one seen in a course, and M1_Item_special2 with the same art [inf: another use of the item]: one 32 x 32 texture
+// on a 32 x 32 quad), or with costume_item=super the Super Mushroom (M1_Item_kinoko: 16 x 16 on 16 x 16). Those models
+// are copied with their texture redrawn from Add_kinoko, bottom middle at one texel a pixel, so the mushroom keeps
+// SMM1's size (the rest of the Big Mushroom's quad is clear); quad, material and animation stay SMM2's.
+__attribute__((weak)) int costume_item_form(void) { return 6; }  // (mods/costume.c: 6 the Big Mushroom, 1 the Super)
+bool costume_item_model(const char *name) {  // (a pack member: the item's model)
+    if (costume_item_form() == 1) return !strcmp(name, "Model/M1_Item_kinoko.Nin_NX_NVN.zs");
+    return !strcmp(name, "Model/M1_Item_special.Nin_NX_NVN.zs") || !strcmp(name, "Model/M1_Item_special2.Nin_NX_NVN.zs");
+}
+typedef struct { const LTex *src; int done; } MysteryCtx;
+static void mystery_put(void *ctx, const char *name, uint8_t *data, int w, int h, int bhl) {
+    (void)name;
+    MysteryCtx *m = ctx;
+    const LTex *s = m->src;
+    uint8_t *lin = calloc((size_t)w * (size_t)h, 4);
+    int ox = (w - s->w) / 2, oy = h - s->h;  // (bottom middle)
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++) {
+            int sx = x - ox, sy = y - oy;
+            if (sx >= 0 && sy >= 0 && sx < s->w && sy < s->h)
+                memcpy(lin + ((size_t)y * w + x) * 4, s->px + ((size_t)sy * s->w + sx) * 4, 4);
+        }
+    tegra_swizzle(lin, data, (uint32_t)w, (uint32_t)h, 1, 4, (uint32_t)bhl, 0);
+    free(lin);
+    m->done++;
+}
+static const LTex *mystery_texture(void) {  // (read once; the layout textures' id, as their table may grow)
+    static int id = -2;
+    if (id != -2) return lyt_tex(id);
+    id = -1;
+    size_t pn, an, bn;
+    uint8_t *pack = smm1_dump_read("Pack/StaticSkin.pack", &pn);
+    LSarc s, in;
+    if (pack && lyt_sarc_open(&s, pack, pn)) {
+        size_t zn;  // (the update's pack has M1_Item_CharaKinoko2: Add_kinoko alone; the disc's M1_Item_CharaKinoko)
+        const uint8_t *z = lyt_sarc_get(&s, "Model/M1_Item_CharaKinoko2.szs", &zn);
+        if (!z) z = lyt_sarc_get(&s, "Model/M1_Item_CharaKinoko.szs", &zn);
+        uint8_t *arc = z ? lyt_yaz0(z, zn, &an) : NULL;
+        if (arc && lyt_sarc_open(&in, arc, an)) {
+            const uint8_t *bf = lyt_sarc_get(&in, "Output.bfres", &bn);
+            Bfres *b = bf ? bfres_load(bf, bn) : NULL;
+            id = b ? bfres_texture(b, "Add_kinoko") : -1;
+            lyt_sarc_close(&in);
+        }
+        free(arc);
+        lyt_sarc_close(&s);
+    }
+    free(pack);
+    const LTex *t = lyt_tex(id);
+    if (!t || !t->px || t->w <= 0 || t->h <= 0) id = -1;
+    return lyt_tex(id);
+}
+// the item model (.zs) with the Mystery Mushroom's look; NULL if SMM1's texture or the model isn't readable
+static uint8_t *mystery_item(const uint8_t *z, size_t zn, size_t *out_n) {
+    MysteryCtx ctx = {mystery_texture(), 0};
+    ModelZs m;
+    if (!ctx.src || !model_open(&m, z, zn)) {
+        if (ctx.src) model_close(&m);
+        return NULL;
+    }
+    size_t bn;
+    uint8_t *b = bfres_bntx(m.bfres, m.bn, &bn);
+    uint8_t *out = b && bntx_each(b, bn, mystery_put, &ctx) > 0 && ctx.done ? model_store(&m, out_n) : NULL;
+    model_close(&m);
+    return out;
 }
 
 // ---- the recolour map (Super Mario's colour -> the character's)

@@ -54,6 +54,14 @@ HOOK_POINTS = {
     # its first instruction (sub sp, sp, #0x80): from small Mario the Mystery item's form becomes 0 and the costume
     # goes on
     0x15a94a0: (0xD10203FF, 'costume: form change request'),
+    # Costumes: the player's jump sound (0x71015c78b0, player; called from the jump states) loads the jump request's
+    # "silent" byte (ldrb w8, [x0, x8], x8 = 0x24a4) and returns at once when it is set. In costume it reads 1, so
+    # SMM2's jump sound ("jump", "voice_jump_high") is not requested and the costume's own plays instead (SMM1)
+    0x15c78c4: (0x38686808, 'costume: jump sound, the silent flag load'),
+    # Costumes: a player state's enter (0x71015cfe70, in the player state table at 0x7102954ff0) plays "jump" by name
+    # itself (0x7100666af0 on the player's sound user, x0); after the key's address is made (add x1, x1, #0x1e4) a player
+    # in costume gets a user with no sound instance (+0x10 = 0), which that call answers with an empty handle
+    0x15cfe90: (0x91079021, 'costume: a state\'s own jump sound, the key load'),
     # Lanky Mario (lanky.c): the Jump state's begin (0x71015c8a60), the first instruction after the jump launch
     # (player vtable +0x1180) returns (ldr w8, [x19, #0x2738]); a lanky player's computed jump (the jump request's vy
     # at +0x248c is NaN) gets +0.5 on vy ([x19 + 0x240]), and the fuwa cue's timer starts

@@ -204,8 +204,19 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     the frame's corner as nw::lyt does (`lyt_player.c` `frame4_uv`); the other 100 Mario screens render identically
     (63 frames compared); ✅ **"Mystery Mushroom costume now"** in Try it now with a costume choice row (every costume,
     DECISIONS 2026-10-22): MarioGold given mid-course; the power-up sound now comes from the costume's Static bank.
-    ⬜ SMM2's own jump sound muted under the costume's; sub-areas: whether the player object (and so the costume
-    worn) survives a pipe to a sub-area is unchecked [?]; the Mystery Mushroom's own look (`M1_Item_CharaKinoko`).
+    ✅ **SMM2's jump sound muted under the costume's** (2026-10-22): the game's own request (the player's jump sound
+    0x71015c78b0 reads its request as silent, hook point main+0x15c78c4; one state's own "jump", 0x71015cfe70, gets a
+    sound user without an instance, main+0x15cfe90) and the costume's jump plays there instead of on take-off; a
+    costume without a jump sound keeps SMM2's (SMM1's fallback; goal and death fanfares likewise now). Seen with the
+    audio log: 5 jumps play SMB1's jump wave 5 times with costumes off, 0 times in Peach, 5 times in Goomba (no jump
+    sound); ✅ **sub-areas**: the player object and model stay through a pipe, so the costume stays on, main → sub →
+    main → sub (test course `--variant subarea`, Peach given by "costume now"); ✅ **the Mystery Mushroom's own look**:
+    the item's model (`M1_Item_special` / `special2`, or `M1_Item_kinoko` with `costume_item=super`) in the generated
+    pack gets SMM1's "?" mushroom (`Add_kinoko` of `M1_Item_CharaKinoko`, the update's `CharaKinoko2`) at one texel a
+    pixel (generator "costumes" v4). Evidence (private): `recomp/private/smm2/evidence/costume-leftovers/`.
+    ⬜ the Mystery Mushroom keeps the Big Mushroom's 2 x 2 size (only its look is SMM1's); the editor palette's icon is
+    still the Big Mushroom's; the data folders' SMM1 subset (made before `tools/smm1_subset.sh` took `Static.pack`
+    and `Sound/CharaMario`) has no costume table, so a draw finds no owned costume there: run the script again.
     Note: the data folders' SMM1 subset link has no `Sound/CharaMario`, so costume sounds log "none" there (the full
     disc dump has them). **Crash ("Pure virtual function called", WorkerMgr, main+0x4d2f50: a
     queued object destroyed while its request was pending)** seen twice with costumes on (entering Course World;
@@ -490,8 +501,10 @@ Setup failures first, since they block new players:
    appeal pose 120 updates and its sound, not after the goal); the reward window's lower-right frame fixed (the layout
    player's flipped four-frame window); a new costume at each pickup, put on mid-course by rewriting the loaded
    model's textures (every costume model is one template with other texels); the Mystery Mushroom taken as Super /
-   Fire too (SMM1). With it: "Mystery Mushroom costume now" in Try it now, a choice row of every costume. Open: SMM2's
-   jump sound under the costume's, a sub-area pipe with a costume on [?], the Mystery Mushroom's own look
+   Fire too (SMM1). With it: "Mystery Mushroom costume now" in Try it now, a choice row of every costume. Then
+   (2026-10-22): SMM2's jump sound muted under the costume's (the game's own jump sound request; a costume without one
+   keeps SMM2's, as do goal / death), the costume stays on through a sub-area pipe and back (checked), and the
+   Mystery Mushroom looks like SMM1's ("?" mushroom). Open: its 2 x 2 size and palette icon (the Big Mushroom's)
 5. ✅ Edit any course: ✅ the d-pad onto Make, ✅ the upload credit, ✅ Edit on the course card (Download again);
    ⬜ the card's "Edit" text, ⬜ Endless / 100 Mario "save for later" (design in mods.md)
 6. ✅ Course World thumbnails (2026-10-22): they were blank when TGRCode was busy (it allows about one request per

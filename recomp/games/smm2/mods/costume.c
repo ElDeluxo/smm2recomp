@@ -19,14 +19,21 @@
 //     Super or Fire Mario puts a costume on instead (the change becomes one to small: from small the costume is on at
 //     once, from Super / Fire after the game's shrink), drawn at each pickup as SMM1 does: uniform over the owned
 //     costumes minus the one worn (costume_item=super: the Super Mushroom instead, as SMCraft did). Another power-up
-//     replaces the costume.
+//     replaces the costume. The item looks like SMM1's "?" mushroom (its model in the generated pack,
+//     smm1/costume_gen.c mystery_item).
 //   - Damage: a hit takes the costume off with the Super -> small power-down (the form is read as 1 for the game's
 //     damage function, hook point 0x15a50a4), as a costume absorbs a hit in SMM1; the power-down's flicker shows the
 //     costume in place of Super Mario.
 //   - Taunt: Up held 8 updates standing still, in costume: the costume's appeal pose for 120 updates (its appeal.0 frame
 //     written over the model's textures; moving, jumping or a hit ends it) and its appeal sound.
-//   - Sound: the costume's own power-up, goal and death sounds (SMM1's Sound/CharaMario banks, host mixer); SMM2's goal
-//     and death fanfares give way to them (their choosers, 0x71017a5020 / 0x71017a4bc0, see the state 6 / 7 request).
+//   - Sound: the costume's own power-up, jump, landing, taunt, goal and death sounds (SMM1's Sound/CharaMario banks,
+//     host mixer). SMM2's goal and death fanfares give way to them (their choosers, 0x71017a5020 / 0x71017a4bc0, see the
+//     state 6 / 7 request) and so does SMM2's jump sound: the player's jump sound (0x71015c78b0) reads its request as
+//     silent (hook point 0x15c78c4) and one state's own "jump" (0x71015cfe70) gets a sound user without an instance
+//     (hook point 0x15cfe90); the costume's jump plays there instead. An event the costume has no sound for keeps
+//     SMM2's (SMM1 falls back to the normal sound). Nothing changes without a costume worn.
+//   - Sub-areas: the player object (and the costume model) stays through a pipe to the sub-area and back, so the
+//     costume stays on (seen on the test course, tools/costume_course.py --variant subarea).
 //   - Reward: one random costume not owned yet at the end of a 100 Mario run, from SMM1's pools by difficulty
 //     (smm1-100mario-code.md §7); owned costumes are kept in costumes-owned.txt in the data folder.
 //   - "Mystery Mushroom costume now" in the overlay menu's Try it now (triggers.c): player 1 takes a Mystery Mushroom
@@ -54,6 +61,7 @@ int costume_look(const char *res, bool appeal, uint8_t **out);
 bool smm1_data_open(void);
 void smm1_se_bank(const char *bank);
 bool smm1_se(const char *name);
+bool smm1_se_has(const char *name);
 extern uint64_t renderer_present_count(void);
 
 #define NAME_TABLE MAIN_ADDR(0x2c17638)   // model base names: SafeString {vtable, char *} [style * 16 + form]
@@ -64,9 +72,15 @@ extern uint64_t renderer_present_count(void);
 #define FORM_REQUEST MAIN_ADDR(0x15a94a0) // (player, int *form): 0 accepted, 1 the same change pending, 2 refused
 #define DAMAGE_FORM_LOAD 0x15a50a4        // hook point: ldr w8, [x19, #0x4a8] at the damage function's start
 #define TRANSFORM_REQ 0x15a94a0           // hook point: the form change request's first instruction (player, int *form)
+#define JUMP_SOUND_SILENT 0x15c78c4       // hook point: the jump sound (0x71015c78b0, player) loads the request's silent
+                                          // byte (+0x24a4) into w8; set, it returns before any sound
+#define STATE_JUMP_KEY 0x15cfe90          // hook point: a state's enter (0x71015cfe70) has made "jump" in x1, the
+                                          // player's sound user in x0, for 0x7100666af0
 #define COSTUME_SLOT 12
 #define P_FORM 0x4a8      // the player's form (0 small, 1 Super, 2 Fire, ...)
 #define P_PENDING 0x4b0   // the form a change asked for
+#define P_JUMP_KIND 0x249c  // the jump request's kind: 1 "jump", 2 "jump_high" (not in SMB1), 3 none, 4 "voice_jump_high"
+                            // [obs 0x71015c78b0]
 #define P_HOLDER 0x2f90   // the player's model holders (the builder's and the setter's x0) [obs at run time, lanky.c]
 #define P_HOLDER2 0x2f98
 #define H_STYLE 0x470     // the holder's style (0 SMB1)
@@ -145,6 +159,12 @@ bool costumes_on(void) {
                 g_forced[0] ? ", wearing " : "", g_forced);
     }
     return g_on;
+}
+// the form the Mystery Mushroom item asks for: 6 the Big Mushroom, 1 the Super Mushroom (costume_item=super); its model
+// gets SMM1's look (smm1/costume_gen.c)
+int costume_item_form(void) {
+    costumes_on();
+    return g_item;
 }
 // the Mods tab's switch (the models are generated at the next start)
 static int g_setting = -1;  // the switch as last set (the mod itself follows at the next start)
@@ -366,6 +386,19 @@ static bool sound(const char *res, const char *event) {
     if (!often || g_debug > 0) LOG("[costume] %s sound (%s)%s\n", event, res, ok ? "" : ": none");
     return ok;
 }
+// whether the costume has its own sound for event (SMM1: an event the costume lacks plays the normal sound,
+// smm1-extras-costume.md §7)
+static bool has_sound(const char *res, const char *event) {
+    if (!res || !res[0] || !smm1_data_open()) return false;
+    for (int k = 0; k < 2; k++) {
+        char bank[96], name[128];
+        snprintf(bank, sizeof bank, "CharaMario_%s%s", res, k ? "Static" : "");
+        smm1_se_bank(bank);
+        snprintf(name, sizeof name, "%s/%s", bank, event);
+        if (smm1_se_has(name)) return true;
+    }
+    return false;
+}
 static void taunt_end(Wearer *w) {
     w->taunt = 0;
     Group *g = w->player ? group_of(g64(w->player + P_HOLDER)) : NULL;
@@ -451,9 +484,8 @@ static void show(Wearer *w) {
 }
 
 // ---------------------------------------------------------------- each update of each player (games/smm2/trace.c)
-// SMM1's costume sounds from the player's motion (SMCraft's events): a jump (jump or jump2, half and half), the landing
-// (ground), and the taunt (Up held 8 updates standing still: the appeal pose and sound). The game's own player sounds
-// still play [inf: SMM2's are data-driven action triggers; muting them needs the sound links' play call].
+// SMM1's costume sounds from the player's motion (SMCraft's events): the landing (ground) and the taunt (Up held 8
+// updates standing still: the appeal pose and sound). The jump's comes from the game's own jump sound request (above).
 #define P_GROUND 0x2308  // bit 0: on the ground
 #define P_VEL_Y 0x240    // float, up positive [inf: the sign from the jump test]
 #define P_SPEED 0x274    // float, forward speed
@@ -467,10 +499,8 @@ static void motion(Wearer *w, uint64_t player) {
     uint32_t a = g32(player + P_VEL_Y), b = g32(player + P_SPEED);
     memcpy(&vy, &a, 4), memcpy(&sp, &b, 4);
     if (w->wear[0]) {
-        if (w->was_ground && !ground && vy > 0.5f) {
-            if (!(rnd() & 1) || !sound(w->wear, "jump2")) sound(w->wear, "jump");
-        } else if (!w->was_ground && ground)
-            sound(w->wear, "ground");
+        if (g_debug > 0 && w->was_ground && !ground && vy > 0.5f) LOG("[costume] player %d takes off (vy %.2f)\n", (int)(w - g_p), vy);
+        if (!w->was_ground && ground) sound(w->wear, "ground");
         uint64_t in = g64(player + P_INPUT);
         bool still = ground && sp > -0.01f && sp < 0.01f;
         if (still && in && g8(in + 0x10) && !g_goal) {
@@ -544,6 +574,27 @@ bool costume_after(Cpu *c, uint64_t addr) {
         sound(w->wear, "powerup");
         return true;
     }
+    if (addr - MAIN_ADDR(0) == JUMP_SOUND_SILENT || addr - MAIN_ADDR(0) == STATE_JUMP_KEY) {  // a jump sound
+        uint64_t player = addr - MAIN_ADDR(0) == JUMP_SOUND_SILENT ? c->x[0] : c->x[19];
+        int i = player_index(player);
+        Wearer *w = i >= 0 ? &g_p[i] : NULL;
+        // (a costume without a jump sound keeps SMM2's: SMM1 falls back to the normal sound)
+        if (!costumes_on() || !w || w->player != player || !w->wear[0] || !smb1_course() || !has_sound(w->wear, "jump"))
+            return true;
+        bool state = addr - MAIN_ADDR(0) == STATE_JUMP_KEY;
+        uint32_t kind = g32(player + P_JUMP_KIND);
+        // (only where SMM2 plays a sound in the SMB1 style: a request not silent, "jump" or "voice_jump_high"; the
+        // others are left to the game, jump_high is not SMB1's)
+        if (!state && ((uint8_t)c->x[8] || (kind != 1 && kind != 4))) return true;
+        if (g_debug > 0) LOG("[costume] player %d: SMM2's jump sound muted (%s, kind %u)\n", i, state ? "state 0x71015cfe70" : "jump", kind);
+        if (state) {
+            static const uint64_t no_sound[4];  // (a sound user without its instance: the play call returns an empty handle)
+            c->x[0] = (uint64_t)(uintptr_t)no_sound;
+        } else
+            c->x[8] = 1;  // (silent: no sound, no sound properties)
+        sound(w->wear, (rnd() & 1) && has_sound(w->wear, "jump2") ? "jump2" : "jump");  // (jump2 half the time, SMM1)
+        return true;
+    }
     if (addr - MAIN_ADDR(0) != DAMAGE_FORM_LOAD) return false;
     uint64_t player = c->x[19];
     int i = player_index(player);
@@ -557,9 +608,10 @@ bool costume_after(Cpu *c, uint64_t addr) {
     return true;
 }
 
+// (a costume without its own goal / down sound leaves SMM2's fanfare: SMM1 falls back to the normal one)
 static void goal_fanfare(Cpu *c) {
     const char *res = g_p[0].wear;
-    bool mine = costumes_on() && res[0] && (uint32_t)c->x[2] == 6;
+    bool mine = costumes_on() && res[0] && (uint32_t)c->x[2] == 6 && has_sound(res, "goal");
     if ((uint32_t)c->x[2] == 6) g_goal = true;
     if (mine) c->x[2] = 0;  // (the course music only fades out)
     guest_call_orig(c, GOAL_FANFARE);
@@ -570,13 +622,12 @@ static void down_fanfare(Cpu *c) {
     if ((uint32_t)c->x[2] == 7) quick_retry_miss();
     char res[48];
     snprintf(res, sizeof res, "%s", g_p[0].wear);
-    bool mine = costumes_on() && res[0] && (uint32_t)c->x[2] == 7;
+    bool worn = costumes_on() && res[0] && (uint32_t)c->x[2] == 7, mine = worn && has_sound(res, "down");
     if (mine) c->x[2] = 0;
     guest_call_orig(c, DOWN_FANFARE);
-    if (mine) {
-        sound(res, "down");
+    if (mine) sound(res, "down");
+    if (worn)
         for (int i = 0; i < 4; i++) g_p[i].wear[0] = 0, g_p[i].taunt = 0;
-    }
 }
 
 // ---------------------------------------------------------------- the overlay menu's "Mystery Mushroom costume now"

@@ -336,6 +336,11 @@ void smm1_se_bank(const char *bank) {
     lyt_sarc_close(&s);
     free(d);
 }
+bool smm1_se_has(const char *name) {
+    for (int i = 0; i < g_nsfx; i++)
+        if (!strcmp(g_sfx[i].name, name)) return true;
+    return false;
+}
 bool smm1_se(const char *name) {
     for (int i = 0; i < g_nsfx; i++)
         if (!strcmp(g_sfx[i].name, name)) {

@@ -432,6 +432,8 @@ static void generate_all(void) {
     extern bool costumes_on(void), lanky_on(void);  // (mods/costume.c, lanky.c: their models only with the mod on)
     snprintf(id, sizeof id, "hundred offered:%d\ncostumes on:%d\n", mod_hundred_offered(), costumes_on());  // (Challenge Modes: only then)
     if (lanky_on()) snprintf(id + strlen(id), sizeof id - strlen(id), "lanky on:1\n");  // (absent when off: no new id)
+    extern int costume_item_form(void);  // (mods/costume.c: the Mystery Mushroom's model is the Super Mushroom's)
+    if (costumes_on() && costume_item_form() == 1) snprintf(id + strlen(id), sizeof id - strlen(id), "costume item:super\n");
     for (int i = 0; i < ngens; i++) {
         size_t l = strlen(id);
         snprintf(id + l, sizeof id - l, "%s:%d\n", gens[i].name, gens[i].version);
