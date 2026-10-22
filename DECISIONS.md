@@ -1941,3 +1941,18 @@ these courses, and its card already has Download and (now) Make.
 **Would change:** the owner wanting an explicit keep inside the run (the result screen route, or a pause item), or a
 course to be kept past the 300 played (then Liked Courses, which the result screen's "I like it!" fills, or a
 server-side keep list); a whole-course map for own uploads (the server could draw it from the course).
+
+## 2026-10-23 — Super World title: the save's player name held for the length of the title's set-up
+
+**Decision:** for another maker's world, the mod's wrapper of the world title's set-up (main+0x199fb60) writes the
+account's nickname into the save's player name (save.dat +0x10) when it is still the game's default " ", calls the
+game's set-up, and puts the default back. The game then takes its own path for another maker's world: the owner's
+name and Mii from the owner block it built from the Course World list. The progress record keeps the game's two
+status values apart: `status` is the record's own (2 progress to continue, 1 none), `clear` the save's kind.
+**Why:** on a console the save's name is the nickname of the Mii the player picks for Course World, so the game's
+"name still default" fallback (the account's nickname for every world) never applies; here the Mii database is empty
+and the name stays default. Setting the save's name for good would also change what Network Play sends as the
+player's name and Mii (save +0x10 / +0x60), which is outside this change; holding it only during the call changes
+nothing else. Writing the owner's name into the world record instead does nothing: the game rebuilds that block.
+**Would change:** a Mii database with the player's Mii (the save's name and Mii then set the way a console sets
+them), after which the wrapper has nothing to do.

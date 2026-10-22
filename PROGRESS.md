@@ -267,7 +267,7 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     yet seen working: likes / boos (the clear screen's hearts took no test input), comments (text),
     the ID search, maker pages; ✅ uploads from the Course Maker (2026-10-22: the course, its credit and its picture;
     New Courses lists it with the picture), ✅ a player's Played Courses (the run's courses too); ✅ Super Worlds
-    (list, map, courses play; below); ✅ thumbnails (item 6 below); ⬜ Ninji;
+    (list, map, courses, title, progress and Continue, world clear; below); ✅ thumbnails (item 6 below); ⬜ Ninji;
     ✅ courses=tgrcode setting (built-in server, awaiting core/crates/embed);
     ⬜ online multiplayer: plan in `DECISIONS.md` (local play over our relay first, Network Play at
     the enl layer second)
@@ -537,9 +537,27 @@ Setup failures first, since they block new players:
      name, world number and maker
    - ✅ fixed on the way: GetCourses skipped the first id of its list (a world's course start asks for one: the game
      then called the course corrupt)
-   - ⬜ the title screen says "SUPER Player WORLD" (the player's name, not the owner's; source of the name not found)
-   - ⬜ not yet seen in game: the progress save after a course, a world cleared, upload / delete (needs a world of
-     courses uploaded to our server), My Info's world list; thumbnails stay the game's placeholder planets
+   - ✅ the title names the owner, "SUPER <maker> WORLD" with their Mii (2026-10-23): the game takes another maker's
+     name from its own copy of the world's owner block, but only when the save's player name (the Mii the player
+     picks for Course World) isn't the default " "; our Mii database is empty, so it always was and every world read
+     "SUPER Player WORLD". The mod holds the account's nickname there for the length of the title's set-up
+   - ✅ seen in game (2026-10-23, local test server, a 1-world 2-course world of a second test maker): a course
+     cleared saves the progress (record status 2, the course's data id, the clear bits); the castle course clears
+     the world ("WORLD CLEAR!", the ending, status 1 with `clear` 2); Played Worlds in My Info lists the world, and
+     its entry opens the maker's page with their world (Play works); a player's own uploaded world shows in My Info
+     and the Worldbot ("Super World uploaded.")
+   - ✅ fixed: **Continue** never came up. The game resumes a world from the online record only when the record's
+     own status is 2 (main+0x148eae0); the mod sent the save's kind (+0x1b17e8: 1 a course, 2 the world) as the
+     status. It now sends both (`status`, `clear`; the server keeps `clear` at its highest). Checked: Play again
+     after a course gives New Game / Continue, and Continue puts Mario back on the cleared course point
+   - ⬜ upload and delete in game not tried: both start from a Worldbot slot (World Maker), which needs courses in
+     Coursebot uploaded through the game's clear check; the test save has none (a world uploaded through the API
+     shows as uploaded, but the game offers no delete for a world that isn't in a slot)
+   - ⬜ seen once: the Worldbot stopped on a heap check (sdk trap from a map object's destructor, main+0x1465f40 /
+     +0x1465810, called from main+0x171a360) after its first pigeon message, with the API-made world uploaded; not
+     seen again in three more visits (with and without it)
+   - ⬜ thumbnails stay the game's placeholder planets (TGRCode's are on Nintendo's CDN; our own uploads' blocks are
+     kept by the server but no in-game upload has made one yet)
 8. ✅ Disable the buttons that don't work yet (2026-10-22, checked in game): every Course World entry works or answers
    the way SMM2 does when a service is off. Ninji Speedruns showed "A communication error occurred": its two
    requests (event count main+0x14f3980, event list +0x14f3770) are now answered empty, so it shows SMM2's own "No

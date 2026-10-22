@@ -157,7 +157,7 @@ TGRCode (spec: `research/specs/super-worlds-v303.md`). Application config value 
 | SearchWorldMap (160): My Info's list (flag 0) | 0x14f79a0 | `GET /api/makers/<own id>/super_worlds` (the worlds the player has progress in) |
 | GetWorldMap (159): the selected world (id at +0x1b17a8) into the detail record +0x1b0d00 | 0x14f6600 | `GET /api/super_worlds/<id>?wait_ms=20000` and `/map` |
 | GetWorldMap (159) into the list ring | 0x14f6100 | `GET /api/super_worlds/<id>` |
-| play info get / reset / save (162 / 164 / 165), id at +0x1b1748 | 0x14f7d10, 0x14f8260, 0x14f84d0 | `GET` / `POST /api/super_worlds/<id>/progress`, `POST …/progress/reset` (always ok: the game keeps its own copy) |
+| play info get / reset / save (162 / 164 / 165), id at +0x1b1748 | 0x14f7d10, 0x14f8260, 0x14f84d0 | `GET` / `POST /api/super_worlds/<id>/progress` (the record's `status`: 2 progress to continue, 1 none; `clear`: the save's kind, 1 a course, 2 the world), `POST …/progress/reset` (always ok: the game keeps its own copy) |
 | world thumbnails (87 + HTTP) | 0x14f8850 | failed (status 2): the game's placeholder planets |
 | RegisterWorldMap (158): upload | 0x14f5940 | the map encrypted with the game's own function and the world key table, then `POST /api/super_worlds?data_ids=&worlds=&version=` (map + thumbnail block); the server takes only the player's own courses on it [not tried in game] |
 | DeleteWorldMap (163) | 0x14f7c30 | `DELETE /api/super_worlds/mine` [not tried in game] |
@@ -181,12 +181,31 @@ fetched the first time a client asks (ahead of everything else) and kept for goo
 Progress is kept per player and world (`superworlds/progress.json`); a player's upload (one each, replacing the last)
 is kept here only, with its thumbnail block. TGRCode's world thumbnails are on Nintendo's CDN: never fetched.
 
-**Seen in game** (2026-10-22, `evidence/mods/superworlds/`): the list with TGRCode's worlds (name, worlds, courses,
-planet), a world's map (decrypted, 99 lives, Mario on the start), its first course downloaded and playing.
-**Open:** the world's title screen reads "SUPER Player WORLD" (the player's own name, not the owner's: where the title
-takes its name from is not found; neither +0x948 nor a Mii at +0x9a4 changed it); thumbnails of our own uploads (the server keeps
-them; the request still fails); upload and delete not tried in game (they need a Super World made of courses
-uploaded to our server); the progress save after a course not seen yet.
+**The world's title** ("SUPER <name> WORLD", main+0x199fb60): for another maker's world the game takes the owner's
+name and Mii from the owner block of its profile copy of the world (profile +0x226010 name, +0x22606c Mii, +0x226108
+set), which the game fills itself from the Course World list's entry of that world (main+0x14ba520; the detail
+record's own +0x940 block is reset there). But it first checks the save's player name (save.dat +0x10, from the Mii the
+player picks for Course World) against the default " " (main+0x168d300), and while it is the default it shows the
+account's nickname for every world. Our Mii database is empty (runtime/services/mii.c), so the name is never set:
+the mod's wrapper of the title's set-up puts the account's nickname there for the length of the call when the world
+is another maker's and its owner is known, then the default again.
+
+**Continue:** the 162 answer is copied to the profile (+0x226110, main+0x14bb710), and the world's loader
+(main+0x148eae0) puts the score, lives, world, Mario's map place and the clear bits back on the map only when the
+record's status is 2; the title then offers Continue beside New Game. A course end sets the record's status to 2
+while there is progress and to 1 when the world is cleared, and the save's kind (+0x1b17e8) separately to 1 / 2
+(main+0x1493950); the mod sends both, the server keeps the record as sent and `clear` at its highest. New Game resets
+the record (status 1). +0x1b1790 is the data id of the course just cleared, +0x1b1798 the clear bits.
+
+**Seen in game** (`evidence/mods/superworlds/`): 2026-10-22 the list with TGRCode's worlds, a world's map, its
+first course playing; 2026-10-23 (a local test server with a second test maker's 1-world 2-course world) the title
+with the owner's name and Mii, a course cleared and its progress saved, Continue after Play again, the castle course
+clearing the world (WORLD CLEAR, the ending, the list's planets flagged), My Info's Played Worlds (the entry opens the
+owner's page with their world), a player's own uploaded world in My Info and the Worldbot.
+**Open:** upload and delete not tried in game (both start from a Worldbot slot, which needs courses uploaded through
+Coursebot's clear check; a world put on the server through the API shows as uploaded but has no delete); thumbnails
+of our own uploads (the server keeps them; the request still fails); one Worldbot stop on a heap check seen once
+(PROGRESS item 7).
 
 ### Edit any course (`games/smm2/mods/edit.c`)
 
