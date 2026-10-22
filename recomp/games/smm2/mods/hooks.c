@@ -45,7 +45,37 @@ void smm2_mod_after(Cpu *c, uint64_t addr) {
         // RECOMP_COOP_TEST=<n>: n players there instead (Endless / 100 Mario: not enough on its own yet, PROGRESS)
         static const char *n = (const char *)1;
         if (n == (const char *)1) n = getenv("RECOMP_COOP_TEST");
-        if (n) s32(c->x[19], (uint32_t)atoi(n));
+        if (n) {
+            s32(c->x[19], (uint32_t)atoi(n));
+            LOG("[mod] co-op test: %d players stored at %#llx\n", atoi(n), (unsigned long long)c->x[19]);
+        }
+        return;
+    }
+    if (addr == MAIN_ADDR(0x263db0)) {  // co-op: the controller poll's Npad count (w8, [x0 + 0x28])
+        static const char *n = (const char *)1;
+        if (n == (const char *)1) n = getenv("RECOMP_COOP_TEST");
+        if (n && (uint32_t)c->x[8] < (uint32_t)atoi(n)) {
+            static int nlog;
+            if (nlog++ < 3) LOG("[mod] co-op test: controller poll count %u -> %d\n", (uint32_t)c->x[8], atoi(n));
+            c->x[8] = (uint32_t)atoi(n);
+            s32(c->x[0] + 0x28, (uint32_t)c->x[8]);
+        }
+        return;
+    }
+    if (addr == MAIN_ADDR(0xe59494) || addr == MAIN_ADDR(0xe59614)) {  // co-op: the player spawn's play mode
+        static const char *n = (const char *)1;
+        if (n == (const char *)1) n = getenv("RECOMP_COOP_TEST");
+        if (n) {
+            int r = addr == MAIN_ADDR(0xe59494) ? 8 : 11;
+            uint64_t cnt = g64(MAIN_ADDR(0x2a66fb8)), ses = g64(MAIN_ADDR(0x2c01cf0));
+            LOG("[mod] co-op test: spawn (%s) mode %u, set-up count %u at %#llx, session %u\n",
+                r == 8 ? "course start" : "entrance", (uint32_t)c->x[r], cnt ? g32(cnt + 0x40) : 0,
+                (unsigned long long)(cnt ? cnt + 0x40 : 0), ses ? g32(ses + 0x98) : 0);
+            if ((uint32_t)c->x[r] != 1 && (uint32_t)c->x[r] != 2) {
+                c->x[r] = 1;
+                if (cnt) s32(cnt + 0x40, (uint32_t)atoi(n));
+            }
+        }
         return;
     }
     if (!mod_hundred_rules()) return;

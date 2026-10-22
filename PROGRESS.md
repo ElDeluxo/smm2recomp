@@ -515,6 +515,14 @@ Setup failures first, since they block new players:
     set-up's count (`[*(main+0x2a66fb8)] + 0x40`; 2 in one mode), 2 the online session's (`[*(main+0x2c01cf0)] +
     0x98`), anything else exactly one player. A hook point on that mode load (main+0xe59614) forces 1 under
     `RECOMP_COOP_TEST` to test spawning player 2 in Endless.
+  - 2026-10-22, **Luigi in a 100 Mario course, on player 2's controller** (test only, `RECOMP_COOP_TEST=2` with
+    `LARECOMP_INPUT2`): three hook points. (1) The spawn's two mode loads (main+0xe59494 at a course's start,
+    +0xe59614 at the other entrance) read 1 and the set-up count is set to 2, so Luigi spawns next to Mario.
+    (2) The controllers' poll (sead's Npad device, main+0x263d90) reads Npads 0 .. `[x0 + 0x28]`; Endless leaves it
+    at 1, now 2 (hook at +0x263db0), so the game reads player 2's controller and Luigi walks and jumps on it.
+    SMM2's own lives card already shows Mario and Luigi side by side. Left: Mario also moved on player 2's input
+    (in Endless he seems to take every controller; in Play Together he doesn't), then the rules (shared lives, a
+    clear when anyone reaches the goal), a Mods-tab switch that turns this on with a second controller, the ending.
   - Owner, 2026-10-22: the 100 Mario ending shows all the players in the rescue scene if that's reasonable, else
     whoever cleared the last course; the lives card shows each player ("give that a shot").
 - ✅ **User report (2026-10-22, platform not stated, maybe Windows): Course World says "make an ID" and goes back;
