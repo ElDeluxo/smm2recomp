@@ -491,7 +491,11 @@ Setup failures first, since they block new players:
    unchanged), regenerated, boots, plays a 100 Mario course with default settings (the backend stays ours unless the
    Online section picks Nextendo), `nextendo_ios.mm` compiles for iOS. Owner to test: a live sign-in (verified
    e-mail, linked Discord) and Network Play with a second player on another connection
-10. ⬜ iPhone layout (the notch-safe L / ZL: verify)
+10. ✅ iPhone layout (2026-10-22, iPhone 17 Simulator with the Dynamic Island, landscape): the on-screen controller
+    keeps clear of the safe area (ZL / L right of the island, the right column inset to match), 60 fps. Not yet on the
+    owner's iPhone 12 mini. The Simulator build needed two Simulator-only guards (no timed presents / presented
+    handlers, no binary-archive save); `LARECOMP_TOUCHPAD_SHOW=1` shows the controller with a gamepad connected
+
 11. ✅ Exact sound timing: the owner found it fine in play (2026-10-22); no change made, nothing concrete to fix
 
 ### Future (owner's backlog, not scheduled)

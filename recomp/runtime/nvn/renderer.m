@@ -1274,6 +1274,10 @@ static void pipeline_cache_add_compute(MTLComputePipelineDescriptor *cd) {
     pipeline_cache_add(c);
 }
 static void pipeline_cache_save_q(void) {  // (on g_archive_q)
+#if TARGET_OS_SIMULATOR
+    [g_archive_pending removeAllObjects];  // (the Simulator's Metal can't serialize binary archives: it aborts)
+    return;
+#endif
     if (!g_archive_pending.count) return;
     double t0 = now_ms();
     g_archive_saved = t0;

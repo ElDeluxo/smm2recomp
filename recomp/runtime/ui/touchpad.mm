@@ -65,8 +65,12 @@ static std::atomic<bool> g_hidden{false};
 static std::atomic<uint64_t> g_buttons{0};
 static std::atomic<int32_t> g_lx{0}, g_ly{0};
 
-static bool shown(void) { return g_touch_device.load() && !input_gamepad_connected() && !menu_input_captured(); }
-extern "C" bool touchpad_visible(void) { return g_touch_device.load() && !input_gamepad_connected(); }
+// (LARECOMP_TOUCHPAD_SHOW=1, tests: shown with a gamepad connected too, e.g. the Simulator's)
+static bool force_shown(void) { static int f = -1; if (f < 0) f = getenv("LARECOMP_TOUCHPAD_SHOW") != NULL; return f; }
+static bool shown(void) {
+    return g_touch_device.load() && (force_shown() || !input_gamepad_connected()) && !menu_input_captured();
+}
+extern "C" bool touchpad_visible(void) { return g_touch_device.load() && (force_shown() || !input_gamepad_connected()); }
 
 // The fingers on the controller (UI thread only)
 struct Finger { SDL_FingerID id; int control; };  // id 0: free

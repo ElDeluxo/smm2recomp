@@ -1358,9 +1358,11 @@ void backend_present(NvnTexture *t) {
                     fg_three = three;
                 }
                 menu_render(dev, cb, drawable.texture);
+#if !TARGET_OS_SIMULATOR  // (the Simulator's SDK has no presented handlers / timed presents)
                 [drawable addPresentedHandler:^(id<MTLDrawable> d) {
                     if (d.presentedTime > 0) atomic_fetch_add(&g_fg_shown, 1);  // (0: replaced before it was shown)
                 }];
+#endif
                 [cb presentDrawable:drawable];
                 // (committed before the next drawable is asked for: that may wait for a display refresh, and the
                 // GPU works on this meanwhile)
@@ -1393,8 +1395,12 @@ void backend_present(NvnTexture *t) {
             [bl copyFromTexture:drawable.texture toTexture:shot_tex];
             [bl endEncoding];
         }
+#if TARGET_OS_SIMULATOR
+        [cb presentDrawable:drawable];
+#else
         if (fg_gen) [cb presentDrawable:drawable afterMinimumDuration:FG_HALF_SLOT_NS / 1e9];
         else [cb presentDrawable:drawable];
+#endif
         [cb commit];
         {   // LARECOMP_CG_SHOT=<frame> (+ LARECOMP_SHOT_PATH): capture our window as the window server composites it,
             // colour-managed into the display's space - the way the Ryujinx reference grabs its window, so the two
