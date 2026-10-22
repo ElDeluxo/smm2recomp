@@ -11,8 +11,10 @@ On top of the original game it adds:
   start card and ending, next to SMM2's own Endless Challenge
 - **Course World without Nintendo's servers**, through a self-hostable open-source course server,
   or courses from [TGRCode](https://tgrcode.com/mm2)'s public archive
-- **SMM1 features as mods**, each with its own switch (in progress: Mystery Mushroom costumes,
-  mid-air shell jumps, overlapping pipes)
+- **SMM1 features as mods**, each with its own switch: Mystery Mushroom costumes, Lanky Mario (the Weird
+  Mushroom), mid-air shell jumps, overlapping pipes, and "Try it now" buttons to try them in a course
+- **Co-op in Endless and 100 Mario**, **Super Worlds** in Course World, and **editing any course** you
+  downloaded
 
 > **You need your own copy of the game.** This repository and its downloads contain no code,
 > assets, text, keys or recompiled output from Super Mario Maker 2 or Super Mario Maker. You point
@@ -79,26 +81,27 @@ itself. Android and iOS / iPadOS have no download: they're built yourself from s
 
 ## Status
 
-**Early development.** No release has been published yet; the release packages build, and you can
-build it yourself from source.
+**Early development.** Release packages for Windows, Linux and macOS are on the
+[Releases](https://github.com/smm2recomp/smm2recomp/releases) page; iOS / iPadOS and Android are built from
+source.
 
 | Platform | Graphics | Status |
 |---|---|---|
 | **macOS** (Apple Silicon) | Metal | Plays courses. Input replays stay frame-for-frame in sync with the game running in Ryujinx, and in-course frames are pixel-identical in 71 of 90 style × theme combinations. The reference platform. The player app goes from an empty data folder through its setup screen and the first-launch recompile to the title screen. |
 | **iOS / iPadOS** (arm64) | Metal | Plays at 60 fps on iPad Pro, with an on-screen controller and touch. Built on a Mac and installed on your own device. |
-| **Windows** (x64) | Vulkan | The player package (setup screen, recompiler) builds; not yet tested on real hardware. See [docs/windows.md](docs/windows.md). |
-| **Linux** (x64, arm64) | Vulkan | The player packages build; arm64 boots to the title screen in a VM. |
+| **Windows** (x64) | Vulkan | Testers play the release package; their reports are in [Issues](https://github.com/smm2recomp/smm2recomp/issues). See [docs/windows.md](docs/windows.md). |
+| **Linux** (x64, arm64) | Vulkan | Testers play the release packages (a Steam Deck runs it, slowly so far); arm64 boots to the title screen in a VM. |
 | **Android** (arm64, Android 13+) | Vulkan | Builds an APK on your computer from your dump; boots and plays the title course in the Android emulator. Not yet tested on a real device. |
 
 | Feature | Status |
 |---|---|
 | Title, menus, course play, Course Maker test play | Working; fidelity work ongoing |
-| 100 Mario Challenge (SMM1) | Playable start to finish, ending included |
-| Endless Challenge (SMM2) | Playable against the course server |
-| Course World (lists, search, download, play, leaderboards) | Working against the course server; likes, comments and uploads in progress |
-| Edit any course (as in SMM1) | In progress |
-| SMM1 feature switches | In progress |
-| Online multiplayer | Planned; network groundwork in progress |
+| 100 Mario Challenge (SMM1) | Playable start to finish, ending included; co-op with more controllers |
+| Endless Challenge (SMM2) | Playable against the course server; co-op with more controllers |
+| Course World (lists, search, download, play, leaderboards, uploads, Super Worlds) | Working against the course server; likes and comments in progress |
+| Edit any course (as in SMM1) | Working |
+| SMM1 feature switches | Costumes, Lanky Mario, shell jumps, overlapping pipes |
+| Online multiplayer | Through [Nextendo](https://nextendo.network) (sign-in); new, not yet tested on hardware |
 
 [PROGRESS.md](PROGRESS.md) has the detailed checklist and the evidence behind each item, and
 [DECISIONS.md](DECISIONS.md) records the design decisions and why they were made.

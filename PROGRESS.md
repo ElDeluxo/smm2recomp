@@ -393,7 +393,7 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     iPad: depth textures sampled without filtering (an experiment, no change; removed). In progress: precise
     reciprocal / rsqrt for MUFU (`LARECOMP_PRECISE_MUFU`, stashed as `git stash` "iPad 3D World: ..."; it compiles on
     the Mac; the iPad run reached no screenshot in its 150 s, likely recompiling every shader, so not yet seen).
-    The iPad still has that test build and a `recomp-test.env` on it.
+    (The iPad has the v0.4.4 release since 2026-10-22, its `recomp-test.env` cleared; this needs the iPad again.)
     It's not how he looks on the console. Compare the same frame with Ryujinx; suspects are his shading or AO
     pass and texture or sampler state on the iPad's GPU. The Vulkan NaN blur at his eyes (line 98) may be related.
     Checked 2026-10-21: on the Mac, Mario on the 3D World title is smooth at render scale 1.0 and at 1.43 (the
