@@ -32,6 +32,13 @@
 //! | POST | `/api/endless/<d>/suspend`, `/finish` | quit (run kept) → `{run}`; game over → `{clears, best, new_high_score}` |
 //! | GET | `/api/endless/<d>/history` | the run's last 48 courses |
 //! | GET | `/api/rankings/<maker_points\|clears\|first_clears\|records\|endless_<difficulty>\|hundred_<difficulty>>?limit=` | leaderboards; `me`: the signed-in caller's row |
+//! | GET | `/api/super_worlds?offset=&limit=&wait_ms=` | Super Worlds (`superworlds`): the pool, this server's uploads first, then the newest; an empty pool the source is asked for is waited for up to `wait_ms` |
+//! | GET | `/api/super_worlds/<id>?wait_ms=` | a world: summary, `courses` (`code`, `data_id`, `name`, in course order), `ninjis`; one not held is fetched from the source, waited for up to `wait_ms` (404 meanwhile) |
+//! | GET | `/api/super_worlds/<id>/map`, `/thumbnail` | the game's encrypted map blob (0x500 bytes); an uploaded world's thumbnail block (none for the source's) |
+//! | POST | `/api/super_worlds?data_ids=&worlds=&planet_type=&version=` (body: the map blob, then optionally the thumbnail block) | upload the signed-in player's world (their own courses here, 1–40; replaces their earlier one) → the summary |
+//! | DELETE | `/api/super_worlds/mine` | remove the player's uploaded world |
+//! | GET, POST | `/api/super_worlds/<id>/progress`, POST `…/progress/reset` | the signed-in player's play record of a world (`status`, `counter_a`, `counter_b`, `score`, `world`, `x`, `y`, `extra`; `cleared`, `flags` as decimal strings) |
+//! | GET | `/api/makers/<maker id>/super_worlds` | the worlds a player has a play record of, the latest first |
 //!
 //! The Endless Challenge routes (`endless` module) need a signed-in account; the server holds
 //! the run as SMM2's does.
@@ -59,6 +66,7 @@ use serde_json::{Value, json};
 pub mod accounts;
 pub mod endless;
 pub mod lists;
+pub mod superworlds;
 pub mod upstream;
 
 use accounts::Accounts;
@@ -173,6 +181,11 @@ pub struct Store {
     lists_wanted: std::sync::OnceLock<lists::ListsWanted>,
     /// Told when a listed course the store doesn't hold is wanted (code).
     course_wanted: std::sync::OnceLock<lists::CourseWanted>,
+    /// Course World's Super Worlds ([`superworlds`]), and who is told when a client asks for the
+    /// pool or for a world the store doesn't hold.
+    superworlds: Mutex<superworlds::SuperWorlds>,
+    sw_pool_wanted: std::sync::OnceLock<superworlds::PoolWanted>,
+    sw_world_wanted: std::sync::OnceLock<superworlds::WorldWanted>,
 }
 
 type ThumbsWanted = Box<dyn Fn(&str, bool) + Send + Sync>;
@@ -368,6 +381,9 @@ impl Store {
             })
             .unwrap_or_default();
         let endless_runs = endless::load(&dir);
+        let (superworlds, world_courses) = superworlds::load(&dir);
+        let mut lists = lists::Lists::default();
+        lists.register_world_courses(world_courses);
         let mut played = played;
         for (who, save) in &endless_runs {
             played
@@ -393,9 +409,12 @@ impl Store {
             verified_records: false,
             wants: std::sync::OnceLock::new(),
             thumbs_wanted: std::sync::OnceLock::new(),
-            lists: Mutex::new(lists::Lists::default()),
+            lists: Mutex::new(lists),
             lists_wanted: std::sync::OnceLock::new(),
             course_wanted: std::sync::OnceLock::new(),
+            superworlds: Mutex::new(superworlds),
+            sw_pool_wanted: std::sync::OnceLock::new(),
+            sw_world_wanted: std::sync::OnceLock::new(),
         })
     }
 
@@ -630,7 +649,10 @@ impl Store {
             .filter(|m| m.owner == a.id)
             .map(Meta::to_json)
             .collect();
-        Some(json!({ "maker": a.public_json(), "courses": courses }))
+        let (maker_id, public) = (a.maker_id.clone(), a.public_json());
+        drop(g);
+        let world = self.own_super_world(&maker_id).unwrap_or_default();
+        Some(json!({ "maker": public, "courses": courses, "super_world_id": world }))
     }
 
     /// Like (+1) or boo (−1) as `account`; a second vote replaces the first.
@@ -1196,6 +1218,9 @@ pub fn handle(
     if let Some(r) = endless::route(store, method, &parts, &q, who, body) {
         return r;
     }
+    if let Some(r) = superworlds::route(store, method, &parts, &q, signed_in(), body) {
+        return r;
+    }
     match (method, parts.as_slice()) {
         ("POST", ["api", "accounts"]) => {
             let name = body_json()["name"].as_str().unwrap_or("").to_string();
@@ -1205,7 +1230,11 @@ pub fn handle(
             }
         }
         ("GET", ["api", "me"]) => match &account {
-            Some(a) => json(200, a.public_json()),
+            Some(a) => {
+                let mut v = a.public_json();
+                v["super_world_id"] = json!(store.own_super_world(&a.maker_id).unwrap_or_default());
+                json(200, v)
+            }
             None => err(401, "sign in"),
         },
         ("GET", ["api", "makers", id, list @ ("played" | "liked")]) => {

@@ -9,7 +9,7 @@
 //! its thumbnails are fetched like a held upstream course's, and its data is fetched and imported
 //! when a client asks for it ([`Store::data_wait`]).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
@@ -127,6 +127,8 @@ struct Page {
 pub(crate) struct Lists {
     lists: [List; 2],
     page: Option<Page>,
+    /// The courses of the source's Super Worlds held ([`crate::superworlds`]), by code.
+    worlds: HashMap<String, Listed>,
 }
 
 impl Lists {
@@ -135,6 +137,14 @@ impl Lists {
             .iter()
             .flat_map(|l| &l.courses)
             .find(|c| c.meta.code == code)
+            .or_else(|| self.worlds.get(code))
+    }
+
+    /// A Super World's courses, listed from now on (a code listed already keeps its record).
+    pub(crate) fn register_world_courses(&mut self, courses: impl IntoIterator<Item = Listed>) {
+        for c in courses {
+            self.worlds.entry(c.meta.code.clone()).or_insert(c);
+        }
     }
 
     /// The listed courses of `kind` in `style` (None: any), with their places on the whole list.

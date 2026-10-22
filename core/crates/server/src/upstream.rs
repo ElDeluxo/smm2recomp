@@ -30,6 +30,12 @@
 //! client looks at the lists, so they are there when the game asks; then the held courses'. A list
 //! the source fails to give is asked for again later (the one held meanwhile, or the server's own
 //! courses, are served).
+//!
+//! Course World's Super Worlds ([`crate::superworlds`]) come from the source too: the pool is asked
+//! for again when a client browses it and it is older than `super_worlds_refresh` (each answer
+//! names about ten random recent worlds, so it grows over time; several answers while it is small),
+//! and a world a client asks for that the store doesn't hold is fetched ahead of everything else
+//! (its details and map; its courses are then listed, fetched when a client asks for their data).
 
 use std::cmp::Reverse;
 use std::collections::HashSet;
@@ -80,6 +86,14 @@ pub trait Source: Send {
     /// Up to `count` course records of the latest uploads (the source may give fewer).
     fn newest(&mut self, _count: usize) -> Result<Vec<Value>, SourceError> {
         Err(SourceError::Failed("no lists".into()))
+    }
+    /// Some Super World records (TGRCode: ten random recent ones; no map, no courses).
+    fn super_worlds(&mut self) -> Result<Vec<Value>, SourceError> {
+        Err(SourceError::Failed("no super worlds".into()))
+    }
+    /// One Super World by its ID: the record with its map (`unk1`, base64), courses and ninjis.
+    fn super_world(&mut self, _id: &str) -> Result<Value, SourceError> {
+        Err(SourceError::Failed("no super worlds".into()))
     }
 }
 
@@ -192,6 +206,30 @@ impl Source for TgrCode {
         self.get(&format!("/level_data/{code}"))
     }
 
+    fn super_worlds(&mut self) -> Result<Vec<Value>, SourceError> {
+        let body = self.get("/get_super_worlds")?;
+        let v: Value = serde_json::from_slice(&body)
+            .map_err(|e| SourceError::Failed(format!("super worlds: {e}")))?;
+        v["super_worlds"]
+            .as_array()
+            .cloned()
+            .ok_or_else(|| SourceError::Failed(format!("super worlds: none ({})", v["error"])))
+    }
+
+    fn super_world(&mut self, id: &str) -> Result<Value, SourceError> {
+        let body = self.get(&format!("/super_world/{id}"))?;
+        let v: Value = serde_json::from_slice(&body)
+            .map_err(|e| SourceError::Failed(format!("super world {id}: {e}")))?;
+        if v["id"].is_string() {
+            Ok(v)
+        } else {
+            Err(SourceError::Failed(format!(
+                "super world {id}: {}",
+                v["error"]
+            )))
+        }
+    }
+
     fn thumbnail(&mut self, code: &str, entire: bool) -> Result<Vec<u8>, SourceError> {
         let kind = if entire {
             "level_entire_thumbnail"
@@ -242,6 +280,12 @@ pub struct Options {
     /// The most courses Popular and New keep.
     pub list_max: usize,
     pub new_max: usize,
+    /// The Super World pool a client browses is asked for again this long after the source last
+    /// answered; while it holds fewer than `super_worlds_fill`, a refresh asks
+    /// `super_worlds_requests` times (each answer: about ten random worlds).
+    pub super_worlds_refresh: Duration,
+    pub super_worlds_fill: usize,
+    pub super_worlds_requests: usize,
 }
 
 impl Default for Options {
@@ -262,6 +306,9 @@ impl Default for Options {
             list_ahead: 300, // (three of the game's pages of 100)
             list_max: 2000,
             new_max: 300,
+            super_worlds_refresh: Duration::from_secs(10 * 60),
+            super_worlds_fill: 30,
+            super_worlds_requests: 3,
         }
     }
 }
@@ -296,6 +343,22 @@ pub fn start(store: Arc<Store>, source: Box<dyn Source>, keys: Keys, opts: Optio
         queue.lock().unwrap().ask(code, entire);
         let _ = wake.lock().unwrap().send(Job::Wake);
     });
+    {
+        let wake = tx.clone();
+        store.on_super_worlds(move || {
+            let _ = wake.lock().unwrap().send(Job::Wake);
+        });
+        let queue = f.wanted_worlds.clone();
+        let wake = tx.clone();
+        store.on_super_world(move |id| {
+            let mut q = queue.lock().unwrap();
+            if !q.iter().any(|w| w == id) {
+                q.push_back(id.to_string());
+            }
+            drop(q);
+            let _ = wake.lock().unwrap().send(Job::Wake);
+        });
+    }
     if lists {
         let wake = tx.clone();
         store.on_lists(move || {
@@ -440,6 +503,13 @@ struct Fetcher {
     popular_exhausted: bool,
     /// Popular's first fill stopped part way (filled again when its retry comes).
     popular_partial: bool,
+    /// Super Worlds clients asked for that the store doesn't hold, in order; the ones the source
+    /// didn't give, and when (not asked for again for a minute).
+    wanted_worlds: Arc<Mutex<std::collections::VecDeque<String>>>,
+    failed_worlds: std::collections::HashMap<String, Instant>,
+    /// The Super World pool: no request before then (after a failure), and that wait.
+    pool_retry: Option<Instant>,
+    pool_backoff: Duration,
 }
 
 impl Fetcher {
@@ -465,6 +535,10 @@ impl Fetcher {
             list_backoff: [Duration::ZERO; 2],
             popular_exhausted: false,
             popular_partial: false,
+            wanted_worlds: Default::default(),
+            failed_worlds: Default::default(),
+            pool_retry: None,
+            pool_backoff: Duration::ZERO,
         }
     }
 
@@ -483,6 +557,7 @@ impl Fetcher {
     fn clients_waiting(&self) -> bool {
         !self.wanted_thumbnails.lock().unwrap().is_empty()
             || !self.wanted_courses.lock().unwrap().is_empty()
+            || !self.wanted_worlds.lock().unwrap().is_empty()
     }
 
     /// One request to the source, at least `interval` after the one before and after the source's
@@ -622,13 +697,15 @@ impl Fetcher {
         })
     }
 
-    /// What clients wait for: the data of listed courses, then thumbnails.
+    /// What clients wait for: Super Worlds, the data of listed courses, then thumbnails.
     fn serve_waiting(&mut self, store: &Store) {
+        self.fetch_worlds(store);
         self.import_wanted(store);
         self.serve_thumbnails(store);
     }
 
-    /// [`Self::serve_waiting`], then the lists that are due; true: one was updated.
+    /// [`Self::serve_waiting`], then the lists that are due and the Super World pool if it is; true:
+    /// one was updated.
     fn serve_urgent(&mut self, store: &Store) -> bool {
         self.serve_waiting(store);
         let mut updated = false;
@@ -636,7 +713,114 @@ impl Fetcher {
         while let Some((kind, more)) = self.list_work(store) {
             updated |= self.update_list(store, kind, more);
         }
+        if self.pool_due(store) {
+            updated |= self.refresh_pool(store);
+        }
         updated
+    }
+
+    /// The Super Worlds clients asked for, each fetched and kept (while the source isn't busy).
+    fn fetch_worlds(&mut self, store: &Store) {
+        while !self.busy() {
+            let next = self.wanted_worlds.lock().unwrap().pop_front();
+            let Some(id) = next else { return };
+            let failed = self
+                .failed_worlds
+                .get(&id)
+                .is_some_and(|t| t.elapsed() < Duration::from_secs(60));
+            if failed || store.super_world(&id).is_some() {
+                continue;
+            }
+            let interval = self.opts.thumbnail_interval;
+            let kept = match self.request(interval, |s| s.super_world(&id)) {
+                Err(SourceError::Busy(_)) => {
+                    // (asked again after the pause)
+                    self.wanted_worlds.lock().unwrap().push_front(id);
+                    return;
+                }
+                Ok(v) => match crate::superworlds::Detail::of_source(&v) {
+                    Some((w, map)) if w.summary.id == id => {
+                        let n = w.courses.len();
+                        store
+                            .put_super_world(w, &map)
+                            .map(|_| n)
+                            .map_err(|e| format!("{e:?}"))
+                    }
+                    _ => Err("not a Super World it can read".to_string()),
+                },
+                Err(e) => Err(e.to_string()),
+            };
+            match kept {
+                Ok(n) => eprintln!("[upstream] Super World {id}: fetched ({n} courses)"),
+                Err(e) => {
+                    eprintln!("[upstream] Super World {id}: {e}");
+                    self.failed_worlds.insert(id, Instant::now());
+                }
+            }
+        }
+    }
+
+    /// Whether the Super World pool is to be asked for: a client browses it, and the source hasn't
+    /// answered since the start or did longer than the refresh time before the client asked.
+    fn pool_due(&self, store: &Store) -> bool {
+        if self.pool_retry.is_some_and(|t| Instant::now() < t) {
+            return false;
+        }
+        let s = store.super_worlds_status();
+        match s.fetched {
+            None => s.asked.is_some(),
+            Some(f) => {
+                s.asked.is_some_and(|a| a > f) && f.elapsed() >= self.opts.super_worlds_refresh
+            }
+        }
+    }
+
+    /// The Super World pool from the source (several answers while it is small); false: the first
+    /// request failed (asked for again later).
+    fn refresh_pool(&mut self, store: &Store) -> bool {
+        let n = if store.super_worlds_status().len < self.opts.super_worlds_fill {
+            self.opts.super_worlds_requests.max(1)
+        } else {
+            1
+        };
+        let mut got = 0;
+        for i in 0..n {
+            match self.list_request(store, |s| s.super_worlds()) {
+                Ok(records) => {
+                    let worlds: Vec<_> = records
+                        .iter()
+                        .filter_map(crate::superworlds::Summary::of_source)
+                        .collect();
+                    got += worlds.len();
+                    if let Err(e) = store.merge_super_worlds(worlds) {
+                        eprintln!("[upstream] Super Worlds: {e:?}");
+                    }
+                }
+                Err(e) => {
+                    if i == 0 {
+                        let wait = (self.pool_backoff * 2)
+                            .max(self.opts.backoff)
+                            .max(Duration::from_secs(1))
+                            .min(Duration::from_secs(600));
+                        self.pool_backoff = wait;
+                        self.pool_retry = Some(Instant::now() + wait);
+                        eprintln!(
+                            "[upstream] Super Worlds: {e} (again in {} s)",
+                            wait.as_secs()
+                        );
+                        return false;
+                    }
+                    break;
+                }
+            }
+        }
+        self.pool_retry = None;
+        self.pool_backoff = Duration::ZERO;
+        eprintln!(
+            "[upstream] Super Worlds: {got} from the source ({} in the pool)",
+            store.super_worlds_status().len
+        );
+        true
     }
 
     /// The listed courses clients asked for the data of, each fetched and imported (while the
@@ -962,7 +1146,7 @@ fn interleave(lists: &[Vec<Listed>]) -> Vec<Listed> {
 
 /// A course record of a list -> the course listed, with the record's difficulty class (or
 /// `class`, the one the list was asked for).
-fn listed_of(v: &Value, class: Option<u8>) -> Option<Listed> {
+pub(crate) fn listed_of(v: &Value, class: Option<u8>) -> Option<Listed> {
     let own = v["difficulty"]
         .as_u64()
         .filter(|&c| c <= 3)
@@ -1064,6 +1248,11 @@ mod tests {
         /// Thumbnail requests answered "busy" before they go through; the codes asked for.
         thumb_busy: u32,
         thumbs: Arc<Mutex<Vec<String>>>,
+        /// Super Worlds: the pool's answer, the worlds by ID, requests made, "busy" answers to give.
+        worlds: Vec<Value>,
+        world_details: std::collections::HashMap<String, Value>,
+        world_requests: Arc<std::sync::atomic::AtomicUsize>,
+        world_busy: u32,
     }
 
     impl Fake {
@@ -1129,6 +1318,56 @@ mod tests {
             self.list_search()?;
             Ok(self.new.iter().take(count).cloned().collect())
         }
+
+        fn super_worlds(&mut self) -> Result<Vec<Value>, SourceError> {
+            self.world_requests
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(self.worlds.clone())
+        }
+
+        fn super_world(&mut self, id: &str) -> Result<Value, SourceError> {
+            self.world_requests
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if self.world_busy > 0 {
+                self.world_busy -= 1;
+                return Err(SourceError::Busy(Some(Duration::ZERO)));
+            }
+            self.world_details
+                .get(id)
+                .cloned()
+                .ok_or_else(|| SourceError::Failed("HTTP 400".into()))
+        }
+    }
+
+    fn base64(b: &[u8]) -> String {
+        const A: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut out = String::new();
+        for ch in b.chunks(3) {
+            let n = ch.iter().fold(0u32, |a, &x| a << 8 | x as u32) << (8 * (3 - ch.len()));
+            for i in 0..4 {
+                out.push(if i <= ch.len() {
+                    A[(n >> (18 - 6 * i) & 63) as usize] as char
+                } else {
+                    '='
+                });
+            }
+        }
+        out
+    }
+
+    /// A Super World record of the source (TGRCode's fields), with its map and courses when `full`.
+    fn world_record(id: &str, created: u64, courses: &[Value], full: bool) -> Value {
+        let mut v = json!({"id": id, "worlds": 2, "levels": courses.len(), "planet_type": 4,
+            "created": created, "unk5": 3, "unk6": 1, "unk7": 1,
+            "thumbnail": {"url": "https://example.invalid/never", "size": 51204, "filename": "x"},
+            "uploader": {"name": "World Maker", "code": "WMK123456"}});
+        if full {
+            let map: Vec<u8> = (0..crate::superworlds::MAP_SIZE).map(|i| i as u8).collect();
+            v["unk1"] = json!(base64(&map));
+            v["courses"] = json!(courses);
+            v["ninjis"] = json!([3, 0]);
+        }
+        v
     }
 
     fn record(id: &str, data_id: u64, attempts: u64, clears: u64) -> Value {
@@ -1162,6 +1401,10 @@ mod tests {
             delay: Duration::ZERO,
             thumb_busy: 0,
             thumbs: Default::default(),
+            worlds: Vec::new(),
+            world_details: Default::default(),
+            world_requests: Default::default(),
+            world_busy: 0,
         };
         (f, searches)
     }
@@ -1237,6 +1480,9 @@ mod tests {
             list_ahead: 4,
             list_max: 2000,
             new_max: 300,
+            super_worlds_refresh: Duration::from_secs(3600),
+            super_worlds_fill: 30,
+            super_worlds_requests: 3,
         }
     }
 
@@ -1812,6 +2058,135 @@ mod tests {
         fetch.wait_turn(&store, Duration::from_secs(1));
         assert!(store.has_thumbnail("N24-N99-PNF", false));
         assert!(t0.elapsed() >= Duration::from_millis(900), "then its turn");
+    }
+
+    #[test]
+    fn super_worlds_come_from_the_source_and_their_courses_are_listed() {
+        let dir = tmp("superworlds");
+        let store = Arc::new(Store::open(&dir).unwrap());
+        let (mut f, _) = fake(false);
+        let a = "aaaaaaaaaaaaaaaa_20250101000000000001";
+        let b = "bbbbbbbbbbbbbbbb_20260101000000000002";
+        let courses = [
+            record("PDCYMMWDF", 60709023, 21, 4),
+            record("N24N99PNF", 26065833, 40, 10),
+        ];
+        f.worlds = vec![
+            world_record(a, 1_735_689_600, &[], false),
+            world_record(b, 1_767_225_600, &[], false),
+            json!({"id": "../bad"}),
+        ];
+        f.world_details.insert(
+            b.to_string(),
+            world_record(b, 1_767_225_600, &courses, true),
+        );
+        f.world_busy = 1;
+        let requests = f.world_requests.clone();
+        start(
+            store.clone(),
+            Box::new(f),
+            Keys::Table(Box::new(table())),
+            quick(),
+        );
+        let worlds = |url: &str| -> Vec<Value> {
+            let (st, body) = get(&store, url);
+            assert_eq!(st, 200, "{url}");
+            let v: Value = serde_json::from_slice(&body).unwrap();
+            v["super_worlds"].as_array().unwrap().clone()
+        };
+        // the pool: asked for when a client browses (an empty one waited for), newest first
+        let list = worlds("/api/super_worlds?wait_ms=5000");
+        let ids: Vec<&str> = list.iter().map(|w| w["id"].as_str().unwrap()).collect();
+        assert_eq!(ids, [b, a]);
+        assert_eq!(list[0]["maker_name"], "World Maker");
+        assert_eq!(list[0]["maker_id"], "WMK123456");
+        assert_eq!(list[0]["planet_type"], 4);
+        assert_eq!(list[0]["created"], 1_767_225_600u64);
+        // (three answers while it is small, then none until the refresh time)
+        let t0 = Instant::now();
+        while requests.load(std::sync::atomic::Ordering::SeqCst) < 3
+            && t0.elapsed() < Duration::from_secs(5)
+        {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(worlds("/api/super_worlds?offset=1&limit=5").len(), 1);
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 3);
+
+        // a world's details: fetched while the client waits (the source busy once), kept
+        let (st, body) = get(&store, &format!("/api/super_worlds/{b}?wait_ms=5000"));
+        assert_eq!(st, 200);
+        let w: Value = serde_json::from_slice(&body).unwrap();
+        let codes: Vec<&str> = w["courses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["code"].as_str().unwrap())
+            .collect();
+        assert_eq!(codes, ["PDC-YMM-WDF", "N24-N99-PNF"], "in course order");
+        assert_eq!(w["courses"][0]["data_id"], 60709023);
+        assert_eq!(w["ninjis"], json!([3, 0]));
+        let (st, map) = get(&store, &format!("/api/super_worlds/{b}/map"));
+        assert_eq!((st, map.len(), map[0x4ff]), (200, 0x500, 0xff));
+        assert_eq!(
+            get(&store, &format!("/api/super_worlds/{b}/thumbnail")).0,
+            404,
+            "the source's thumbnails are never fetched"
+        );
+        // one the source doesn't know: not found, and not asked for again at once
+        assert_eq!(
+            get(&store, "/api/super_worlds/cccccccccccccccc_1?wait_ms=300").0,
+            404
+        );
+        assert_eq!(get(&store, "/api/super_worlds/x..y").0, 404);
+
+        // its courses: listed, imported when their data is asked for
+        assert!(store.get("PDC-YMM-WDF").is_none());
+        let (st, body) = get(&store, "/api/courses/PDC-YMM-WDF");
+        assert_eq!(st, 200);
+        let m: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(m["upstream"], true);
+        let (st, data) = get(&store, "/api/courses/PDC-YMM-WDF/data?wait_ms=5000");
+        assert_eq!((st, data), (200, course_body("M3")));
+
+        // kept for good: the pool, the details and the courses' listing after a restart
+        drop(store);
+        let store = Store::open(&dir).unwrap();
+        assert_eq!(store.super_worlds_status().len, 2);
+        let w = store.super_world(b).unwrap();
+        assert_eq!(w.courses.len(), 2);
+        assert_eq!(w.courses[1].meta.data_id, 26065833);
+        assert_eq!(store.super_world_map(b).unwrap().len(), 0x500);
+        assert_eq!(get(&store, "/api/courses/N24-N99-PNF").0, 200);
+    }
+
+    #[test]
+    fn a_failing_super_world_pool_is_asked_for_again_later() {
+        let store = Store::open(tmp("poolfail")).unwrap();
+        let (f, _) = fake(false);
+        let opts = Options {
+            backoff: Duration::from_secs(30),
+            ..quick()
+        };
+        // (the default source: no Super Worlds)
+        let mut fetch = Fetcher::new(Box::new(f), Keys::Table(Box::new(table())), opts);
+        struct NoWorlds;
+        impl Source for NoWorlds {
+            fn endless(&mut self, _: Difficulty, _: usize) -> Result<Vec<Value>, SourceError> {
+                Ok(Vec::new())
+            }
+            fn course(&mut self, _: &str) -> Result<Vec<u8>, SourceError> {
+                Err(SourceError::Failed("none".into()))
+            }
+        }
+        fetch.source = Box::new(NoWorlds);
+        assert!(!fetch.pool_due(&store), "nobody browses");
+        store.super_world_page(0, 10);
+        assert!(fetch.pool_due(&store));
+        assert!(!fetch.serve_urgent(&store));
+        assert!(!fetch.pool_due(&store), "after a wait");
+        assert_eq!(store.super_worlds_status().len, 0);
     }
 
     #[test]
