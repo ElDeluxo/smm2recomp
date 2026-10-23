@@ -1,9 +1,12 @@
 # Progress
 
-## Where this stands / next (paused 2026-10-23 after v0.4.5, owner's call; resume from here)
-- **Released:** v0.4.5 (2026-10-23), installed on the Mac and the iPad (iPad build 294; build numbers are the commit
-  count). The iPad's `smm1` folder got `Pack/Static.pack` and `Sound/CharaMario` (it had an old subset), and its
-  costumes are now generated. No new release or iPad install without the owner.
+## Where this stands / next (paused 2026-10-23 after v0.4.6, owner's call; resume from here)
+- **Released:** v0.4.6 (2026-10-23), installed on the Mac and the iPad (iPad build 297; build numbers are the commit
+  count). It fixes the owner's v0.4.5 reports:
+  - "course ID not found" on the first try;
+  - the costume-loss animation, now as SMM1;
+  - costumes facing left.
+  No new release or iPad install without the owner.
 - **In v0.4.5:** everything listed in its release notes, including the owner's three v0.4.4 reports:
   - taps through the menu;
   - Course World falling back from a failed Nextendo login;
