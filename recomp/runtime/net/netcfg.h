@@ -44,6 +44,8 @@ typedef enum { NET_TRUST_LOCAL_CA = 0, NET_TRUST_ANY = 1, NET_TRUST_PINNED = 2 }
 
 NetBackend net_backend(void);          // in effect (nextendo without a signed-in account -> ours)
 NetBackend net_backend_setting(void);  // as set
+bool net_backend_fall_back(const char *why);  // this session runs as ours from now on (false: it already does)
+const char *net_backend_fallback_why(void);  // why it does though another backend is set ("": it doesn't)
 const char *net_backend_key(NetBackend b);  // "ours", "local-nex", "nextendo"
 bool net_real_sockets(void);           // the game's sockets reach the host's network stack (local-nex, nextendo)
 bool net_log_on(void);

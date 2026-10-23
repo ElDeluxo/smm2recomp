@@ -90,6 +90,7 @@ typedef struct {
     const char *choice_label;
     const char *const *choices;
     int nchoices;
+    const char *(*why)(void);  // greyed out: a few words on why (shown on the row; NULL or "": none)
 } GameModTrigger;
 GameModTrigger *mod_trigger_add(const GameModTrigger *t);  // the stored row (its choices may be filled in later)
 

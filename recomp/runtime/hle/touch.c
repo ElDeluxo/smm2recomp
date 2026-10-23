@@ -106,6 +106,8 @@ bool touch_handle_event(const SDL_Event *e) {
     if (no_mouse < 0) no_mouse = getenv("RECOMP_NO_MOUSE_TOUCH") != NULL;
     switch (e->type) {
     case SDL_EVENT_FINGER_DOWN: case SDL_EVENT_FINGER_MOTION: case SDL_EVENT_FINGER_UP: case SDL_EVENT_FINGER_CANCELED:
+        if (e->type == SDL_EVENT_FINGER_DOWN && getenv("LARECOMP_HOST_INPUT"))  // (tests: a finger reached the game)
+            LOG("[touch] finger down at %.3f,%.3f to the game\n", e->tfinger.x, e->tfinger.y);
         touch_event(e->tfinger.fingerID + 1, e->tfinger.x, e->tfinger.y,
                     e->type == SDL_EVENT_FINGER_DOWN ? 0 : e->type == SDL_EVENT_FINGER_MOTION ? 1 : 2);
         return true;

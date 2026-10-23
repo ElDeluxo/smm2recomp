@@ -432,6 +432,16 @@ bool lanky_now_available(void) {
     uint64_t pm = g64(PLAYERS), p = pm ? g64(pm + 0x28) : 0;
     return p && by_holder(g64(p + P_HOLDER)) && g32(p + P_FORM) <= 1;  // (small or Super, as the Weird Mushroom)
 }
+// why the row is greyed out, in the order a player would fix it (a few words: it sits beside the label)
+static const char *lanky_now_why(void) {
+    if (!active_ui()) return "Turn on Lanky Mario";
+    if (renderer_present_count() - g_last_update > 30) return "Only in a course";
+    if (bridge_endless_course()) return "Not in runs";
+    if (!smb1_course()) return "SMB1 courses only";
+    uint64_t pm = g64(PLAYERS), p = pm ? g64(pm + 0x28) : 0;
+    if (p && g32(p + P_FORM) > 1) return "Small or Super only";
+    return "";
+}
 void lanky_now_trigger(int choice) {
     (void)choice;
     uint64_t pm = g64(PLAYERS), p = pm ? g64(pm + 0x28) : 0;
@@ -444,6 +454,6 @@ __attribute__((constructor)) static void lanky_register(void) {
         "Lanky Mario now",
         "Player 1 becomes Lanky Mario (as with a Weird Mushroom: from small or Super Mario) in the Super Mario Bros. "
         "style course being played. Needs the Lanky Mario switch; not in Endless or 100 Mario runs.",
-        lanky_now_available, lanky_now_trigger, NULL, NULL, 0};
+        lanky_now_available, lanky_now_trigger, NULL, NULL, 0, lanky_now_why};
     mod_trigger_add(&t);
 }

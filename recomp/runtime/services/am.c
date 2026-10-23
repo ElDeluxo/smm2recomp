@@ -174,9 +174,14 @@ static void *explain_thread(void *arg) {
             : NULL;
         if (!why) why = "Nextendo Network refuses this account online.";
     }
+    // (the Nextendo hint only with Nextendo chosen: with our server or TGRCode an online error has nothing to do with it,
+    // and a player read the hint as "Course World needs a Nextendo account", owner 2026-10-23)
     if (why) snprintf(full, sizeof full, "%s %s", t, why);
-    else snprintf(full, sizeof full, "%s If it's an online error: check that you're online and that your Nextendo account "
-                  "can play (a verified e-mail on nextendo.network).", t);
+    else if (net_backend_setting() == NET_BACKEND_NEXTENDO)
+        snprintf(full, sizeof full, "%s If it's an online error: check that you're online and that your Nextendo account "
+                 "can play (a verified e-mail on nextendo.network).", t);
+    else snprintf(full, sizeof full, "%s If it's an online error: check that you're online (Course World's courses come "
+                  "from TGRCode or your own server; TGRCode sometimes asks to wait a few seconds).", t);
     menu_notice(full, 12);
     free(t);
     return NULL;
@@ -196,6 +201,10 @@ static void error_notice(const uint8_t *a, uint64_t n) {
         snprintf(t, sizeof t, "The game reports an error (type %u).", n ? a[0] : 0);
     }
     LOG("[am] error applet: %s\n", t);
+    extern void menu_notice(const char *text, double seconds);
+    extern bool game_online_error(char *msg, size_t cap);  // runtime/game_hooks.c
+    char own[400];
+    if (game_online_error(own, sizeof own)) { menu_notice(own, 15); return; }
     pthread_t th;
     char *copy = strdup(t);
     if (pthread_create(&th, NULL, explain_thread, copy) == 0) pthread_detach(th);

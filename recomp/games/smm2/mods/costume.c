@@ -430,6 +430,10 @@ int costume_model_swaps(uint64_t holder, uint32_t style, uint32_t character, PmS
         uint8_t *probe = NULL;  // (only a costume whose model was generated: a missing file stops the game)
         int n = 0;
         for (int tries = 0; res && tries < 8 && !(n = costume_look(res, false, &probe)); tries++) res = draw(res);
+        // (none owned yet - costumes are 100 Mario's rewards: still a costume model in the slot, so "Mystery Mushroom
+        // costume now" can put any costume on; a pickup still needs an owned one)
+        for (int i = 0; !n && i < costume_count(); i++)
+            if ((n = costume_look(costume_res(i), false, &probe))) res = costume_res(i);
         free(probe);
         snprintf(g_course, sizeof g_course, "%s", n ? res : "");
         if (!n) LOG("[costume] no costume model to load (an owned costume without its generated model?)\n");
@@ -566,10 +570,10 @@ bool costume_after(Cpu *c, uint64_t addr) {
         }
         Wearer *w = &g_p[i];
         if (w->player != player) return true;
-        s32(target, 0);  // (a change to small: from small nothing to see, from Super / Fire the shrink)
         const char *res = g_giving ? g_giving : draw(w->wear[0] ? w->wear : NULL);
         g_giving = NULL;
-        if (!res) return true;
+        if (!res) return true;  // (no costume owned yet: the item stays the game's)
+        s32(target, 0);  // (a change to small: from small nothing to see, from Super / Fire the shrink)
         wear(w, res, form ? "a Mystery Mushroom as Super / Fire Mario" : "a Mystery Mushroom");
         sound(w->wear, "powerup");
         return true;
@@ -641,6 +645,12 @@ static void fill_choices(void) {
     if (g_nchoices) return;
     costume_list();
     int n = costume_count() < 256 ? costume_count() : 256;
+    static bool said;
+    if (!n && !said) {
+        said = true;
+        LOG("[costume] the SMM1 files have no costume list (Pack/Static.pack): costumes need the SMM1 dump's Static, "
+            "Model and Sound/CharaMario files (a copy made with an older tools/smm1_subset.sh lacks them: copy it again)\n");
+    }
     static char names[256][64];
     int order[256];
     for (int i = 0; i < n; i++) {
@@ -667,6 +677,18 @@ bool costume_now_available(void) {
     if (renderer_present_count() - g_costume_last_update > 30) return false;  // (no course being played)
     uint64_t pm = g64(PLAYERS), p = pm ? g64(pm + 0x28) : 0;
     return p && g_p[0].player == p && g32(p + P_FORM) <= 2;  // (small, Super or Fire: as the Mystery Mushroom)
+}
+// why the row is greyed out, in the order a player would fix it (a few words: it sits beside the label)
+static const char *costume_now_why(void) {
+    if (!costumes_on()) return "Turn on costumes";
+    if (renderer_present_count() - g_costume_last_update > 30) return "Only in a course";
+    if (bridge_endless_course()) return "Not in runs";
+    if (!smb1_course()) return "SMB1 courses only";
+    if (!g_nchoices) return "No costumes in SMM1 files";
+    if (!g_course[0]) return "No costume model";
+    uint64_t pm = g64(PLAYERS), p = pm ? g64(pm + 0x28) : 0;
+    if (p && g32(p + P_FORM) > 2) return "Small/Super/Fire only";
+    return "";
 }
 void costume_now_trigger(int choice) {
     if (!costume_now_available() || choice < 0 || choice >= g_nchoices) {
@@ -705,7 +727,7 @@ __attribute__((constructor)) static void costume_register(void) {
         "Player 1 takes a Mystery Mushroom with the costume chosen above (as small, Super or Fire Mario) in the Super "
         "Mario Bros. style course being played; any costume, owned or not (it isn't added to yours). Needs the Mystery "
         "Mushroom costumes switch; not in Endless or 100 Mario runs.",
-        costume_now_available, costume_now_trigger, "Costume", NULL, 0};
+        costume_now_available, costume_now_trigger, "Costume", NULL, 0, costume_now_why};
     g_row = mod_trigger_add(&t);
 }
 

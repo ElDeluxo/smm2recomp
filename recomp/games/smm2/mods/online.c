@@ -33,9 +33,34 @@ static void change_state(Cpu *c, uint64_t sm, uint32_t st) {
     guest_call(c, STATE_CHANGE);
 }
 
+// Hybrid: whether the backend's login has succeeded this session. An error the game shows before it did means the
+// login failed: the session then falls back to ours (runtime/net/netcfg.h net_backend_fall_back), so opening Course
+// World again works - the mod answers the login and everything else, Network Play is off until the next start (owner,
+// 2026-10-23: Course World never depends on Nextendo). An error after a login (a match not found...) changes nothing.
+static volatile bool g_backend_logged_in;
+bool game_online_error(char *msg, size_t cap) {  // (runtime/game_hooks.c: the game shows an error)
+    if (!mod_hybrid() || g_backend_logged_in) return false;
+    NetBackend b = net_backend();
+    if (!net_backend_fall_back("its login failed")) return false;
+    snprintf(msg, cap, "Couldn't log in to %s, so Network Play is off until the next start. Course World, the Endless "
+             "Challenge and 100 Mario don't need it: open Course World again.",
+             b == NET_BACKEND_NEXTENDO ? "Nextendo Network" : "the online test server");
+    return true;
+}
+
 static void enl_login_ready(Cpu *c) {
     if (!mod_answers_login()) { guest_call_orig(c, ENL_LOGIN_READY); return; }
     uint64_t self = c->x[0];
+    static bool told;  // (a backend set but not used this session: said once, as the game logs in)
+    const char *why = net_backend_fallback_why();
+    if (why[0] && !told) {
+        told = true;
+        extern void menu_notice(const char *text, double seconds);
+        char t[400];
+        snprintf(t, sizeof t, "%s, so Network Play is off until the next start. Course World, the Endless Challenge and "
+                 "100 Mario work as usual.", why);
+        menu_notice(t, 15);
+    }
     MLOG("enl session %llx: logged in (no NEX connection)\n", (unsigned long long)self);
     if (g_mod.log) {
         uint64_t vt = g64(self);
@@ -49,8 +74,15 @@ static void enl_login_ready(Cpu *c) {
 // cLogIn, the logged-in state: +0xe4 is the command the game posted (1 log in: done; 0 log out; 0xf: log out and
 // stop). Matchmaking commands (3..7, online multiplayer) are not available: they are dropped.
 static void enl_login(Cpu *c) {
-    if (!mod_answers_login()) { guest_call_orig(c, ENL_LOGIN); return; }
     uint64_t self = c->x[0];
+    if (!mod_answers_login()) {
+        guest_call_orig(c, ENL_LOGIN);
+        if (g8(self + 0x19) && !g_backend_logged_in) {
+            g_backend_logged_in = true;
+            MLOG("enl session %llx: logged in to the backend\n", (unsigned long long)self);
+        }
+        return;
+    }
     int32_t cmd = (int32_t)g32(self + 0xe4);
     s8(self + 0x19, 1);
     s8(self + 0x1a, 0);

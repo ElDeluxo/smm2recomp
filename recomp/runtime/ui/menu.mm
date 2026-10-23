@@ -596,6 +596,7 @@ typedef struct {
     const char *choice_label;
     const char *const *choices;
     int nchoices;
+    const char *(*why)(void);  // greyed out: a few words on why (shown on the row; NULL or "": none)
 } GameModTrigger;  // (runtime/game_hooks.c)
 extern "C" int game_mod_triggers(const GameModTrigger **out);
 extern "C" bool launcher_has_settings(void);   // runtime/ui/launcher.mm: the Mods tab's app section (desktop)
@@ -626,8 +627,10 @@ static void tab_mods(void) {
             opt_choice(tr[i].choice_label ? tr[i].choice_label : tr[i].label, &choice[i], tr[i].choices,
                        tr[i].nchoices, 0, tr[i].desc);
         }
+        const char *why = !on && tr[i].why ? tr[i].why() : NULL;
         if (!on) opt_disable_next();
-        if (opt_button(tr[i].label, tr[i].desc) && on && tr[i].trigger) tr[i].trigger(choice[i]);
+        if (why && *why) opt_action(tr[i].label, why, tr[i].desc, false);  // (greyed: the reason as its value)
+        else if (opt_button(tr[i].label, tr[i].desc) && on && tr[i].trigger) tr[i].trigger(choice[i]);
     }
     launcher_settings_rows();  // the app's own: updates, game files
     opt_end();

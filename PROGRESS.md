@@ -572,6 +572,35 @@ Setup failures first, since they block new players:
   (Normal, NSMBU) Peach and her line at 60 fps. Music is chosen by difficulty and style as in the spec (not
   listened to). Not compared in Cemu this round.
 
+### Owner's v0.4.4 reports (2026-10-23, iPad)
+- ✅ **Taps went through the overlay menu to the game**: with the menu open, a tap on an option also reached the game
+  behind it. The menu took the mouse SDL makes from a touch, but the finger itself went on to the on-screen
+  controller and the game's touch screen. Now, while the menu or a name entry is up, presses, moves and the wheel
+  stay with it (`runtime/hle/input.c` input_handle_event; releases still go through, so a held touch ends). Checked
+  with real SDL finger events (new test action `frame:touch:<x>/<y>:<frames>`): a tap with the menu open never
+  reached the game, the same tap after it closed did.
+- ✅ **Course World stopped working after a restart with Nextendo signed in**: with the Nextendo backend the game's
+  own login goes to Nextendo, so a failed login (Nextendo refusing the account - playing on another device, e-mail
+  not verified - or unreachable) took Course World down. Now:
+  - at start, an account Nextendo refuses runs the session on our server, with a notice;
+  - an error before the backend's login has ever succeeded falls the session back to our server
+    (`net_backend_fall_back`), and the mod answers the next login. Course World, Endless and 100 Mario work again
+    without a restart; Network Play is off until the next start.
+  - Reproduced and checked offline with the same hybrid path (`local-nex`, `course_world=mod`, no server): error
+    2306-0502, then Courses opened with TGRCode's list.
+  - The owner's first message ("log in to Nextendo") came from every error notice carrying a Nextendo hint; it now
+    names Nextendo only when Nextendo is chosen.
+  - Not tried live: the iPad's logs had rotated past the failing session.
+- ✅ **"Mystery Mushroom costume now" never ungreyed** (iPad): its SMM1 copy was made with an older
+  `tools/smm1_subset.sh`, without `Pack/Static.pack` (the costume list) and `Sound/CharaMario`, so no costume model
+  was ever made (`[costume] no costume model to load` at every course). Now:
+  - a greyed "Try it now" row says why, beside its label ("Turn on costumes", "Only in a course", "Not in runs",
+    "SMB1 courses only", "No costumes in SMM1 files", "Small/Super/Fire only"; Lanky's too);
+  - a missing costume list is logged with the fix;
+  - a costume model is loaded even with no costume owned;
+  - a Mystery Mushroom with none owned leaves the item as the game's (before, Super Mario would have shrunk).
+  - Checked on the Mac: available in an SMB1 course and Peach put on; greyed with its reason on a 3D World course.
+
 ### Owner's v0.4.2 reports (2026-10-22: "100 Mario is working great" apart from these)
 - ✅ **A rare 100 Mario hang after a death** (once; closed 2026-10-22 with the watchdogs below): after the lives card the fade back into the course never came;
   the game ran on at 60 fps and the menu opened. Not reproduced (a lava course, misses with quick level return on

@@ -30,6 +30,7 @@ typedef struct { char pattern[128]; uint32_t ip; } Rule;  // "name" or "*.domain
 
 static pthread_once_t once = PTHREAD_ONCE_INIT;
 static NetBackend backend_set = NET_BACKEND_OURS, backend_eff = NET_BACKEND_OURS;
+static char fallback_why[160];  // why this session runs as ours though another backend is set (net_backend_fall_back)
 static NetTrust trust = NET_TRUST_LOCAL_CA;
 static bool log_on;
 static uint32_t test_ip = 0x7f000001;
@@ -109,6 +110,16 @@ static void load(void) {
         LOG("[net] backend nextendo: not signed in; using our server\n");
         backend_eff = NET_BACKEND_OURS;
     }
+    // (signed in: an account Nextendo refuses online - playing on another device, e-mail not verified... - would fail
+    // the game's login at Course World; this session uses our server instead, net_backend_fall_back)
+    bool allow = true;
+    char reason[64] = "";
+    if (backend_eff == NET_BACKEND_NEXTENDO && !getenv("RECOMP_NET_NO_PROBE") &&
+        nextendo_online_status(3000, &allow, reason, sizeof reason) && !allow) {
+        snprintf(fallback_why, sizeof fallback_why, "Nextendo Network refuses this account online (%s)", reason);
+        LOG("[net] backend nextendo: %s; this session uses our server (Network Play off until the next start)\n", fallback_why);
+        backend_eff = NET_BACKEND_OURS;
+    }
     if (cfg("RECOMP_NET_TEST_SERVER", "nex_test_server", v, sizeof v)) {
         uint32_t ip;
         char *colon = strchr(v, ':');
@@ -165,7 +176,20 @@ static void load(void) {
 
 static void init(void) { pthread_once(&once, load); }
 
-NetBackend net_backend(void) { init(); return backend_eff; }
+NetBackend net_backend(void) { init(); return __atomic_load_n(&backend_eff, __ATOMIC_ACQUIRE); }
+// The backend failed its login this session (a game's mod says when: games/smm2/mods/online.c): the rest of the session
+// runs as ours - Course World, the Endless Challenge and 100 Mario from the mod, Network Play off - and the setting
+// stays for the next start (owner, 2026-10-23: Course World never depends on Nextendo).
+bool net_backend_fall_back(const char *why) {
+    init();
+    if (__atomic_load_n(&backend_eff, __ATOMIC_ACQUIRE) == NET_BACKEND_OURS) return false;
+    snprintf(fallback_why, sizeof fallback_why, "%s", why);
+    LOG("[net] backend %s: %s; this session uses our server (Network Play off until the next start)\n",
+        backend_keys[backend_eff], why);
+    __atomic_store_n(&backend_eff, NET_BACKEND_OURS, __ATOMIC_RELEASE);
+    return true;
+}
+const char *net_backend_fallback_why(void) { init(); return fallback_why; }
 NetBackend net_backend_setting(void) { init(); return backend_set; }
 const char *net_backend_key(NetBackend b) { return b < NET_BACKEND_COUNT ? backend_keys[b] : "?"; }
 bool net_real_sockets(void) { NetBackend b = net_backend(); return b == NET_BACKEND_LOCAL_NEX || b == NET_BACKEND_NEXTENDO; }

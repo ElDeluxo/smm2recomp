@@ -236,6 +236,17 @@ static bool real_gamepad(SDL_JoystickID id) {
 void input_handle_event(const SDL_Event *e) {
     extern bool touchpad_handle_event(const SDL_Event *e);  // runtime/ui/touchpad.mm (the on-screen controller)
     extern bool touch_handle_event(const SDL_Event *e);  // runtime/hle/touch.c (touches, the mouse as a finger)
+    // The overlay menu or a name entry up: its touches and clicks are its own (it takes the mouse SDL makes from a touch,
+    // menu_handle_event); the fingers themselves would otherwise reach the on-screen controller and the game's touch
+    // screen behind it (owner, 2026-10-23: a tap on a menu option also tapped the game). A release still goes through,
+    // so a touch held when the menu opened ends.
+    extern bool menu_input_captured(void);  // runtime/ui/menu.mm
+    if (menu_input_captured()) switch (e->type) {
+        case SDL_EVENT_FINGER_DOWN: case SDL_EVENT_FINGER_MOTION:
+        case SDL_EVENT_MOUSE_BUTTON_DOWN: case SDL_EVENT_MOUSE_MOTION: case SDL_EVENT_MOUSE_WHEEL:
+            return;
+        default: break;
+    }
     if (touchpad_handle_event(e) || touch_handle_event(e)) return;
     if (!scanned) {
         scanned = true;
@@ -363,6 +374,19 @@ static void test_push(uint64_t frame, unsigned long start, unsigned long len, co
         SDL_PushEvent(&e);
         return;
     }
+    if (!strcmp(dev, "touch")) {  // "frame:touch:<x>/<y>:frames": a real SDL finger (down, up after the frames) at
+        float x = 0, y = 0;       // game pixel x, y (1280 x 720): it goes the whole way, the overlay menu first
+        sscanf(arg, "%f/%f", &x, &y);
+        if (frame != start && frame != start + len) return;
+        e.type = frame == start ? SDL_EVENT_FINGER_DOWN : SDL_EVENT_FINGER_UP;
+        e.tfinger.touchID = 1, e.tfinger.fingerID = 0x544f43, e.tfinger.x = x / 1280.0f, e.tfinger.y = y / 720.0f;
+        int n = 0;
+        SDL_Window **ws = SDL_GetWindows(&n);
+        e.tfinger.windowID = n > 0 ? SDL_GetWindowID(ws[0]) : 0;
+        SDL_free(ws);
+        SDL_PushEvent(&e);
+        return;
+    }
     if (!strcmp(dev, "tap")) {  // "frame:tap:<x>/<y>:frames": a finger on the touch screen at game pixel x, y
         extern void touch_test(int32_t x, int32_t y, bool down);  // runtime/hle/touch.c
         int x = 0, y = 0;
@@ -434,7 +458,7 @@ static void host_test_frame(uint64_t frame) {
             unsigned long start = 0, len = 10;
             char dev[8] = "", name[400] = "";
             if (sscanf(tok, "%lu:%7[a-z]:%399[^:]:%lu", &start, dev, name, &len) < 3) continue;
-            if (!strcmp(dev, "type") || !strcmp(dev, "kbd") || !strcmp(dev, "sdlpad") || !strcmp(dev, "sdlkey") || !strcmp(dev, "shot") || !strcmp(dev, "tap") || !strcmp(dev, "drag") || !strcmp(dev, "click") || !strcmp(dev, "finger")) {
+            if (!strcmp(dev, "type") || !strcmp(dev, "kbd") || !strcmp(dev, "touch") || !strcmp(dev, "sdlpad") || !strcmp(dev, "sdlkey") || !strcmp(dev, "shot") || !strcmp(dev, "tap") || !strcmp(dev, "drag") || !strcmp(dev, "click") || !strcmp(dev, "finger")) {
                 test_push(frame, start, len, dev, name);
                 continue;
             }

@@ -1042,6 +1042,13 @@ gone too, but Co-op still stops: the NAT check gets no UDP reply, the game tries
 (the "Finding players" screen stays, the window stays responsive and NEX keeps pinging; the main thread waits in
 WaitForAddress, called from main+0x75f5b0). Not looked into yet.
 
+**When the backend's login fails** (2026-10-23): an error the game shows before the backend's login has ever succeeded
+switches the session to `ours` (`net_backend_fall_back`, `[net] backend nextendo: its login failed; this session uses
+our server`): the mod answers the next login and all of Course World, Network Play is off until the next start, and a
+notice says so. At start, an account Nextendo refuses online (online-status) runs the session as `ours` straight away
+(`RECOMP_NET_NO_PROBE=1` skips that check). [obs] offline (local-nex, `course_world=mod`, no server): error 2306-0502
+on the first try, then Courses opened with TGRCode's list.
+
 **The player's name.** SyncUserProfile (main+0x14cef40) sends the name in the NetObj string at +0x738e0 (buffer
 +0x738e8, capacity +0x738f0; 10 characters), the save's Maker name; a save whose avatar was made without the
 console's Mii editor has a blank one (empty or spaces), and the backend would then show the player without a name.

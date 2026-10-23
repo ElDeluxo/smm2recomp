@@ -2079,3 +2079,19 @@ and it already knows the poster and the maker; filtering on the server would nee
 would drop the placeholder. The comments are not secret, only spoilers.
 **What would change it:** another client of `/api/courses/<code>/comments` (a web view, SMM1 / SMCraft) that doesn't
 apply the rule itself (then a `?for=<viewer>` filter on the server).
+
+## 2026-10-23 — Nextendo's login failing never takes Course World down: the session falls back to our server
+
+**Decision:** with a backend whose login the game itself runs (Nextendo; local-nex in hybrid), an error the game shows
+before that login has ever succeeded switches the rest of the session to backend `ours`
+(`runtime/net/netcfg.c` net_backend_fall_back; the mod decides in `games/smm2/mods/online.c` game_online_error). The
+mod then answers the next login and every Course World request, as it does with `ours`, and a notice says
+Network Play is off until the next start. At start, an account Nextendo answers "refused" for (online-status: on
+another device, e-mail not verified, ...) runs the session on our server straight away. The setting itself is kept.
+**Why:** the owner's decision (Nextendo is for multiplayer only; Course World, the Endless Challenge and 100 Mario
+stay on TGRCode or our server whether or not the player is signed in), and the owner's report: after a restart with
+Nextendo signed in, Course World stopped working until they signed out. An error after a successful login (a match
+not found) changes nothing, so one failed match doesn't switch Network Play off.
+**Would change:** a way to run the game's NEX login only when Network Play is opened (then Course World would never
+wait on it at all).
+

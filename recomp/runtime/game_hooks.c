@@ -5,6 +5,7 @@
 // sites stay (so upstream changes still merge), and land here: every hook does nothing and reports "off". A game
 // overrides any of them by defining the same function in games/<game>/ (these are weak symbols).
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "cpu.h"
@@ -17,6 +18,9 @@ WEAK const char *game_level_name(void) { return ""; }
 WEAK void romfs_file_read_hook(const char *path) { (void)path; }
 // a folder of files a game's mods generate, laid over the RomFS when no RECOMP_MOD_DIR is set (runtime/services/fs.c)
 WEAK const char *game_romfs_overlay(void) { return NULL; }
+// The game is showing an error (runtime/services/am.c): a game's mod may say what it means for the player instead
+// (msg, true), e.g. that an online backend's login failed and what still works. None by default.
+WEAK bool game_online_error(char *msg, size_t cap) { (void)msg, (void)cap; return false; }
 
 // ---- a game's mod settings (the overlay menu's Mods tab, runtime/ui/menu.mm): on/off toggles; none by default. An
 // entry with value NULL starts a section titled by its label ({"Online", NULL, NULL, false}); the rest are switches.
@@ -34,6 +38,7 @@ typedef struct {
     const char *choice_label;
     const char *const *choices;
     int nchoices;
+    const char *(*why)(void);  // greyed out: a few words on why (shown on the row; NULL or "": none)
 } GameModTrigger;
 WEAK int game_mod_triggers(const GameModTrigger **out) { *out = NULL; return 0; }
 // ... and a look at the textures the game makes and drops (runtime/nvn/objects.c, on the game's thread): the guest
