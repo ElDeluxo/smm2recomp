@@ -458,21 +458,103 @@ static bool make_thumbnail(Cpu *c, uint64_t dst) {  // the stand-in
     return sign_jpeg(c, dst, THUMB_BLOCK, jpeg, jpeg_len);
 }
 
-// The server's picture (or map) of a course into the block at dst; false: it has none (yet). A picture of a
-// TGRCode course the server doesn't hold is fetched from TGRCode (a second or more a request, and it rate-limits):
-// the server waits up to wait_ms for it, and keeps it for next time.
-static bool server_thumbnail(Cpu *c, uint64_t data_id, bool entire, uint64_t dst, uint32_t size, int wait_ms) {
+// The server's picture (or map) of a course into the block at dst: THUMB_GOT; THUMB_NONE: none comes (the game's
+// placeholder); THUMB_COMING: the server is fetching it from TGRCode (about one request in 6 s, its own pace) and
+// may be asked again. The server waits up to wait_ms for one it is fetching (and up to soon_ms while TGRCode is
+// answering for it, about a second), and keeps it for next time.
+enum { THUMB_NONE, THUMB_GOT, THUMB_COMING };
+static int server_thumbnail(Cpu *c, uint64_t data_id, bool entire, uint64_t dst, uint32_t size, int wait_ms,
+                            int soon_ms) {
     char code[12], path[96];
     data_id_to_code((uint32_t)data_id, code);
     const char *test_none = getenv("RECOMP_MOD_TEST_NO_THUMB");  // (test: this course's picture is not there)
-    if (test_none && !strcmp(test_none, code) && !entire) return false;
-    snprintf(path, sizeof path, "/api/courses/%s/%s?wait_ms=%d", code, entire ? "entire_thumbnail" : "thumbnail",
-             wait_ms);
+    if (test_none && !strcmp(test_none, code) && !entire) return THUMB_NONE;
+    snprintf(path, sizeof path, "/api/courses/%s/%s?wait_ms=%d&soon_ms=%d", code,
+             entire ? "entire_thumbnail" : "thumbnail", wait_ms, soon_ms);
     size_t len = 0;
-    uint8_t *jpeg = srv_get_bytes(path, &len);
+    int st = 0;
+    uint8_t *jpeg = srv_get_bytes_status(path, &len, &st);
     bool ok = jpeg && sign_jpeg(c, dst, size, jpeg, len);
     free(jpeg);
-    return ok;
+    return ok ? THUMB_GOT : st == 202 ? THUMB_COMING : THUMB_NONE;
+}
+
+// Pictures a card asked for that were on their way (the server fetching them from TGRCode, the ones asked for last
+// first): a host thread looks once a second whether each has come (`peek`: nothing asked again, so where the player
+// is stays the card asked for last), for LATE_SECONDS at most; the ones that came go into the game's thumbnail cache
+// on the game's thread (late_pictures).
+#define LATE_MAX 64
+#define LATE_SECONDS 120
+static struct Late {
+    uint64_t id;
+    time_t first;
+    uint8_t *jpeg;  // (malloc'd: it came)
+    size_t len;
+} g_late[LATE_MAX];
+static pthread_mutex_t g_late_lock = PTHREAD_MUTEX_INITIALIZER;
+static int g_late_ready;  // (how many came: looked at without the lock on the game's thread)
+
+static void *late_watch(void *arg) {
+    (void)arg;
+    srv_quiet_thread();  // (a look a second: not logged)
+    for (;;) {
+        sleep(1);
+        uint64_t look[LATE_MAX];
+        int n = 0;
+        time_t now = time(NULL);
+        pthread_mutex_lock(&g_late_lock);
+        for (int i = 0; i < LATE_MAX; i++) {
+            struct Late *l = &g_late[i];
+            if (!l->id || l->jpeg) continue;
+            if (now - l->first > LATE_SECONDS) l->id = 0;  // (never came: the placeholder stays)
+            else look[n++] = l->id;
+        }
+        pthread_mutex_unlock(&g_late_lock);
+        for (int k = 0; k < n; k++) {
+            char code[12], path[96];
+            data_id_to_code((uint32_t)look[k], code);
+            snprintf(path, sizeof path, "/api/courses/%s/thumbnail?peek=1", code);
+            size_t len = 0;
+            int st = 0;
+            uint8_t *jpeg = srv_get_bytes_status(path, &len, &st);
+            if (!jpeg && st == 202) continue;
+            pthread_mutex_lock(&g_late_lock);
+            int i = 0;
+            while (i < LATE_MAX && !(g_late[i].id == look[k] && !g_late[i].jpeg)) i++;
+            if (i < LATE_MAX && jpeg) {
+                g_late[i].jpeg = jpeg, g_late[i].len = len;
+                __atomic_add_fetch(&g_late_ready, 1, __ATOMIC_SEQ_CST);
+            } else {
+                if (i < LATE_MAX) g_late[i].id = 0;  // (none is coming)
+                free(jpeg);
+            }
+            pthread_mutex_unlock(&g_late_lock);
+        }
+    }
+    return NULL;
+}
+
+static void late_start(void) {
+    pthread_t th;
+    if (pthread_create(&th, NULL, late_watch, NULL) == 0) pthread_detach(th);
+}
+
+static void late_wanted(uint64_t id) {
+    static pthread_once_t once = PTHREAD_ONCE_INIT;
+    pthread_once(&once, late_start);
+    pthread_mutex_lock(&g_late_lock);
+    int i = 0, free_i = -1, oldest = 0;
+    for (; i < LATE_MAX && g_late[i].id != id; i++) {
+        if (!g_late[i].id && free_i < 0) free_i = i;
+        if (g_late[i].id && g_late[i].first < g_late[oldest].first) oldest = i;
+    }
+    if (i == LATE_MAX) {  // (a new one: a free entry, or the one asked longest ago makes way)
+        i = free_i >= 0 ? free_i : oldest;
+        if (g_late[i].jpeg) __atomic_sub_fetch(&g_late_ready, 1, __ATOMIC_SEQ_CST);
+        free(g_late[i].jpeg);
+        g_late[i].id = id, g_late[i].jpeg = NULL, g_late[i].first = time(NULL);
+    }
+    pthread_mutex_unlock(&g_late_lock);
 }
 
 static void relation_get(Cpu *c) {
@@ -488,25 +570,30 @@ static void relation_get(Cpu *c) {
     }
     s32(no + 0x60, 0);
     netobj_unlock(c);
-    // (outside the lock: HTTP; the buffers are this request's.) The ones the server holds first; then, for the
-    // others (which it is now fetching, in this order), a few seconds in all, more for a course being downloaded,
-    // and after that one more look for each (one may have come meanwhile); whatever hasn't come by then shows the
-    // game's placeholder this time.
-    bool got[8] = {0};
-    uint32_t ngot = 0;
-    for (uint32_t i = 0; i < n; i++) ngot += got[i] = server_thumbnail(c, ids[i], false, outs_of[i], THUMB_BLOCK, 0);
-    uint64_t deadline = (uint64_t)time(NULL) + 4;
+    // (outside the lock: HTTP; the buffers are this request's.) The game asks for the pictures of the cards it shows
+    // (up to five a request), once each; TGRCode gives about one picture in 6 s. The answer is what the server holds
+    // now (and one TGRCode is answering for this moment), so the game's network thread is hardly held up (the server
+    // fetches the pictures asked for last first); the others show the game's placeholder and go into its thumbnail
+    // cache when they come (late_pictures): a card shows its picture when it next comes into view [obs: a card on
+    // screen keeps the placeholder; scrolled out and back, it shows the picture]. A course being downloaded waits for
+    // its picture (cDownload needs one) or gets the stand-in.
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    uint32_t ngot = 0, nlate = 0;
     for (uint32_t i = 0; i < n; i++) {
-        if (got[i]) continue;
-        int left = (int)((int64_t)deadline - (int64_t)time(NULL)) * 1000;
-        int wait = ids[i] == downloading ? 7000 : left > 0 ? left : 0;
-        ngot += got[i] = server_thumbnail(c, ids[i], false, outs_of[i], THUMB_BLOCK, wait);
-        if (got[i]) continue;
-        if (ids[i] == downloading && make_thumbnail(c, outs_of[i]))
+        int wait = ids[i] == downloading ? 7000 : 0;
+        int got = server_thumbnail(c, ids[i], false, outs_of[i], THUMB_BLOCK, wait, 1500);
+        if (got == THUMB_GOT) { ngot++; continue; }
+        if (ids[i] == downloading && make_thumbnail(c, outs_of[i])) {
             MLOG("thumbnail for course %llu: a stand-in\n", (unsigned long long)ids[i]);
-        else s32(outs_of[i] + 0x1bf9c, 0);  // none: the game shows its placeholder
+            continue;
+        }
+        s32(outs_of[i] + 0x1bf9c, 0);  // none: the game shows its placeholder
+        if (got == THUMB_COMING) late_wanted(ids[i]), nlate++;
     }
-    MLOG("thumbnails: %u of %u from the server\n", ngot, n);
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    MLOG("thumbnails: %u of %u from the server, %u on their way (%ld ms)\n", ngot, n, nlate,
+         (long)((t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000));
     c->x[0] = wrapper_ok();
 }
 
@@ -533,7 +620,7 @@ static void retry_failed_thumbnail(Cpu *c, uint64_t id) {
             MLOG("download of course %llu: its picture came again\n", (unsigned long long)id);
             return;
         }
-        bool real = server_thumbnail(c, id, false, slot, THUMB_BLOCK, 0);
+        bool real = server_thumbnail(c, id, false, slot, THUMB_BLOCK, 0, 0) == THUMB_GOT;
         if (!real && !make_thumbnail(c, slot)) return;
         uint64_t save[3] = {c->x[0], c->x[1], c->x[2]}, lr = c->x[30];
         c->x[0] = profile, c->x[1] = slot, c->x[2] = id;
@@ -543,6 +630,43 @@ static void retry_failed_thumbnail(Cpu *c, uint64_t id) {
              real ? "from the server" : "a stand-in", g8(slot + 0x1c1b4) ? "valid" : "rejected");
         return;
     }
+}
+
+// The pictures that came after their card's request (late_watch), into the game's thumbnail cache: the course's slot
+// is left not valid and marked failed by the request's answer (the list's completion, main+0x1520800, puts each
+// answer through main+0x14b55b0, and one without a picture fails its check). The failed mark goes, the picture is
+// signed into the slot and put through the same function, which checks it and marks it valid. On the game's thread
+// (a card's update, every frame while Course World's lists show).
+static void late_pictures(Cpu *c) {
+    if (!__atomic_load_n(&g_late_ready, __ATOMIC_SEQ_CST)) return;
+    uint64_t profile = g64(PROFILE), slots = profile ? g64(profile + 0x132858) : 0;
+    uint32_t nslots = profile ? g32(profile + 0x132850) : 0;
+    pthread_mutex_lock(&g_late_lock);
+    for (int k = 0; k < LATE_MAX; k++) {
+        struct Late *l = &g_late[k];
+        if (!l->id || !l->jpeg) continue;
+        const char *what = "no cache slot for it now";
+        for (uint32_t i = 0; i < nslots && i < 100 && slots; i++) {
+            uint64_t slot = slots + 0x1c1b8ull * i;
+            if (g64(slot + 0x1c000) != l->id) continue;
+            if (g8(slot + 0x1c1b4)) { what = "the slot has one already"; break; }
+            s8(slot + 0x1c1b2, 0);
+            if (!sign_jpeg(c, slot, THUMB_BLOCK, l->jpeg, l->len)) { what = "too large"; break; }
+            uint64_t save[3] = {c->x[0], c->x[1], c->x[2]}, lr = c->x[30];
+            c->x[0] = profile, c->x[1] = slot, c->x[2] = l->id;
+            guest_call(c, THUMB_CACHE_PUT);
+            c->x[0] = save[0], c->x[1] = save[1], c->x[2] = save[2], c->x[30] = lr;
+            what = g8(slot + 0x1c1b4) ? "in the cache" : "rejected";
+            break;
+        }
+        char code[12];
+        data_id_to_code((uint32_t)l->id, code);
+        MLOG("late picture %s: %s (%ld s after its card asked)\n", code, what, (long)(time(NULL) - l->first));
+        free(l->jpeg);
+        l->jpeg = NULL, l->id = 0;
+        __atomic_sub_fetch(&g_late_ready, 1, __ATOMIC_SEQ_CST);
+    }
+    pthread_mutex_unlock(&g_late_lock);
 }
 
 static void download_exec(Cpu *c) {
@@ -559,7 +683,7 @@ static void map_get(Cpu *c) {
     uint64_t id = g64(no + 0x8e428);
     s32(no + 0x60, 0);
     netobj_unlock(c);
-    bool ok = server_thumbnail(c, id, true, no + 0x75428, MAP_BLOCK, 6000);
+    bool ok = server_thumbnail(c, id, true, no + 0x75428, MAP_BLOCK, 6000, 0) == THUMB_GOT;
     if (!ok) memset((void *)(uintptr_t)(no + 0x75428), 0, MAP_BLOCK);
     MLOG("map of course %llu: %s\n", (unsigned long long)id, ok ? "from the server" : "none");
     c->x[0] = wrapper_ok();
@@ -903,6 +1027,7 @@ static uint32_t card_course(uint64_t card) {  // the data id of the course the c
 static void card_update(Cpu *c) {
     uint64_t card = c->x[0];
     guest_call_orig(c, c->pc);
+    if (mod_hundred()) late_pictures(c);
     if (!edit_on()) return;
     int i = 0, free_i = -1;
     for (; i < 8 && g_cards[i].card != card; i++)

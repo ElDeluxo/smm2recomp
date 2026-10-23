@@ -249,7 +249,7 @@ pub enum Keys {
 }
 
 pub struct Options {
-    /// Between two requests to the source.
+    /// Between the starts of two requests to the source.
     pub interval: Duration,
     /// After a "busy" answer without a Retry-After, nothing is asked for this long, doubling per
     /// busy answer in a row (at most a minute).
@@ -265,8 +265,8 @@ pub struct Options {
     /// Courses a search for a difficulty gathers before it stops (more searches while the source keeps
     /// answering full batches): about three runs' worth, so a player's next runs find fresh courses.
     pub pool: [usize; 4],
-    /// Before a thumbnail a client is waiting for (shorter than `interval`; one try, no retries),
-    /// and before a listed course's data a client asked for.
+    /// Before a thumbnail (one a client is waiting for: one try, no retries), and before a listed
+    /// course's data a client asked for.
     pub thumbnail_interval: Duration,
     /// Serve Course World's Popular and New from the source's lists ([`crate::lists`]).
     pub lists: bool,
@@ -290,15 +290,19 @@ pub struct Options {
 
 impl Default for Options {
     fn default() -> Self {
+        // TGRCode (Cloudflare) answers 429 to more than about ten or eleven requests a minute
+        // (measured 2026-10-23: one a 3.5 s, start to start, a third were busy after the first five;
+        // one a 5 s, the twelfth of each minute was busy, 60 s apart; one a 6 s, none), and a picture
+        // takes about 1 s, a list 2 s
         Self {
-            interval: Duration::from_secs(3),
-            backoff: Duration::from_secs(4), // (TGRCode: the next one goes through 3-5 s later)
+            interval: Duration::from_secs(6),
+            backoff: Duration::from_secs(10),
             retries: 4,
             cooldown: Duration::from_secs(60),
             batch: 10,
             prime: true,
             pool: [24, 48, 48, 18], // (3 x the 100 Mario run lengths 8 / 16 / 16 / 6)
-            thumbnail_interval: Duration::from_millis(1500),
+            thumbnail_interval: Duration::from_secs(6),
             lists: true,
             list_refresh: Duration::from_secs(12 * 60),
             new_refresh: Duration::from_secs(2 * 60),
@@ -315,8 +319,10 @@ impl Default for Options {
 
 /// What the fetcher is told.
 enum Job {
-    /// A difficulty is short of courses.
+    /// A difficulty is short of courses (a run asks).
     Short(Difficulty),
+    /// The start's search of a difficulty (no run waits: the lists' pictures go first).
+    Prime(Difficulty),
     /// A client is waiting (thumbnails or a course's data in the fetcher's queues), or asked for a
     /// page of a list.
     Wake,
@@ -327,16 +333,18 @@ pub fn start(store: Arc<Store>, source: Box<dyn Source>, keys: Keys, opts: Optio
     let (tx, rx) = mpsc::channel::<Job>();
     if opts.prime {
         for d in Difficulty::ALL {
-            let _ = tx.send(Job::Short(d));
+            let _ = tx.send(Job::Prime(d));
         }
     }
     let tx = Arc::new(Mutex::new(tx));
     let short = tx.clone();
+    let mut f = Fetcher::new(source, keys, opts);
+    let run_waits = f.run_waits.clone();
     store.on_short(move |d| {
+        run_waits.store(true, std::sync::atomic::Ordering::SeqCst);
         let _ = short.lock().unwrap().send(Job::Short(d));
     });
-    let lists = opts.lists;
-    let mut f = Fetcher::new(source, keys, opts);
+    let lists = f.opts.lists;
     let queue = f.wanted_thumbnails.clone();
     let wake = tx.clone();
     store.on_thumbnail(move |code, entire| {
@@ -399,7 +407,14 @@ pub fn start(store: Arc<Store>, source: Box<dyn Source>, keys: Keys, opts: Optio
             };
             match job {
                 Some(Job::Short(d)) => {
+                    f.run_waits
+                        .store(false, std::sync::atomic::Ordering::SeqCst);
                     f.wanted(&store, d);
+                }
+                Some(Job::Prime(d)) => {
+                    f.priming = true;
+                    f.wanted(&store, d);
+                    f.priming = false;
                 }
                 Some(Job::Wake) => {}
                 None => return,
@@ -411,11 +426,16 @@ pub fn start(store: Arc<Store>, source: Box<dyn Source>, keys: Keys, opts: Optio
 /// Requests this close together are one burst (a page's pictures, asked for one after another).
 const BURST: Duration = Duration::from_millis(250);
 
+/// A thumbnail a client asked for this long ago, and not since, is no longer waited for: the game asks
+/// again (about once a second) for the pictures of the cards it shows that haven't come.
+const WANT_FRESH: Duration = Duration::from_secs(10);
+
 /// A thumbnail a client asked for, (code, entire), and its place in the queue.
 struct Want {
     key: (String, bool),
     burst: u64,
     seq: i64,
+    asked: Instant,
 }
 
 /// Thumbnails clients asked for: the latest burst first, in the order asked within it; the ones
@@ -440,16 +460,20 @@ impl Wanted {
             Some(w) => {
                 w.burst = self.burst;
                 w.seq = self.seq - (1 << 40);
+                w.asked = Instant::now();
             }
             None => self.items.push(Want {
                 key,
                 burst: self.burst,
                 seq: self.seq,
+                asked: Instant::now(),
             }),
         }
     }
 
     fn next(&mut self) -> Option<Want> {
+        // (one no card waits for any more: the stock ahead orders it with the others)
+        self.items.retain(|w| w.asked.elapsed() < WANT_FRESH);
         let i = (0..self.items.len())
             .max_by_key(|&i| (self.items[i].burst, Reverse(self.items[i].seq)))?;
         Some(self.items.swap_remove(i))
@@ -463,7 +487,7 @@ impl Wanted {
     }
 
     fn is_empty(&self) -> bool {
-        self.items.is_empty()
+        !self.items.iter().any(|w| w.asked.elapsed() < WANT_FRESH)
     }
 }
 
@@ -510,6 +534,13 @@ struct Fetcher {
     /// The Super World pool: no request before then (after a failure), and that wait.
     pool_retry: Option<Instant>,
     pool_backoff: Duration,
+    /// The start's searches are running ([`Job::Prime`]): the lists' pictures go before each of their
+    /// requests, unless a run asks for courses ([`Self::run_waits`]).
+    priming: bool,
+    run_waits: Arc<std::sync::atomic::AtomicBool>,
+    /// A list's first fill is running (it goes before pictures: the page shows only the courses
+    /// held meanwhile).
+    filling: bool,
 }
 
 impl Fetcher {
@@ -539,6 +570,9 @@ impl Fetcher {
             failed_worlds: Default::default(),
             pool_retry: None,
             pool_backoff: Duration::ZERO,
+            priming: false,
+            run_waits: Default::default(),
+            filling: false,
         }
     }
 
@@ -560,8 +594,8 @@ impl Fetcher {
             || !self.wanted_worlds.lock().unwrap().is_empty()
     }
 
-    /// One request to the source, at least `interval` after the one before and after the source's
-    /// pause; a busy answer starts a pause.
+    /// One request to the source, starting at least `interval` after the one before started and
+    /// after the source's pause; a busy answer starts a pause.
     fn request<T>(
         &mut self,
         interval: Duration,
@@ -573,8 +607,8 @@ impl Fetcher {
         if !left.is_zero() {
             std::thread::sleep(left);
         }
-        let r = req(&mut *self.source);
         self.last_request = Some(Instant::now());
+        let r = req(&mut *self.source);
         match &r {
             Err(SourceError::Busy(after)) => {
                 let pause = match after {
@@ -622,13 +656,39 @@ impl Fetcher {
         }
     }
 
-    /// One thumbnail into the store.
+    /// One thumbnail into the store (one the source has none of: the store is told).
     fn fetch_thumbnail(&mut self, store: &Store, code: &str, entire: bool) -> Fetched {
+        let r = self.fetch_thumbnail_of(store, code, entire);
+        if r == Fetched::Missing {
+            store.note_no_thumbnail(code, entire);
+        }
+        r
+    }
+
+    fn fetch_thumbnail_of(&mut self, store: &Store, code: &str, entire: bool) -> Fetched {
         let raw = code.replace('-', "");
         let interval = self.opts.thumbnail_interval;
-        match self.request(interval, |s| s.thumbnail(&raw, entire)) {
-            Ok(b) if store.put_thumbnail(code, entire, &b).is_ok() => Fetched::Got,
-            Ok(_) => {
+        // (after the pacing's wait: a client may wait while the source answers for it)
+        let r = self.request(interval, |s| {
+            store.set_thumbnail_fetching(Some((code, entire)));
+            s.thumbnail(&raw, entire)
+        });
+        // (kept before the waiting client is let go)
+        let r = r.map(|b| store.put_thumbnail(code, entire, &b).is_ok());
+        store.set_thumbnail_fetching(None);
+        match r {
+            Ok(true) => {
+                if !entire {
+                    let name = store
+                        .listed(code)
+                        .map(|l| l.meta.name)
+                        .or_else(|| store.get(code).map(|m| m.name))
+                        .unwrap_or_default();
+                    eprintln!("[upstream] picture {code} ({name})");
+                }
+                Fetched::Got
+            }
+            Ok(false) => {
                 eprintln!("[upstream] thumbnail {code}: not a JPEG");
                 Fetched::Missing
             }
@@ -905,13 +965,16 @@ impl Fetcher {
         None
     }
 
-    /// One list request, paced; what clients wait for goes first.
+    /// One list request, paced; what clients wait for goes first, unless it is a list's first fill
+    /// ([`Self::filling`]).
     fn list_request(
         &mut self,
         store: &Store,
         req: impl FnOnce(&mut dyn Source) -> Result<Vec<Value>, SourceError>,
     ) -> Result<Vec<Value>, SourceError> {
-        self.wait_turn(store, self.opts.interval);
+        if !self.filling {
+            self.wait_turn(store, self.opts.interval);
+        }
         self.request(self.opts.interval, req)
     }
 
@@ -956,6 +1019,14 @@ impl Fetcher {
     /// Popular: each difficulty's list, mixed (a course of each in turn), in place of the one
     /// held or after it (`more`).
     fn fetch_popular(&mut self, store: &Store, more: bool) -> Result<(), SourceError> {
+        self.filling =
+            !more && (self.popular_partial || store.list_status(Kind::Popular).fetched.is_none());
+        let r = self.fetch_popular_of(store, more);
+        self.filling = false;
+        r
+    }
+
+    fn fetch_popular_of(&mut self, store: &Store, more: bool) -> Result<(), SourceError> {
         let batch = self.opts.list_batch;
         let first = store.list_status(Kind::Popular).len == 0;
         let mut per: Vec<Vec<Listed>> = Vec::new();
@@ -1003,7 +1074,10 @@ impl Fetcher {
     /// New: the source's latest courses merged into the ones listed.
     fn fetch_new(&mut self, store: &Store) -> Result<(), SourceError> {
         let batch = self.opts.list_batch;
-        let records = self.list_request(store, |s| s.newest(batch))?;
+        self.filling = store.list_status(Kind::New).fetched.is_none();
+        let records = self.list_request(store, |s| s.newest(batch));
+        self.filling = false;
+        let records = records?;
         let latest: Vec<Listed> = records.iter().filter_map(|r| listed_of(r, None)).collect();
         let got = latest.len();
         store.merge_newest(Kind::New, latest, self.opts.new_max);
@@ -1015,8 +1089,8 @@ impl Fetcher {
     }
 
     /// One background request, paced, retried while the source says it's busy (after its pause);
-    /// what clients wait for, a list that's due and, while a client looks at the lists, one of
-    /// their pictures go first.
+    /// what clients wait for and a list that's due go first, and, for the start's searches (no run
+    /// waits for them), the lists' pictures the player will want ([`Store::list_thumbnails_ahead`]).
     fn call<T>(
         &mut self,
         store: &Store,
@@ -1024,7 +1098,18 @@ impl Fetcher {
     ) -> Result<T, SourceError> {
         for attempt in 0..=self.opts.retries {
             self.serve_urgent(store);
-            if store.browsing() {
+            if self.priming && !self.run_waits.load(std::sync::atomic::Ordering::SeqCst) {
+                // (the ones wanted soon all first, then one in turn with the searches' requests)
+                while !self.run_waits.load(std::sync::atomic::Ordering::SeqCst)
+                    && self.warm(store, |s, n| {
+                        s.list_thumbnails_soon(n)
+                            .into_iter()
+                            .map(|c| (c, false))
+                            .collect()
+                    })
+                {
+                    self.serve_urgent(store);
+                }
                 self.warm_listed(store);
             }
             self.wait_turn(store, self.opts.interval);
@@ -1209,6 +1294,11 @@ mod tests {
         let d = std::env::temp_dir().join(format!("mmk-upstream-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         d
+    }
+
+    /// [`tmp`]'s folder as it was left.
+    fn tmp_keep(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("mmk-upstream-{name}-{}", std::process::id()))
     }
 
     /// A made-up key table (tests only; the game's own is never part of the project).
@@ -1671,9 +1761,21 @@ mod tests {
             std::slice::from_ref(&own.code)
         );
 
-        // New: the latest courses among the ones held, newest first
+        // New: the latest courses among the ones held, newest first, then Popular's (older) listed
+        // courses
+        let new = codes(&courses(&store, "/api/courses?sort=new&limit=100"));
         assert_eq!(
-            codes(&courses(&store, "/api/courses?sort=new")),
+            new[..3],
+            [own.code.clone(), "NEW-000-002".into(), "NEW-000-001".into()]
+        );
+        assert_eq!(new.len(), 3 + 12);
+        assert!(new[3..].iter().all(|c| c.starts_with('P')));
+        // the New list is kept: a restart serves it before the source answers again
+        drop(store);
+        let store = Store::open(tmp_keep("lists")).unwrap();
+        store.on_lists(|| {});
+        assert_eq!(
+            codes(&courses(&store, "/api/courses?sort=new&limit=3")),
             [own.code.clone(), "NEW-000-002".into(), "NEW-000-001".into()]
         );
 
@@ -1929,12 +2031,10 @@ mod tests {
         let first = store.list_thumbnails_ahead(100);
         assert_eq!(&first[..2], ["L00-000-009", "L00-000-008"]);
         assert!(first.contains(&"L00-000-000".to_string()));
-        // a page of Hot: it and the next one, newest first
+        // a page of Hot: from its start on, newest first
         courses(&store, "/api/courses?sort=hot&offset=2&limit=2");
-        assert_eq!(
-            store.list_thumbnails_ahead(100),
-            ["L00-000-007", "L00-000-006", "L00-000-005", "L00-000-004"]
-        );
+        let rest: Vec<String> = (0..8).rev().map(|i| format!("L00-000-00{i}")).collect();
+        assert_eq!(store.list_thumbnails_ahead(100), rest);
         store
             .put_thumbnail("L00-000-006", false, &[0xFF, 0xD8, 0xFF, 0xD9])
             .unwrap();
@@ -1943,6 +2043,110 @@ mod tests {
             ["L00-000-007", "L00-000-005"]
         );
         assert!(store.browsing());
+    }
+
+    #[test]
+    fn pictures_ahead_start_where_the_player_is() {
+        let store = Store::open(tmp("cursor")).unwrap();
+        store.on_lists(|| {});
+        // New, newest first: L…099 down to L…000
+        store.set_list(Kind::New, listed(100, 1_700_000_000, 10));
+        let code = |i: usize| format!("L00-000-{i:03}");
+        courses(&store, "/api/courses?sort=new&offset=0&limit=100");
+        assert_eq!(store.list_thumbnails_ahead(1), [code(99)]);
+        // the game asks for a card's picture as it scrolls into view: card 30 (L…069)
+        assert!(store.thumbnail(&code(69), false, Duration::ZERO).is_none());
+        let ahead = store.list_thumbnails_ahead(200);
+        // three cards before it, it, forty after it; then the rest of the page from its start
+        let want: Vec<String> = (27..71)
+            .chain(0..27)
+            .chain(71..100)
+            .map(|i| code(99 - i))
+            .collect();
+        assert_eq!(ahead, want);
+        // a course not on the list looked at doesn't move it, nor does a peek
+        assert_eq!(get(&store, "/api/courses/ABC-DEF-GHJ/thumbnail").0, 404);
+        let peek = get(
+            &store,
+            &format!("/api/courses/{}/thumbnail?peek=1", code(10)),
+        );
+        assert_eq!(peek.0, 404, "(no fetcher here: none is coming)");
+        assert_eq!(store.list_thumbnails_ahead(1), [code(72)]);
+        // the same page asked for again keeps it; another page starts from its own start
+        courses(&store, "/api/courses?sort=new&offset=0&limit=100");
+        assert_eq!(store.list_thumbnails_ahead(1), [code(72)]);
+        courses(&store, "/api/courses?sort=popular&offset=0&limit=100");
+        assert!(store.list_thumbnails_ahead(1).is_empty());
+    }
+
+    #[test]
+    fn a_client_waits_for_a_picture_only_while_the_source_answers_for_it() {
+        let store = Arc::new(Store::open(tmp("soon")).unwrap());
+        store.on_lists(|| {});
+        store.on_thumbnail(|_, _| {});
+        store.set_list(Kind::New, listed(2, 1_700_000_000, 10));
+        let soon = Duration::from_millis(1500);
+        // not being fetched: no wait, and it's coming
+        let t0 = Instant::now();
+        assert!(
+            store
+                .thumbnail_soon("L00-000-000", false, Duration::ZERO, soon)
+                .is_none()
+        );
+        assert!(t0.elapsed() < Duration::from_millis(200));
+        assert!(store.thumbnail_coming("L00-000-000", false));
+        // being fetched: waited for until it's kept
+        store.set_thumbnail_fetching(Some(("L00-000-001", false)));
+        let s = store.clone();
+        let fetcher = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            s.put_thumbnail("L00-000-001", false, &[0xFF, 0xD8, 0xFF, 0xD9])
+                .unwrap();
+            s.set_thumbnail_fetching(None);
+        });
+        let t0 = Instant::now();
+        assert!(
+            store
+                .thumbnail_soon("L00-000-001", false, Duration::ZERO, soon)
+                .is_some()
+        );
+        assert!(t0.elapsed() >= Duration::from_millis(250));
+        fetcher.join().unwrap();
+    }
+
+    #[test]
+    fn the_start_searches_let_the_first_pictures_go_first() {
+        let store = Store::open(tmp("primeorder")).unwrap();
+        let (mut f, _) = fake(false);
+        f.popular = vec![
+            vec![record("N24N99PNF", 26065833, 40, 10)],
+            vec![record("PDCYMMWDF", 60709023, 21, 4)],
+        ];
+        let asked = f.thumbs.clone();
+        let opts = Options {
+            prime: true,
+            ..quick()
+        };
+        let mut fetch = Fetcher::new(Box::new(f), Keys::Table(Box::new(table())), opts);
+        store.on_lists(|| {});
+        while fetch.serve_urgent(&store) {}
+        fetch.priming = true;
+        fetch.wanted(&store, Difficulty::Normal);
+        // (both pictures were asked for before the search's first request; the source has none of
+        // the second)
+        assert_eq!(asked.lock().unwrap().len(), 2);
+        assert!(store.has_thumbnail("N24-N99-PNF", false));
+        // a run asking: the searches no longer wait for pictures
+        let (f, _) = fake(false);
+        let asked = f.thumbs.clone();
+        fetch.source = Box::new(f);
+        fetch
+            .run_waits
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        std::fs::remove_file(store.dir.join("thumbnails/N24-N99-PNF.jpg")).unwrap();
+        fetch.searched = [None; 4];
+        fetch.wanted(&store, Difficulty::Normal);
+        assert!(asked.lock().unwrap().is_empty());
     }
 
     #[test]

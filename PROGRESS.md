@@ -7,6 +7,7 @@
   - the costume-loss animation, now as SMM1;
   - costumes facing left.
   No new release or iPad install without the owner.
+- **For v0.4.7:** the owner's v0.4.6 report, Course World scrolling (see "Owner's v0.4.6 report" below).
 - **In v0.4.5:** everything listed in its release notes, including the owner's three v0.4.4 reports:
   - taps through the menu;
   - Course World falling back from a failed Nextendo login;
@@ -605,6 +606,33 @@ Setup failures first, since they block new players:
   - Windows: the working set.
   Checked on the Mac (4858 MB on the title, loading). The Windows and Linux files compile; iOS not run yet. For the
   possible iPad memory kill during shader compile-ahead.
+- ✅ **Course World "New Courses" scrolling laggy and slow** (DECISIONS 2026-10-23 "Course World pictures";
+  `recomp/docs/mods.md` "Thumbnails"). Measured on the Mac (built-in server, `courses=tgrcode`, a cold server folder,
+  timestamps on every log line):
+  - **The lag was the frame stopping.** A card's picture request waited up to 4 s for TGRCode on a game thread that
+    shares its core with the one that draws. Longest frames in New's first 30 s: 4042, 497, 2800 and 4064 ms.
+    The mod's server requests now give the core up while they wait. After: no frame over 100 ms from the list's
+    opening on, in every run (New scrolled 30 cards down and back, New opened, Detailed Search's page turns).
+  - **Picture requests** answer at once: 10.9 s spent in them in the first 30 s before, 0.0 s after (each waits up
+    to 1.5 s only for a picture TGRCode is answering for at that moment).
+  - **The game asks once per card** and never again for one that failed; a card on screen keeps the placeholder even
+    when the picture is put in later. Pictures that come later now go into the game's thumbnail cache, and the card
+    shows its picture the next time it comes into view (seen: scrolled out and back). Cold, scrolling 26 cards: 12
+    went into the cache 6-51 s after their card asked; before: 0 (1 of 7 came with its card's 4 s wait).
+  - **TGRCode pacing:** one request every 6 s, start to start (at 5 s the twelfth of each minute was 429; at 3.5 s a
+    third). 429s in a run: 15 before; 0-2 after (the 2 at start-up after back-to-back test runs). The pictures the
+    game just asked for go first, then the stock ahead of the player (40 cards past the last one asked for), then the
+    start's Endless searches, which yield to the first pictures. A list's first fill goes before pictures.
+  - **New** held 7 courses on a cold start (TGRCode's `search_new` covers only the last ~10 minutes: 11-20 courses).
+    It's now kept across sessions and followed by Popular's courses and the ones held, by upload time: 100 on a
+    cold start. Opening New cold: 3 of 5 pictures at once and the other 2 in the cache within 3-9 s (before: 0 of 5,
+    after a 4 s freeze).
+  - **Pages:** the search's next-page flag was never set, so every list ended at its first 100 and the page arrows
+    were grey. Detailed Search now turns pages (pages 1-4 checked: list answered at once, no frame over 100 ms;
+    pictures cold: 1 of 5 on page 1, then 0 of 5 with a page every 10 s, TGRCode's pace).
+  - Open: Hot, Popular and New keep their page arrows grey with the flag set (not the application config's values
+    4-36). A card on screen doesn't refresh when its picture comes: that needs the card's picture path (the card
+    update main+0x1a2cec0, the image-job worker main+0x17b78f0). Not tried on the iPad.
 
 ### Owner's v0.4.5 reports (2026-10-23)
 - ✅ **"Course ID not found" on the first try** (Course World > New > the first course; the second try worked): a
@@ -693,7 +721,9 @@ Setup failures first, since they block new players:
 6. ✅ Course World thumbnails (2026-10-22): they were blank when TGRCode was busy (it allows about one request per
    5-7 s): the server fetched in reverse order, slept through waiting clients and dropped a busy picture for good.
    Now the first pictures of Hot / New / Popular are fetched ahead, the page's and the next page's while browsing,
-   and a busy one is asked for again; Hot = Popular's latest uploads first; live lists from TGRCode (`lists.rs`)
+   and a busy one is asked for again; Hot = Popular's latest uploads first; live lists from TGRCode (`lists.rs`).
+   2026-10-23 (owner's v0.4.6 report, below): no frame waits for a picture any more, TGRCode paced at 6 s, a stock
+   of pictures ahead of where the player is, late pictures into the cache, New kept across sessions
 7. ✅ Super Worlds (2026-10-22; `recomp/docs/mods.md` "Super Worlds",
    `games/smm2/mods/superworld.c`, server `superworlds.rs`; evidence `private/smm2/evidence/mods/superworlds/`)
    - ✅ server: a pool from TGRCode's `/get_super_worlds` (grows ten random worlds an answer, kept on disk, refreshed at

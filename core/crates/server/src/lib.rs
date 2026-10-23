@@ -9,7 +9,7 @@
 //! | GET | `/api/courses?q=&style=&sort=new\|popular\|hot\|hard&limit=&offset=` | search (`hot`: as `popular`); with an upstream source, `popular`, `hot` (Popular's latest uploads first) and `new` (no `q`) are its live lists first (`lists`) |
 //! | GET | `/api/courses/<code>` | metadata (of a held or an upstream-listed course); here and in the course lists (search, a maker's, played / liked), its `comments` count and, signed in, the player's own `you` = `{played, cleared, vote}` |
 //! | GET | `/api/courses/<code>/data` (`?wait_ms=`, at most 20000) | course data (bytes); an upstream-listed course the server doesn't hold is fetched and imported, waited for up to `wait_ms` (default 7000; 404 meanwhile) |
-//! | GET | `/api/courses/<code>/thumbnail`, `/entire_thumbnail` (`?wait_ms=`, at most 20000) | the course's picture and its whole-course map (JPEG); one of an upstream course the server doesn't hold yet is fetched from the source, waited for up to `wait_ms` (404 meanwhile) |
+//! | GET | `/api/courses/<code>/thumbnail`, `/entire_thumbnail` (`?wait_ms=`, at most 20000; `?soon_ms=`, at most 5000; `?peek=1`) | the course's picture and its whole-course map (JPEG); one of an upstream course the server doesn't hold yet is fetched from the source, waited for up to `wait_ms`, and up to `soon_ms` while the source is answering for it (202 `{"coming": true}` meanwhile; 404: none is coming); `peek`: the one held only, nothing asked for. A picture asked for tells the lists where the player is (`lists`: the stock ahead) |
 //! | PUT | `/api/courses/<code>/thumbnail`, `/entire_thumbnail` (body: a JPEG or the game's thumbnail block; signed in, the course's uploader) | an uploaded course's picture and whole-course map, as the game made them |
 //! | POST | `/api/courses/<code>/play`, `/clear` | statistics |
 //! | GET | `/api/health` | liveness: counts and the replay engine version |
@@ -183,6 +183,9 @@ pub struct Store {
     /// Told when a client wants an upstream course's thumbnail the store doesn't hold (code,
     /// whole-course map?): [`upstream`] fetches it; never blocks.
     thumbs_wanted: std::sync::OnceLock<ThumbsWanted>,
+    /// Thumbnails the source has none of, (code, entire); the one it is being asked for now.
+    no_thumbnails: Mutex<std::collections::HashSet<(String, bool)>>,
+    thumbnail_fetching: Mutex<Option<(String, bool)>>,
     /// Course World's Popular and New from an upstream source ([`lists`]).
     lists: Mutex<lists::Lists>,
     /// Told when a page of an upstream list is asked for (set: the lists are served).
@@ -447,6 +450,7 @@ impl Store {
         let (superworlds, world_courses) = superworlds::load(&dir);
         let mut lists = lists::Lists::default();
         lists.register_world_courses(world_courses);
+        lists.load_new(&read(lists::NEW_FILE));
         let mut played = played;
         for (who, save) in &endless_runs {
             played
@@ -472,6 +476,8 @@ impl Store {
             verified_records: false,
             wants: std::sync::OnceLock::new(),
             thumbs_wanted: std::sync::OnceLock::new(),
+            no_thumbnails: Default::default(),
+            thumbnail_fetching: Default::default(),
             lists: Mutex::new(lists),
             lists_wanted: std::sync::OnceLock::new(),
             course_wanted: std::sync::OnceLock::new(),
@@ -510,13 +516,29 @@ impl Store {
 
     /// A course's thumbnail (JPEG; `entire`: the whole-course map). One the store doesn't hold, of
     /// an upstream course (held or listed), is asked for from the source (and kept), waiting up to
-    /// `wait` for it.
+    /// `wait` for it. A course's picture asked for tells the lists where the player is
+    /// ([`Store::list_thumbnails_ahead`]).
     pub fn thumbnail(
         &self,
         code: &str,
         entire: bool,
         wait: std::time::Duration,
     ) -> Option<Vec<u8>> {
+        self.thumbnail_soon(code, entire, wait, std::time::Duration::ZERO)
+    }
+
+    /// [`Self::thumbnail`], waiting up to `soon` too while the source is answering for it (a request
+    /// takes about a second).
+    pub fn thumbnail_soon(
+        &self,
+        code: &str,
+        entire: bool,
+        wait: std::time::Duration,
+        soon: std::time::Duration,
+    ) -> Option<Vec<u8>> {
+        if !entire {
+            self.note_picture_asked(code);
+        }
         let path = self.thumbnail_path(code, entire);
         if let Ok(b) = fs::read(&path) {
             return Some(b);
@@ -530,13 +552,49 @@ impl Store {
         }
         (self.thumbs_wanted.get()?)(code, entire);
         let t0 = std::time::Instant::now();
-        while t0.elapsed() < wait {
-            std::thread::sleep(std::time::Duration::from_millis(50).min(wait));
+        let key = (code.to_string(), entire);
+        let fetching = || self.thumbnail_fetching.lock().unwrap().as_ref() == Some(&key);
+        while t0.elapsed() < wait || (t0.elapsed() < soon && fetching()) {
+            std::thread::sleep(std::time::Duration::from_millis(20));
             if let Ok(b) = fs::read(&path) {
                 return Some(b);
             }
         }
         None
+    }
+
+    /// A course's thumbnail if the store holds it (nothing asked for).
+    pub fn thumbnail_held(&self, code: &str, entire: bool) -> Option<Vec<u8>> {
+        fs::read(self.thumbnail_path(code, entire)).ok()
+    }
+
+    /// Whether a thumbnail the store doesn't hold is coming: an upstream course's (held or listed),
+    /// with a fetcher to ask, and the source hasn't said it has none.
+    pub fn thumbnail_coming(&self, code: &str, entire: bool) -> bool {
+        let upstream = match self.get(code) {
+            Some(m) => m.upstream,
+            None => self.listed(code).is_some_and(|l| l.meta.upstream),
+        };
+        upstream
+            && self.thumbs_wanted.get().is_some()
+            && !self
+                .no_thumbnails
+                .lock()
+                .unwrap()
+                .contains(&(code.to_string(), entire))
+    }
+
+    /// The thumbnail the source is being asked for now, if any.
+    pub fn set_thumbnail_fetching(&self, what: Option<(&str, bool)>) {
+        *self.thumbnail_fetching.lock().unwrap() = what.map(|(c, e)| (c.to_string(), e));
+    }
+
+    /// The source has no thumbnail of `code` (`entire`: its map).
+    pub fn note_no_thumbnail(&self, code: &str, entire: bool) {
+        self.no_thumbnails
+            .lock()
+            .unwrap()
+            .insert((code.to_string(), entire));
     }
 
     /// Keep a course's thumbnail (a JPEG, or the game's thumbnail block).
@@ -1680,8 +1738,25 @@ pub fn handle(
                 .unwrap_or(0u64)
                 .min(20_000);
             let wait = std::time::Duration::from_millis(wait);
-            match store.thumbnail(code, *kind == "entire_thumbnail", wait) {
+            let soon = q
+                .get("soon_ms")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0u64)
+                .min(5_000);
+            let soon = std::time::Duration::from_millis(soon);
+            let entire = *kind == "entire_thumbnail";
+            // (peek: the one held only, nothing asked: a client looking whether one it was missing has come)
+            let got = if q.get("peek").is_some_and(|v| v == "1") {
+                store.thumbnail_held(code, entire)
+            } else {
+                store.thumbnail_soon(code, entire, wait, soon)
+            };
+            match got {
                 Some(b) => (200, "image/jpeg", b),
+                // (the source is fetching it: a client may ask again)
+                None if store.thumbnail_coming(code, entire) => {
+                    json(202, json!({ "coming": true }))
+                }
                 None => err(404, "no thumbnail"),
             }
         }
@@ -2292,8 +2367,8 @@ mod tests {
         };
         assert_eq!(
             get("ABC-DEF-GHJ", "thumbnail").0,
-            404,
-            "not held yet: asked for"
+            202,
+            "not held yet: asked for, coming"
         );
         assert_eq!(
             get(&own.code, "thumbnail").0,
@@ -2314,8 +2389,11 @@ mod tests {
         assert_eq!(asked.lock().unwrap().len(), 1, "held: not asked again");
         // a client may wait for it
         let t0 = std::time::Instant::now();
-        assert_eq!(get("ABC-DEF-GHJ", "entire_thumbnail?wait_ms=100").0, 404);
+        assert_eq!(get("ABC-DEF-GHJ", "entire_thumbnail?wait_ms=100").0, 202);
         assert!(t0.elapsed() >= std::time::Duration::from_millis(100));
+        // the source has none: not coming
+        store.note_no_thumbnail("ABC-DEF-GHJ", true);
+        assert_eq!(get("ABC-DEF-GHJ", "entire_thumbnail").0, 404);
         store.put_thumbnail(&own.code, true, &jpeg).unwrap();
         assert_eq!(get(&own.code, "entire_thumbnail").2, jpeg);
         assert_eq!(

@@ -4,10 +4,14 @@
 #include <string.h>
 
 #include "mod.h"
+#include "../../../runtime/kernel.h"
 #include "../../../runtime/net/http.h"
 #include "../../../runtime/net/json.h"
 
 static __thread int slow_ms;  // (srv_call_slow: this thread's request may take this long)
+static __thread int quiet;    // (srv_quiet_thread: this thread's answers aren't logged)
+
+void srv_quiet_thread(void) { quiet = 1; }
 
 static int request_typed(const char *method, const char *path, const char *body, size_t blen, const char *type,
                          HttpResponse *r) {
@@ -20,10 +24,16 @@ static int request_typed(const char *method, const char *path, const char *body,
         size_t n = strlen(hdr);
         snprintf(hdr + n, sizeof hdr - n, "Content-Type: %s\r\n", type);
     }
+    // (the calling guest thread gives its core up while it waits, as the console's network wait does: the game's
+    // worker threads share cores with the one that draws, and a picture the server waited seconds for froze the
+    // frame for as long, 4 s at a time while Course World's lists scrolled)
+    kernel_host_wait_begin();
     int st = http_request(method, url, hdr, body, blen, slow_ms ? slow_ms : g_mod.timeout_ms, r);
+    kernel_host_wait_end();
     bool text = body && !strcmp(type, "application/json");
     if (!st) LOG("[mod] %s %s: %s\n", method, path, r->error);
-    else MLOG("%s %s -> %d (%zu bytes)%s%.300s\n", method, path, st, r->len, text ? " body " : "", text ? body : "");
+    else if (!quiet)
+        MLOG("%s %s -> %d (%zu bytes)%s%.300s\n", method, path, st, r->len, text ? " body " : "", text ? body : "");
     return st;
 }
 
@@ -70,11 +80,19 @@ Json *srv_call_slow(const char *method, const char *path, const char *body, int 
 }
 
 void *srv_get_bytes(const char *path, size_t *len) {
+    int st = 0;
+    void *d = srv_get_bytes_status(path, len, &st);
+    if (!d && st == 404) MLOG("GET %s: not there\n", path);
+    else if (!d && st) LOG("[mod] GET %s: HTTP %d\n", path, st);
+    return d;
+}
+
+// ... and the answer's status (0: none came)
+void *srv_get_bytes_status(const char *path, size_t *len, int *status) {
     HttpResponse r;
     int st = request("GET", path, NULL, 0, &r);
+    if (status) *status = st;
     if (st != 200) {
-        if (st == 404) MLOG("GET %s: not there\n", path);
-        else if (st) LOG("[mod] GET %s: HTTP %d\n", path, st);
         http_free(&r);
         return NULL;
     }

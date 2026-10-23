@@ -48,6 +48,8 @@ Json *srv_call(const char *method, const char *path, const char *body, int *stat
 Json *srv_call_slow(const char *method, const char *path, const char *body, int *status, int timeout_ms);
 void *srv_get_bytes(const char *path, size_t *len);  // raw body (course data); malloc'd
 void *srv_get_bytes_slow(const char *path, size_t *len, int timeout_ms);  // ... the server may wait on (?wait_ms=)
+void *srv_get_bytes_status(const char *path, size_t *len, int *status);  // ... and the status (202: coming)
+void srv_quiet_thread(void);  // this thread's answers aren't logged (a host thread asking often)
 Json *srv_post_bytes(const char *path, const void *data, size_t len, int *status);  // raw body up (a course)
 Json *srv_send_bytes(const char *method, const char *path, const void *data, size_t len, int *status);  // ... PUT
 

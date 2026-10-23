@@ -2125,3 +2125,41 @@ sound players' volumes) aren't known; the costume banks' `.bameta` volume field 
 **What would change it:** SMM1's real output levels from its engine (a sound player or category volume per group),
 or the owner hearing a group as off: each factor is one constant, and `LARECOMP_SMM1_SE_GAIN` /
 `LARECOMP_SMM1_COSTUME_GAIN` try others without a build.
+
+## 2026-10-23 — Course World pictures: never waited for on the game's frame; a stock ahead of the player at TGRCode's pace
+
+**Decision (agent):** for the owner's v0.4.6 report ("New Courses scrolling is still laggy and slow"):
+1. The mod's requests to the server give the calling guest thread's emulated core up while they wait
+   (`games/smm2/mods/server.c`, `kernel_host_wait_begin`/`_end`, as the game's own socket waits do). The cause of the
+   lag: the network worker that asks for a card's picture shares a core with the thread that draws, and the picture
+   request waited up to 4 s, so the frame stopped for up to 4 s when a list opened and at each card that scrolled in
+   (measured: longest frames of 4042, 2800 and 4064 ms in New Courses' first 30 s).
+2. A card's picture request (relation_get) answers at once with what the server holds (and waits up to 1.5 s only
+   for a picture TGRCode is answering for at that moment). The game asks once per card and never again for one that
+   failed, and a card on screen keeps its placeholder even when its cache slot is made valid later, while a card that
+   comes into view again shows what its slot holds [obs]. So pictures that come later are signed into their slots (a
+   host thread looks once a second; a card's update puts them in on the game's thread): the card shows its picture
+   the next time it comes into view.
+3. The server paces TGRCode at one request every 6 s, start to start (measured: at 3.5 s a third were 429; at 5 s the
+   twelfth of each minute was 429, 60 s apart), and a 429 pauses 10 s (doubling in a row). Before: 1.5 s after the
+   previous answer, so most minutes had several 429s and pauses up to 32 s.
+4. TGRCode's requests go in this order: the pictures the game just asked for (latest first; dropped back after 10 s
+   without being asked again), the lists when due, the stock ahead of the player (the cards around the last one
+   whose picture was asked for: 3 before, 40 after, then the page and the next), the start's Endless searches (they
+   wait for the first round of pictures, or for the whole stock while a list is looked at, unless a run asks), then
+   the pictures of every course held.
+5. New: TGRCode's `search_new` gives only the last ten minutes or so of uploads (11-20 courses, the same for minutes;
+   measured; a cold start listed 7 courses in New), so the server keeps New on disk (`lists-new.json`, the newest
+   300) to grow it across sessions, and Popular's listed courses follow it with the ones held, by upload time (a cold
+   start now lists a full 100).
+6. The search's next-page flag (+0x737ac, the original's out-parameter to the NEX call) is set for a whole page of
+   100: the page arrows were always grey and every list ended at its first 100. Detailed Search now turns pages;
+   Hot, Popular and New keep their arrows grey with the flag set (something else limits them: not the application
+   config's values 4-36, tried at 10; open).
+**Why:** TGRCode allows about ten requests a minute and gives one picture a request (no bulk picture endpoint; the
+picture links in its course records are Nintendo's CDN, never contacted), while the game shows three cards and asks
+for each as it scrolls in. No pacing keeps up with scrolling, so the game must never wait for it, and each request
+should be the picture the player is most likely to see next. A card that refreshes in place needs the card's picture
+path (the card update main+0x1a2cec0, the image-job worker main+0x17b78f0), not traced yet.
+**Would change:** the card's own picture refresh found (a late picture would show at once); TGRCode offering several
+pictures a request or a higher limit; our own server holding the pictures (then all of this is local).

@@ -70,6 +70,9 @@ leaderboards) and SMM2-rule high scores.
 The game's Course World requests are each one function (a "wrapper") that the network worker calls through a
 pointer; the mod replaces those it needs with `hle_override` and runs the game's own otherwise. Every other Course
 World screen runs the game's own code, which finds no connection and shows "A communication error occurred."
+The mod's requests to the server give the calling thread's core up while they wait (`server.c`, as the game's own
+network waits do): the game's worker threads share cores with the thread that draws, and a picture the server waited
+4 s for stopped the frame for 4 s (Course World's lists froze at each card, owner's v0.4.6 report).
 
 | Request (v3.0.3) | Answered from |
 |---|---|
@@ -100,7 +103,7 @@ calls (read from the client vtable slot it uses):
 
 | Request (method id) | Function (main+) | Answered from |
 |---|---|---|
-| course lists: PickUp (84, "Hot"), PointRanking (71, "Popular", by difficulty), Latest (73, "New"), Advanced (72, detailed search: difficulty, style, sort), PostedBy (74, a maker's courses), BestTime / FirstClear (81 / 80) | 0x14d8550 (search type +0x746e8) | `GET /api/courses?sort=popular\|new&style=&offset=&limit=100`, filtered into the game's difficulty bands; a maker's courses from `GET /api/makers/<id>`; a player's Played Courses / Liked Courses (PlayedBy 76, PositiveRatedBy 75) from `GET /api/makers/<id>/played` / `liked`; followed makers and versus: empty |
+| course lists: PickUp (84, "Hot"), PointRanking (71, "Popular", by difficulty), Latest (73, "New"), Advanced (72, detailed search: difficulty, style, sort), PostedBy (74, a maker's courses), BestTime / FirstClear (81 / 80) | 0x14d8550 (search type +0x746e8) | `GET /api/courses?sort=popular\|new&style=&offset=&limit=100`, filtered into the game's difficulty bands (a whole page of 100 sets the search's next-page flag +0x737ac: Detailed Search's page arrows at the top right go by it, before 2026-10-23 they were always grey; Hot, Popular and New keep theirs grey, open); a maker's courses from `GET /api/makers/<id>`; a player's Played Courses / Liked Courses (PlayedBy 76, PositiveRatedBy 75) from `GET /api/makers/<id>/played` / `liked`; followed makers and versus: empty |
 | GetUserOrCourse (131): the ID search | 0x14dc0d0 | `GET /api/courses/<code>`, else `GET /api/makers/<code>` |
 | GetUsers (48): the makers of listed courses, a maker's page | 0x14d02d0, 0x14d7780, 0x14d2f00 | `GET /api/makers/<id>`: name, maker code, likes received and maker points from their courses, the courses uploaded and the server's `upload_limit` (record +0x190 / +0x194: a maker page's "Courses uploaded" header); comments on (+0x98); the default Mii |
 | SearchUsers* (50, 51, 57, 58): leaderboards | 0x14d1820 (kind +0x73a14) | `GET /api/rankings/maker_points` (makers, also the period's board), `endless_<d>` (Endless), `clears` |
@@ -177,10 +180,24 @@ were fine. Drawings posted before the fix (test data only) show the game's broke
 **Thumbnails** (a course's picture on its card and course page, its whole-course map under More info): the server
 keeps them as JPEGs (`thumbnails/<code>.jpg`, `<code>-entire.jpg` in its folder). For a course from TGRCode's archive
 the server fetches both from TGRCode (`level_thumbnail` is the game's thumbnail block, `level_entire_thumbnail` a
-plain JPEG), one request at a time with the course imports: first those a player is waiting for, then, while it has
-nothing else to do, those of every course it holds. TGRCode takes a second or more a picture and rate-limits, so the
-mod asks with `wait_ms` (a few seconds in all for a list's five, 6 s for a map): what hasn't come by then shows the
-game's placeholder this time and is there next time. The mod signs each JPEG into the block the game checks (the
+plain JPEG), one request at a time with the course imports, one request starting every 6 s at most (TGRCode answers
+429 to more than about ten or eleven a minute; a picture takes about 1 s). The order: the pictures the game just
+asked for (the cards it shows, the latest first; one not asked for again within 10 s drops back), then the stock ahead
+of the player (`lists.rs`: the cards around the last one whose picture was asked for, 3 before and 40 after, then the
+rest of the page and the next; before any page, the first cards of Hot, New and Popular), then, while it has nothing
+else to do, those of every course it holds. The start's Endless searches wait for the first of those pictures (all of
+them while a list is being looked at) unless a run asks for courses.
+How the game asks [obs, 2026-10-23]: the list's request builder (main+0x14b5990) asks for up to five cache slots
+that are wanted and neither valid nor failed, as each card comes into view, once each; the answer's completion
+(main+0x1520800) puts every block through main+0x14b55b0 (a direct call: no override reaches it), which marks a slot
+without a picture failed for good. A card on screen keeps the placeholder even when its slot is made valid later;
+a card that comes into view again (scrolled out and back, a page turn) shows what its slot holds. So `relation_get`
+answers at once with what the server holds (`soon_ms=1500`: and one TGRCode is answering for that moment), the
+others show the placeholder, a host thread looks once a second (`?peek=1`, nothing asked) for up to 2 minutes, and
+a card's update (main+0x1a2cec0, the game's thread) signs the ones that came into their slots through the same
+function (valid): the card shows its picture the next time it comes into view. The server answers 202 for a picture
+it is fetching and 404 for one that won't come. A map waits up to 6 s. The mod signs each JPEG into the block the
+game checks (the
 JPEG, then in the last 0x64 bytes its size, HMAC-SHA256 under a key from four seed words, the seeds; main+0x1698a80)
 with the game's own functions; the map's 0x19000-byte block takes the same tail [obs: the map shows]. Our own
 uploads: the picture the Course Maker made goes up after the course (`world.c` post_pictures: the thumbnail block

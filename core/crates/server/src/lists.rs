@@ -5,6 +5,17 @@
 //! The fetcher fills the lists and refreshes them; every page asked for tells it, so a stale list
 //! is refreshed in the background and one read near its end is extended ahead of the player.
 //!
+//! Pictures: TGRCode gives one a request, one request in 6 s at most, while the game shows three cards
+//! at a time and asks for each card's picture as it scrolls into view. So the pictures are a stock
+//! fetched ahead of the player: before any page, the first ones of each list; while a client browses,
+//! the cards around the last one whose picture it asked for (where the player is) and well past it,
+//! then the rest of the page and the next ([`Store::list_thumbnails_ahead`]).
+//!
+//! New: TGRCode's latest courses cover only the last ten minutes or so of uploads (about ten to twenty
+//! courses, the same for a few minutes). The server keeps the ones it saw (`lists-new.json`, the
+//! newest `new_max`), so the list grows across sessions, and Popular's listed courses and the ones held
+//! follow them by upload time.
+//!
 //! A listed course the server doesn't hold is answered from the list (`GET /api/courses/<code>`),
 //! its thumbnails are fetched like a held upstream course's, and its data is fetched and imported
 //! when a client asks for it ([`Store::data_wait`]).
@@ -58,9 +69,21 @@ impl View {
     }
 }
 
-/// Pictures fetched before any page is asked for: the first courses of Hot and New (the game shows
-/// five at a time), then of Popular (its tab shows one difficulty of the four mixed).
-const PREWARM: [(View, usize); 3] = [(View::Hot, 8), (View::New, 8), (View::Popular, 32)];
+/// Pictures fetched before any page is asked for, round by round: the first cards of Hot and New
+/// (the game shows three, and asks for five at the start), then of Popular (its tab shows one
+/// difficulty of the four mixed); then more of each.
+const PREWARM: [&[(View, usize)]; 2] = [
+    &[(View::Hot, 6), (View::New, 6), (View::Popular, 12)],
+    &[(View::Hot, 20), (View::New, 30), (View::Popular, 40)],
+];
+
+/// While a client browses a list: the pictures of the cards from this many before the last one it
+/// asked for to this many after it come first (the stock ahead of the player).
+const STOCK_BEHIND: usize = 3;
+const STOCK_AHEAD: usize = 40;
+
+/// Where the server keeps the New list it saw.
+pub(crate) const NEW_FILE: &str = "lists-new.json";
 
 /// A page asked for this long ago still has its pictures fetched ahead of the background work.
 const BROWSING: Duration = Duration::from_secs(120);
@@ -96,6 +119,9 @@ pub fn in_class(v: u8, class: u8) -> u8 {
     v.clamp(lo, hi)
 }
 
+/// A list as it is served: each course with its place on the upstream list (None: not on it).
+type Served = Vec<(Option<usize>, Listed)>;
+
 /// What the fetcher sees of a list.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Status {
@@ -120,7 +146,10 @@ struct Page {
     style: Option<String>,
     offset: usize,
     limit: usize,
+    /// When the page, or a picture on it, was last asked for.
     asked: Instant,
+    /// The place (in the served order) of the last card whose picture a client asked for.
+    cursor: Option<usize>,
 }
 
 #[derive(Default)]
@@ -167,6 +196,53 @@ impl Lists {
             v.sort_by_key(|(_, c)| std::cmp::Reverse(c.meta.uploaded));
         }
         v
+    }
+
+    /// All of `view` as it is served, before paging: the list's courses (with their places on it), then
+    /// the courses `held` (sorted for the view) it doesn't list; New: Popular's listed courses too, and
+    /// everything by upload time, newest first.
+    fn served(&self, view: View, style: Option<&str>, held: &[Meta]) -> Served {
+        let mut all: Served = self
+            .ordered(view, style)
+            .into_iter()
+            .map(|(i, c)| (Some(i), c.clone()))
+            .collect();
+        if view == View::New {
+            all.extend(
+                self.of_style(Kind::Popular, style)
+                    .map(|(_, c)| (None, c.clone())),
+            );
+        }
+        all.extend(held.iter().map(|m| {
+            (
+                None,
+                Listed {
+                    meta: m.clone(),
+                    class: None,
+                },
+            )
+        }));
+        let mut seen = HashSet::new();
+        all.retain(|(_, c)| seen.insert(c.meta.code.clone()));
+        if view == View::New {
+            all.sort_by_key(|(_, c)| std::cmp::Reverse(c.meta.uploaded));
+        }
+        all
+    }
+
+    /// New as the server last saw it (what [`NEW_FILE`] holds), until the source fills it.
+    pub(crate) fn load_new(&mut self, v: &Value) {
+        let courses = v["courses"].as_array().map(|a| {
+            a.iter()
+                .filter_map(|c| {
+                    Some(Listed {
+                        meta: Meta::from_json(c)?,
+                        class: c["class"].as_u64().filter(|&x| x <= 3).map(|x| x as u8),
+                    })
+                })
+                .collect()
+        });
+        self.lists[Kind::New.index()].courses = courses.unwrap_or_default();
     }
 }
 
@@ -238,6 +314,23 @@ impl Store {
             .sort_by_key(|c| std::cmp::Reverse(c.meta.uploaded));
         l.courses.truncate(max);
         l.status.fetched = Some(Instant::now());
+        if kind == Kind::New {
+            let v = serde_json::json!({
+                "courses": l.courses.iter().map(|c| {
+                    let mut j = c.meta.to_json();
+                    j["class"] = c.class.into();
+                    j
+                }).collect::<Vec<_>>()
+            });
+            drop(g);
+            let path = self.dir.join(NEW_FILE);
+            let tmp = path.with_extension("tmp");
+            if let Err(e) =
+                std::fs::write(&tmp, v.to_string()).and_then(|_| std::fs::rename(&tmp, &path))
+            {
+                eprintln!("[lists] {}: {e}", path.display());
+            }
+        }
     }
 
     /// A course on either list.
@@ -273,41 +366,15 @@ impl Store {
     ) -> Option<Vec<Value>> {
         let tell = self.lists_wanted.get()?;
         let kind = view.kind();
-        let sort = if kind == Kind::Popular {
-            "popular"
-        } else {
-            "new"
-        };
-        let held = self.sorted("", style, sort);
         let limit = limit.min(100);
+        let all = self.served(view, style);
         let page = {
+            let page: Served = all.iter().skip(offset).take(limit).cloned().collect();
             let mut g = self.lists.lock().unwrap();
-            let listed: Vec<(usize, Listed)> = g
-                .ordered(view, style)
-                .into_iter()
-                .map(|(i, c)| (i, c.clone()))
-                .collect();
-            let codes: HashSet<&str> = listed.iter().map(|(_, c)| c.meta.code.as_str()).collect();
-            let rest = held
-                .iter()
-                .filter(|m| !codes.contains(m.code.as_str()))
-                .map(|m| Listed {
-                    meta: m.clone(),
-                    class: None,
-                });
-            let mut all: Vec<(Option<usize>, Listed)> = listed
-                .iter()
-                .map(|(i, c)| (Some(*i), c.clone()))
-                .chain(rest.map(|c| (None, c)))
-                .collect();
-            if kind == Kind::New {
-                all.sort_by_key(|(_, c)| std::cmp::Reverse(c.meta.uploaded));
-            }
-            let page: Vec<(Option<usize>, Listed)> =
-                all.into_iter().skip(offset).take(limit).collect();
+            let listed = all.iter().filter(|(i, _)| i.is_some()).count();
             // how far into the whole list this page reached (past its end: all of it; Hot, not in
             // the list's order: as far as the page goes)
-            let reached = if listed.len() <= offset + limit {
+            let reached = if listed <= offset + limit {
                 g.lists[kind.index()].courses.len()
             } else if view == View::Hot {
                 offset + limit
@@ -320,12 +387,17 @@ impl Store {
             let st = &mut g.lists[kind.index()].status;
             st.asked = Some(Instant::now());
             st.depth = st.depth.max(reached);
+            // (the same page asked for again keeps where the player was on it)
+            let same =
+                |p: &Page| p.view == view && p.style.as_deref() == style && p.offset == offset;
+            let cursor = g.page.as_ref().filter(|p| same(p)).and_then(|p| p.cursor);
             g.page = Some(Page {
                 view,
                 style: style.map(str::to_string),
                 offset,
                 limit,
                 asked: Instant::now(),
+                cursor,
             });
             page
         };
@@ -333,35 +405,107 @@ impl Store {
         Some(page.iter().map(|(_, c)| c.to_json()).collect())
     }
 
-    /// Listed upstream courses whose pictures aren't held, in the order served from the last page
-    /// asked for to the end of the page after it; before any page is asked for, the first ones of
-    /// each list ([`PREWARM`]). At most `limit`.
+    /// [`Lists::served`] with the courses held.
+    fn served(&self, view: View, style: Option<&str>) -> Served {
+        let sort = if view.kind() == Kind::Popular {
+            "popular"
+        } else {
+            "new"
+        };
+        let held = self.sorted("", style, sort);
+        self.lists.lock().unwrap().served(view, style, &held)
+    }
+
+    /// A client asked for the picture of course `code`: if it is on the list looked at, that is where
+    /// the player is (the game asks for a card's picture as the card scrolls into view).
+    pub(crate) fn note_picture_asked(&self, code: &str) {
+        let page = self
+            .lists
+            .lock()
+            .unwrap()
+            .page
+            .as_ref()
+            .map(|p| (p.view, p.style.clone()));
+        let Some((view, style)) = page else { return };
+        let all = self.served(view, style.as_deref());
+        let Some(i) = all.iter().position(|(_, c)| c.meta.code == code) else {
+            return;
+        };
+        let mut g = self.lists.lock().unwrap();
+        if let Some(p) = g.page.as_mut()
+            && p.view == view
+            && p.style == style
+        {
+            p.cursor = Some(i);
+            p.asked = Instant::now();
+        }
+    }
+
+    /// Upstream courses on the lists whose pictures aren't held, the ones wanted soonest first; at
+    /// most `limit`. While a client browses a page: the cards around where the player is
+    /// ([`STOCK_BEHIND`], [`STOCK_AHEAD`]; before any picture on the page was asked for, from its
+    /// start), then the rest of the page and the next; a page left a while ago: the cards around the
+    /// player only. Before any page: the first ones of each list ([`PREWARM`]).
     pub fn list_thumbnails_ahead(&self, limit: usize) -> Vec<String> {
-        let codes: Vec<String> = {
-            let g = self.lists.lock().unwrap();
-            let upstream = |c: &&Listed| c.meta.upstream;
-            match &g.page {
-                Some(p) => g
-                    .ordered(p.view, p.style.as_deref())
+        self.pictures_ahead(limit, PREWARM.len())
+    }
+
+    /// [`Self::list_thumbnails_ahead`] that go before the start's searches for Endless courses: all
+    /// of them while a client browses a page, else the first round of [`PREWARM`] or the cards
+    /// around the player.
+    pub fn list_thumbnails_soon(&self, limit: usize) -> Vec<String> {
+        self.pictures_ahead(limit, 1)
+    }
+
+    fn pictures_ahead(&self, limit: usize, rounds: usize) -> Vec<String> {
+        let page = self.lists.lock().unwrap().page.as_ref().map(|p| {
+            (
+                p.view,
+                p.style.clone(),
+                p.offset,
+                p.limit,
+                p.cursor,
+                p.asked.elapsed() < BROWSING,
+            )
+        });
+        let codes: Vec<String> = match page {
+            Some((view, style, offset, n, cursor, browsing)) => {
+                let all = self.served(view, style.as_deref());
+                let from = cursor.map_or(offset, |c| c.saturating_sub(STOCK_BEHIND));
+                let to = cursor.map_or(offset, |c| c + 1) + STOCK_AHEAD;
+                let rest = if browsing {
+                    offset..offset + 2 * n
+                } else {
+                    0..0
+                };
+                let mut seen = HashSet::new();
+                (from..to)
+                    .chain(rest)
+                    .filter(|&i| seen.insert(i))
+                    .filter_map(|i| all.get(i))
+                    .filter(|(_, c)| c.meta.upstream)
+                    .map(|(_, c)| c.meta.code.clone())
+                    .collect()
+            }
+            None => {
+                let views: Vec<(View, Served)> = [View::Hot, View::New, View::Popular]
                     .into_iter()
-                    .map(|(_, c)| c)
-                    .skip(p.offset)
-                    .take(p.limit * 2)
-                    .filter(upstream)
-                    .map(|c| c.meta.code.clone())
-                    .collect(),
-                None => PREWARM
+                    .map(|v| (v, self.served(v, None)))
+                    .collect();
+                let mut seen = HashSet::new();
+                PREWARM[..rounds]
                     .iter()
+                    .flat_map(|round| round.iter())
                     .flat_map(|&(view, n)| {
-                        g.ordered(view, None)
-                            .into_iter()
-                            .map(|(_, c)| c)
+                        let all = &views.iter().find(|(v, _)| *v == view).unwrap().1;
+                        all.iter()
                             .take(n)
-                            .filter(upstream)
-                            .map(|c| c.meta.code.clone())
+                            .filter(|(_, c)| c.meta.upstream)
+                            .map(|(_, c)| c.meta.code.clone())
                             .collect::<Vec<_>>()
                     })
-                    .collect(),
+                    .filter(|c| seen.insert(c.clone()))
+                    .collect()
             }
         };
         codes

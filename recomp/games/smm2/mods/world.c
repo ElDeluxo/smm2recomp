@@ -21,6 +21,7 @@ uint64_t mod_player_pid(void);
 #define NO_COURSES 0x30780       // course list ring: entries (0x548 bytes), +8 capacity, +0xc head, +0x10 count
 #define COURSE_ENTRY 0x548
 #define NO_PAGE 0x737a8          // u32: the list page (the request asks for 100 from page * 100)
+#define NO_MORE 0x737ac          // u8: the answer: a next page follows
 #define NO_SEARCH_TYPE 0x746e8   // u32: which search
 #define NO_SEARCH_DIFF 0x746ec   // u32: preferred difficulty (Popular)
 #define NO_SEARCH_PID 0x746f0    // u64: the maker (posted by / liked by / played by ...)
@@ -133,6 +134,10 @@ void world_search(Cpu *c, uint64_t no, uint32_t type) {
         mod_fill_course(entries + (uint64_t)COURSE_ENTRY * count++, m, data_id, band(m));
     }
     s32(ring + 0x10, count);
+    // whether a next page follows (the search's own out-flag, which the original passes to the NEX call): the server
+    // answered a whole page. Detailed Search's page arrows go by it [obs: never set, they stayed grey]; Hot, Popular
+    // and New keep theirs grey with it set [obs] (something else limits them)
+    s8(no + NO_MORE, !none && !by_maker && !player_list && json_len(list) >= 100);
     netobj_unlock(c);
     LOG("[mod] course list (%s%s%s, page %u): %u courses\n", type < 14 ? SEARCH_NAMES[type] : "?", id[0] ? " " : "",
         id, page, count);
