@@ -397,3 +397,12 @@ bool plat_remove_tree(const char *dir) { return nftw(dir, rm_entry, 16, FTW_DEPT
 // End the process at once, skipping the library teardown: as on Windows, the GPU driver's threads crashed in exit()
 // while the game's threads still submitted work.
 void plat_terminate(void) { _exit(0); }
+
+uint64_t plat_memory_used(uint64_t *left) {
+    *left = 0;
+    FILE *f = fopen("/proc/self/statm", "r");
+    unsigned long long size = 0, resident = 0;
+    bool ok = f && fscanf(f, "%llu %llu", &size, &resident) == 2;
+    if (f) fclose(f);
+    return ok ? resident * (uint64_t)sysconf(_SC_PAGESIZE) : 0;
+}

@@ -34,6 +34,7 @@ void input_reset(void);
 void controls_bindings_draw(float scale);  // controls_ui.mm
 #include "../input_bind.h"
 #include "../paths.h"
+#include "../platform.h"
 #include "../nvn/framegen.h"
 #include "system_font.h"
 }
@@ -510,6 +511,9 @@ static void tab_display(void) {
         g_want_fullscreen_apply.store(true);
     }
     opt_toggle("Show FPS", &g_settings.show_fps, false, "Shows the frame rate in the top right corner.");
+    opt_toggle("Show memory use", &g_settings.show_memory, false,
+               "Shows how much memory the app uses in the top right corner, once a second (on iPad and iPhone also how "
+               "much iOS still allows before it closes the app).");
 
     opt_section("Rendering");
     // display order -> RES_* (the ini / enum order predates the menu order)
@@ -1021,7 +1025,7 @@ void menu_render(void *cmd, uint32_t target_w, uint32_t target_h) {
     uint64_t ov_seq = 0;
     const uint8_t *ov_img = game_overlay_image(&ov_w, &ov_h, &ov_full, &ov_seq);
     g_drew = false;
-    if (!open && !kbd && !g_settings.show_fps && !ov_img && !touchpad_visible() && !notice_active()) {
+    if (!open && !kbd && !g_settings.show_fps && !g_settings.show_memory && !ov_img && !touchpad_visible() && !notice_active()) {
         if (g_inited) { pthread_mutex_lock(&q_lock); q_events.clear(); pthread_mutex_unlock(&q_lock); }
         return;
     }
@@ -1068,7 +1072,7 @@ void menu_render(void *cmd, uint32_t target_w, uint32_t target_h) {
     ImGui::NewFrame();
     if (ov_img) game_overlay_draw(ov_img, ov_w, ov_h, ov_full, ov_seq, io.DisplaySize);
 
-    if (g_settings.show_fps) {
+    if (g_settings.show_fps || g_settings.show_memory) {
         ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 16 * scale, 16 * scale), 0, ImVec2(1, 0));
         ImGui::SetNextWindowBgAlpha(0.5f);
         ImGui::Begin("##fps", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
@@ -1080,8 +1084,17 @@ void menu_render(void *cmd, uint32_t target_w, uint32_t target_h) {
             out_ratio = dr ? 1.0 + (double)dg / dr : 1.0;
             real0 = g_fg_real, gen0 = g_fg_generated, t0 = now;
         }
-        if (out_ratio > 1.05) ImGui::Text("%.0f fps (%.0f with frame generation)", io.Framerate, io.Framerate * out_ratio);
-        else ImGui::Text("%.0f fps", io.Framerate);
+        if (g_settings.show_fps) {
+            if (out_ratio > 1.05) ImGui::Text("%.0f fps (%.0f with frame generation)", io.Framerate, io.Framerate * out_ratio);
+            else ImGui::Text("%.0f fps", io.Framerate);
+        }
+        if (g_settings.show_memory) {  // (sampled once a second: the call isn't free on every frame)
+            static double mem_t;
+            static uint64_t used, left;
+            if (now - mem_t >= 1.0 || mem_t == 0) used = plat_memory_used(&left), mem_t = now;
+            if (left) ImGui::Text("%llu MB (%llu MB left)", (unsigned long long)(used >> 20), (unsigned long long)(left >> 20));
+            else ImGui::Text("%llu MB", (unsigned long long)(used >> 20));
+        }
         ImGui::End();
     }
 

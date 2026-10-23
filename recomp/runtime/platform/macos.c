@@ -18,6 +18,9 @@
 #include <sys/stat.h>
 #include <sys/ucontext.h>
 #include <unistd.h>
+#if TARGET_OS_IPHONE
+#include <os/proc.h>
+#endif
 
 #include "../platform.h"
 
@@ -292,3 +295,13 @@ static int rm_entry(const char *path, const struct stat *sb, int flag, struct FT
     return remove(path);
 }
 bool plat_remove_tree(const char *dir) { return nftw(dir, rm_entry, 16, FTW_DEPTH | FTW_PHYS) == 0; }
+
+uint64_t plat_memory_used(uint64_t *left) {
+    *left = 0;
+#if TARGET_OS_IPHONE
+    *left = os_proc_available_memory();
+#endif
+    task_vm_info_data_t vm;
+    mach_msg_type_number_t n = TASK_VM_INFO_COUNT;
+    return task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&vm, &n) == KERN_SUCCESS ? vm.phys_footprint : 0;
+}

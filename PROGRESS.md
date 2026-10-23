@@ -576,6 +576,16 @@ Setup failures first, since they block new players:
   (Normal, NSMBU) Peach and her line at 60 fps. Music is chosen by difficulty and style as in the spec (not
   listened to). Not compared in Cemu this round.
 
+### Owner's v0.4.6 requests (2026-10-23)
+- ✅ **Memory use on screen** (Video tab "Show memory use", off by default; `smm2.ini` show_memory): the app's memory in
+  the FPS counter's corner, once a second. `plat_memory_used` (runtime/platform.h):
+  - macOS / iOS: the physical footprint (what iOS's memory limit judges), plus iOS's `os_proc_available_memory` as
+    "MB left";
+  - Linux / Android: resident (/proc/self/statm);
+  - Windows: the working set.
+  Checked on the Mac (4858 MB on the title, loading). The Windows and Linux files compile; iOS not run yet. For the
+  possible iPad memory kill during shader compile-ahead.
+
 ### Owner's v0.4.5 reports (2026-10-23)
 - ✅ **"Course ID not found" on the first try** (Course World > New > the first course; the second try worked): a
   listed TGRCode course the server doesn't hold yet is fetched when its data is asked for, in TGRCode's turn (about

@@ -33,6 +33,10 @@ int plat_protect(uint64_t addr, uint64_t size, int prot);  // 0 on success
 
 // ---- time
 uint64_t plat_now_ns(void);                // monotonic
+// The process's memory as the system counts it, in bytes (macOS / iOS: the physical footprint, what Activity Monitor
+// shows and iOS's memory limit judges; Linux / Android: resident; Windows: the working set); *left: what iOS still
+// allows before it ends the app (0 elsewhere). 0: not known.
+uint64_t plat_memory_used(uint64_t *left);
 void plat_sleep_until_ns(uint64_t t);      // precise wait for plat_now_ns() >= t
 void plat_thread_realtime(uint64_t period_ns);  // periodic timing thread (vsync): don't coalesce its timers
 

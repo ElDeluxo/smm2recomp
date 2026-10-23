@@ -8,6 +8,7 @@
 #include <shellapi.h>
 #include <timeapi.h>
 #include <io.h>
+#include <psapi.h>
 
 #include "../platform.h"
 #include "x86_cpu.h"
@@ -400,3 +401,9 @@ bool plat_remove_tree(const char *dir) {
 
 // End the process at once, skipping DLL teardown (from an atexit handler, after flushing). Exit status 0.
 void plat_terminate(void) { TerminateProcess(GetCurrentProcess(), 0); }
+
+uint64_t plat_memory_used(uint64_t *left) {
+    *left = 0;
+    PROCESS_MEMORY_COUNTERS pmc;
+    return K32GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof pmc) ? (uint64_t)pmc.WorkingSetSize : 0;
+}
