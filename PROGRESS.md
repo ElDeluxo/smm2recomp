@@ -1,16 +1,14 @@
 # Progress
 
-## Where this stands / next (paused 2026-10-23 after v0.4.7, owner's call; resume from here)
-- **Released:** v0.4.7 (2026-10-23), installed on the Mac and the iPad (iPad build 302; build numbers are the commit
-  count). It contains:
-  - Course World scrolling without stalls (pictures fetched ahead at TGRCode's pace);
-  - "Show memory use";
-  - SMM1's sound effects at SMM2's level.
-  No new release or iPad install without the owner.
+## Where this stands / next (paused 2026-10-23 after v0.4.8, owner's call; resume from here)
+- **Released:** v0.4.8 (2026-10-23), installed on the Mac and the iPad (iPad build 304; build numbers are the commit
+  count). It fixes the 3D World memory leak (feedback snapshot views kept alive; the owner's iPad was killed at
+  ~12 GB). The `[metal]` stats line now logs memory. No new release or iPad install without the owner.
+- **v0.4.7 had:** Course World scrolling without stalls, "Show memory use", SMM1's sound effects at SMM2's level.
 - **Private Windows build with the game** (owner's request; Mac only, never upload or commit):
-  - `~/Documents/Dev/SMM2-private/SMM2-windows-x64-v0.4.7-WITH-GAME.zip` (3.06 GB);
-  - made with `/Volumes/SSD/smm-work/winready/build47.sh` (a v0.4.7 worktree with links to the venv, data and zig)
-    and `assemble46.sh v0.4.7`;
+  - `~/Documents/Dev/SMM2-private/SMM2-windows-x64-v0.4.8-WITH-GAME.zip` (3.06 GB; mm2.zip there is the v0.4.7 one, renamed by the owner);
+  - made with `/Volumes/SSD/smm-work/winready/build48.sh` (a v0.4.8 worktree with links to the venv, data and zig)
+    and `assemble46.sh v0.4.8`;
   - the game DLL is built for x86-64-v2, so it runs on any 64-bit PC.
 - **Earlier:** v0.4.6 fixed "course ID not found" on the first try and the costume hit / facing.
 - **In v0.4.5:** everything listed in its release notes, including the owner's three v0.4.4 reports:
