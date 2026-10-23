@@ -267,7 +267,12 @@ static void drain_gone(void) {
     for (int i = 0; i < n; i++) {
         if (local[i].mtl) views_forget(local[i].mtl);
         if (local[i].nvn) {
-            if (g_snap_copies) [g_snap_copies removeObjectForKey:[NSValue valueWithPointer:local[i].nvn]];
+            // (a snapshot copy's own views go with it: cached, they kept it alive - every bloom texture the game made
+            // again in a 3D World course left its copy and views behind, about 60 MB a second until iOS ended the app)
+            NSValue *key = [NSValue valueWithPointer:local[i].nvn];
+            id<MTLTexture> copy = g_snap_copies ? g_snap_copies[key] : nil;
+            if (copy) views_forget((__bridge void *)copy);
+            if (g_snap_copies) [g_snap_copies removeObjectForKey:key];
             for (int k = 0; k < 8; k++) if (snap_tex[k] == local[i].nvn) { snap_tex[k] = NULL; snap_ok[k] = false; }
         }
     }
@@ -2054,6 +2059,7 @@ static void resolve_feedback(Prog *pr) {
                 // textures are: uncompressed like them, metal.m. The compressed default gave 3D World's character
                 // composite slightly-off depths on the iPad M5, so its depth test flipped pixel by pixel: speckle)
                 if (renderer_format_is_depth(t->format)) d.allowGPUOptimizedContents = NO;
+                if (dst) views_forget((__bridge void *)dst);  // (the old copy's views would keep it alive)
                 dst = [dev newTextureWithDescriptor:d];
                 copies[key] = dst;
             }

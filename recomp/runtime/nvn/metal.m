@@ -1,4 +1,5 @@
 #include <sys/mman.h>
+#include "../platform.h"
 #include "../game.h"
 #include "paths.h"
 #include "settings.h"
@@ -1570,8 +1571,13 @@ void backend_present(NvnTexture *t) {
             snprintf(fgs, sizeof fgs, " gen %llu/%llu shown %llu", (unsigned long long)(g_fg_generated - fg_gen0),
                      (unsigned long long)(g_fg_real - fg_real0), (unsigned long long)(shown - fg_shown0));
         fg_real0 = g_fg_real, fg_gen0 = g_fg_generated, fg_shown0 = shown;
-        if (last_fps_time > 0) LOG("[metal] t=%.1f frame %llu %.1f fps%s max %.0fms level %s (%s)\n", now, (unsigned long long)total_frames,
-                                   frames / (now - last_fps_time), fgs, max_gap * 1000.0, game_level_name(), renderer_stats());
+        uint64_t mem_left, mem = plat_memory_used(&mem_left);  // (the process's memory: a leak shows as a climb)
+        char mems[64];
+        if (mem_left) snprintf(mems, sizeof mems, " mem %llu MB (%llu left)", (unsigned long long)(mem >> 20), (unsigned long long)(mem_left >> 20));
+        else snprintf(mems, sizeof mems, " mem %llu MB", (unsigned long long)(mem >> 20));
+        if (last_fps_time > 0) LOG("[metal] t=%.1f frame %llu %.1f fps%s max %.0fms%s level %s (%s)\n", now,
+                                   (unsigned long long)total_frames, frames / (now - last_fps_time), fgs, max_gap * 1000.0,
+                                   mems, game_level_name(), renderer_stats());
         {   // (diagnostics) frame rate low for two periods in a row: what's allocated (at most once a minute)
             static int slow;
             static double last_dump = -100;

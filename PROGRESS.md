@@ -602,6 +602,21 @@ Setup failures first, since they block new players:
   (Normal, NSMBU) Peach and her line at 60 fps. Music is chosen by difficulty and style as in the spec (not
   listened to). Not compared in Cemu this round.
 
+### Owner's v0.4.7 report (2026-10-23, iPad)
+- ✅ **Memory climbing to ~12 GB until the app was killed** (100 Mario Expert, a 3D World castle; "maybe from the
+  Cat Suit"):
+  - **Trigger:** any 3D World course, the castle and the bell aren't needed. The 3D World title course
+    (`SMM2_SEED=4`) climbed from 5 to 15 GB in 4 minutes on the Mac.
+  - **Cause:** the bloom's render-target feedback snapshots (renderer.m resolve_feedback, since v0.4.5's lava fix).
+    When the game made a bloom texture again, its snapshot copy was dropped (drain_gone) or replaced, but the cached
+    texture views over the copy weren't. A cached view retains its base, so every copy stayed alive: views went
+    122 -> 11,000 at about 75 a second, ~60 MB a second.
+  - **Fix:** a snapshot copy's views are forgotten with it (views_forget). Same test after: views flat at ~367,
+    memory flat at ~6.2 GB.
+  - **Vulkan:** at most 16 fixed snapshot images, views forgotten when one is remade; no leak.
+  - **Also:** the `[metal]` stats line now carries the process's memory ("mem N MB", on iOS also "N left"), so a
+    climb shows in any log.
+
 ### Owner's v0.4.6 requests (2026-10-23)
 - ✅ **Memory use on screen** (Video tab "Show memory use", off by default; `smm2.ini` show_memory): the app's memory in
   the FPS counter's corner, once a second. `plat_memory_used` (runtime/platform.h):
