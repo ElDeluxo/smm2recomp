@@ -630,6 +630,8 @@ Setup failures first, since they block new players:
   - **Pages:** the search's next-page flag was never set, so every list ended at its first 100 and the page arrows
     were grey. Detailed Search now turns pages (pages 1-4 checked: list answered at once, no frame over 100 ms;
     pictures cold: 1 of 5 on page 1, then 0 of 5 with a page every 10 s, TGRCode's pace).
+  - Watch: on a completely cold server (first run ever) the first 100 Mario course took 30+ s to start (TGRCode at
+    one request per 6 s); with the server's data kept it starts at once (checked).
   - Open: Hot, Popular and New keep their page arrows grey with the flag set (not the application config's values
     4-36). A card on screen doesn't refresh when its picture comes: that needs the card's picture path (the card
     update main+0x1a2cec0, the image-job worker main+0x17b78f0). Not tried on the iPad.
