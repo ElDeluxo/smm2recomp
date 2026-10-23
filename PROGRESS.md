@@ -1,18 +1,13 @@
 # Progress
 
-## Where this stands / next (paused 2026-10-23, owner: saving credits; resume from here)
-- **Released:** v0.4.4 (2026-10-22), installed on the Mac and the iPad (iPad build 267 = v0.4.4; build numbers are
-  the commit count). Owner is happy with it; no new release or iPad install without the owner.
-- **On main since v0.4.4 (all gated, CI green, package dry runs green; not released):**
-  - Costumes: jump sound under a costume, sub-area pipes, the "?" look, the sound loader holds every costume.
-  - Edit any course leftovers; Super Worlds (maker's name, Continue, upload / delete, own thumbnails, upload count).
-  - A Worldbot crash fixed in the loader: the SDK's new / delete bound to main's, as the console's rtld does.
-  - Course World likes / boos / comments (incl. drawn comments, clear-to-view).
-  - Keyboard fixes (present race, 75 characters, UTF-8 limits).
-  - Shader compile-ahead; Vulkan SM35 memory fixes (checked on lavapipe in Docker, `tools/linux_vk_docker.sh`) and a
-    size-bounded SPIR-V cache.
-  - x86 CPU-level rebuild; Android 11+ internal data folder (emulator checked).
-  - In-course frames vs Ryujinx 72 / 90 bit-identical (3D World lava / poison bloom mip, NSMBU underwater clear).
+## Where this stands / next (paused 2026-10-23 after v0.4.5, owner's call; resume from here)
+- **Released:** v0.4.5 (2026-10-23), installed on the Mac and the iPad (iPad build 294; build numbers are the commit
+  count). The iPad's `smm1` folder got `Pack/Static.pack` and `Sound/CharaMario` (it had an old subset), and its
+  costumes are now generated. No new release or iPad install without the owner.
+- **In v0.4.5:** everything listed in its release notes, including the owner's three v0.4.4 reports:
+  - taps through the menu;
+  - Course World falling back from a failed Nextendo login;
+  - "Try it now" reasons and costumes with none owned.
 - **Next, in order:**
   1. Full 90-course rerun on main (only 22 rerun after the latest changes).
      3W_water: a new 41-px spot under Mario's shoe (up to 77 levels) since the liquid fixes. Next step: one run with
@@ -27,6 +22,7 @@
      - The 3D World speckle on the iPad: needs the iPad.
      - "Background water too shiny": likely the bloom-mip fix; owner to look again.
      - Hardware checks of co-op, Nextendo and the iPhone layout.
+     - A live Nextendo check of v0.4.5's Course World fallback (sign in, restart, Course World).
 - Disk: / ~10 GB free, /Volumes/SSD ~20 GB (an Android 35 system image, 3.8 GB, is kept in android-sdk).
 
 ## Roadmap
