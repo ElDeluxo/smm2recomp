@@ -762,6 +762,10 @@ static uint8_t *take_prefetched(uint32_t id, size_t *len) {
     return d;
 }
 
+// A course's data: a listed TGRCode course the server doesn't hold yet is fetched first, in TGRCode's turn (about one
+// request in 5-7 s, behind any other client's): waited for up to 20 s (the server's most), so the first try works
+// (owner, 2026-10-23: "course ID not found" on the first try, the second worked)
+#define DATA_WAIT_MS 20000
 static void *prefetch_data_thread(void *arg) {
     int d = (int)(intptr_t)arg;
     char path[96];
@@ -770,9 +774,9 @@ static void *prefetch_data_thread(void *arg) {
     Json *m = json_at(json_get(j, "courses"), 1);
     uint32_t id;
     if (m && code_to_data_id(json_str(json_get(m, "code"), ""), &id)) {
-        snprintf(path, sizeof path, "/api/courses/%s/data", json_str(json_get(m, "code"), ""));
+        snprintf(path, sizeof path, "/api/courses/%s/data?wait_ms=%d", json_str(json_get(m, "code"), ""), DATA_WAIT_MS);
         size_t len = 0;
-        uint8_t *data = srv_get_bytes(path, &len);
+        uint8_t *data = srv_get_bytes_slow(path, &len, DATA_WAIT_MS + 6000);
         pthread_mutex_lock(&pf_lock);
         free(pf_data);
         pf_data = data, pf_len = len, pf_id = data ? id : 0;
@@ -814,11 +818,11 @@ WRAPPER(get_course_file, 0x14de010) {
     uint64_t id = g64(no + NO_DL_ID), dest = g64(no + NO_DL_BUFFER);
     char code[12], path[96];
     code_of(id, code);
-    snprintf(path, sizeof path, "/api/courses/%s/data", code);
+    snprintf(path, sizeof path, "/api/courses/%s/data?wait_ms=%d", code, DATA_WAIT_MS);
     size_t len = 0;
     uint8_t *data = take_prefetched((uint32_t)id, &len);
     if (data) MLOG("course %s: prefetched\n", code);
-    else data = srv_get_bytes(path, &len);
+    else data = srv_get_bytes_slow(path, &len, DATA_WAIT_MS + 6000);
     if (!data || len != COURSE_SIZE || !dest) {
         LOG("[mod] course %s: %s\n", code, data ? "not a course (size)" : "download failed");
         free(data);

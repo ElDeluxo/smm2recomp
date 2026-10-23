@@ -82,6 +82,15 @@ void *srv_get_bytes(const char *path, size_t *len) {
     return r.body;  // (the caller frees it)
 }
 
+// ... one the server may wait on (a listed TGRCode course it fetches first: TGRCode allows about one request in 5-7 s,
+// so its turn can come after the default timeout and the game said "course ID not found" on the first try)
+void *srv_get_bytes_slow(const char *path, size_t *len, int timeout_ms) {
+    slow_ms = timeout_ms;
+    void *d = srv_get_bytes(path, len);
+    slow_ms = 0;
+    return d;
+}
+
 // ---- game state
 
 #define NETOBJ_HOLDER MAIN_ADDR(0x2a37380) // + 0x3e0: the network-session object

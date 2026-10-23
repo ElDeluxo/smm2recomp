@@ -568,6 +568,14 @@ Setup failures first, since they block new players:
   (Normal, NSMBU) Peach and her line at 60 fps. Music is chosen by difficulty and style as in the spec (not
   listened to). Not compared in Cemu this round.
 
+### Owner's v0.4.5 reports (2026-10-23)
+- ✅ **"Course ID not found" on the first try** (Course World > New > the first course; the second try worked): a
+  listed TGRCode course the server doesn't hold yet is fetched when its data is asked for, in TGRCode's turn (about
+  one request in 5-7 s, behind other requests). The server waited 7 s by default and the mod's request timed out at
+  8 s, so the first download could miss it. The mod now asks the server to wait up to 20 s (`?wait_ms=20000`, a 26 s
+  request; endless.c DATA_WAIT_MS) for a download and the next run course's prefetch. Checked: a New course just
+  uploaded, opened and played straight away, downloaded on the first try.
+
 ### Owner's v0.4.4 reports (2026-10-23, iPad)
 - ✅ **Taps went through the overlay menu to the game**: with the menu open, a tap on an option also reached the game
   behind it. The menu took the mouse SDL makes from a touch, but the finger itself went on to the on-screen
