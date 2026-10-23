@@ -916,7 +916,13 @@ A Mods-tab switch, "Mystery Mushroom costumes", off by default (`costumes=0/1` i
   (request kinds 1 and 4; 2 is `jump_high`, not SMB1's), and the costume's jump plays there; one player state's enter
   (main+0x15cfe70) plays "jump" itself, and hook point main+0x15cfe90 hands it a sound user without an instance (the
   play call returns an empty handle). Nothing changes without a costume worn. A dump without `Sound/CharaMario` (the
-  subset some data folders link) has no costume sounds; the log says `<event> sound (<res>): none`.
+  subset some data folders link) has no costume sounds; the log says `<event> sound (<res>): none`. Level: SMM1's
+  sound effects play at their `.bameta` volume times a factor per group (`smm1/smm1_audio.c`): the costumes' 0.3, at
+  SMM2's course sounds' level as they are; the 100 Mario screens' 0.1, at SMM2's menu sounds' level; and none louder
+  than SMM2's loudest course sounds (-25 dB, loudest 50 ms RMS), which takes the loud quarter of the costumes' sounds
+  down (by up to 9 dB). `LARECOMP_SMM1_COSTUME_GAIN` / `LARECOMP_SMM1_SE_GAIN` / `LARECOMP_SMM1_GAIN` (music) set
+  the factors, for measuring with `LARECOMP_AUDIO_WAV` (with `LARECOMP_NO_AUDIO=1` the WAV is written and nothing
+  plays).
 - **Sub-areas:** the player object and its model stay through a pipe to the sub-area and back, so the costume stays
   on (checked: main → sub → main → sub on the test course's `--variant subarea`).
 - **Reward:** after a won 100 Mario run, SMM1's costume window (`Cmn_CMListWindow_01`, `smm1/ending.c`) shows one

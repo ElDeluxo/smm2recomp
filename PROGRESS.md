@@ -401,6 +401,26 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     SMM1 sound plays at its own `.bameta` volume (0.787; the select's tracks 0.55-0.91 on top). The level is set
     against SMM2's mix: `SMM1_MIX` 0.3 in `mods/smm1/smm1_audio.c`. Measured with `LARECOMP_AUDIO_WAV` on macOS:
     the select's music went from -27 dB RMS to -37.7 dB, against -38.0 dB for SMM2's Endless menu and Course World.
+  - ✅ SMM1's sound effects were still louder than SMM2's (owner, 2026-10-23: the map's dots, walk and Go, the card,
+    the select, the costumes). Fixed 2026-10-23, not yet heard by the owner. Cause: the effects got the music's factor
+    (0.3), but SMM1's screen sounds are mastered hot (the map's loud ones peak at -2 dBFS) and stand in for SMM2's
+    menu sounds, which SMM2 plays well under its course sounds. Now each group has its own factor
+    (`mods/smm1/smm1_audio.c`): the screens' `SMM1_SE_MIX` 0.1, the costumes' `SMM1_COSTUME_MIX` 0.3 (unchanged),
+    and `SMM1_SE_CAP`: no effect louder than SMM2's loudest course sounds (-25 dB). Measured with `LARECOMP_AUDIO_WAV`
+    and `LARECOMP_NO_AUDIO=1` (WAV only, nothing played), the loudest 50 ms RMS per sound, SMM2's sounds placed by
+    `LARECOMP_AUDIO_LOG`:
+    - The map (100 Mario, easy): the Go's jump (`M1_SmallMarioJump`) -18.8 -> -28.4 dB, against -28.3 / -28.9 dB for
+      the same SMB1 jump wave in an SMM2 course. `M3_MoveMap` -19.3 -> -28.9, `M3_Wipe` -19.3 -> -28.8, the select's
+      `M3_StarsGather` -17.8 -> -27.3 (SMM2's loudest Course World menu sound -28.7, its menu median about -35.5).
+      The map's footsteps -33 -> -43. The map's music is unchanged: -38.0 / -37.6 dB RMS before / after.
+    - Costumes (the costume test course, title course): at the median they already sat at SMM2's course sounds'
+      level: jump -27.7 dB (SMM2's SMB1 jump -28.3 to -28.9), powerup -26.3 (SMM2's power-ups -26.1 to -27.1), goal
+      -25.7 (the goal fanfare -26.2), measured on Peach (jump -30.8, powerup -27.8) plus the survey of all 463
+      costume sounds. The loud quarter was the problem: shouts mastered near full scale, up to 9 dB over SMM2's
+      loudest course sounds. The cap takes them down: Duck Hunt's jump -19.9 -> -25.1 dB.
+    - Left: at a Mystery Mushroom pickup SMM2 still plays its own power-down sound (wave 0x47c3, -24 dB) together
+      with the costume's powerup, because the mod changes the form through small; together -23.8 dB. Muting it
+      needs the power-down sound's request found (as for the jump).
   - ✅ Leaving Challenge Modes still flashes the other mode's screen for a moment. For example, closing it from
     100 Mario shows Endless for about a second. The ZL / ZR switch itself is much better now. Cause: on B the
     select faded out in 32 frames, but the B press on SMM2's Endless menu underneath only comes after the

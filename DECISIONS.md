@@ -2109,3 +2109,19 @@ the freeze and its blink; a schedule of our own matches SMM1 frame for frame. SM
 holder's own mechanism, so the placement keeps everything else (offsets, shadow) as for small Mario.
 **What would change it:** a costume damage pose (SMM1 has none: no damage frame in the costume textures), or a slot
 other than 12 for the costume (then the placement turns it by itself).
+
+## 2026-10-23 — SMM1's sound effects: a level per group, set against the SMM2 sounds they stand in for, and a cap
+
+**Decision (agent):** SMM1's sounds keep their own `.bameta` volumes, and each group gets its own factor against
+SMM2's mix (`mods/smm1/smm1_audio.c`): music 0.3 (unchanged), the 100 Mario screens' effects 0.1, the costumes'
+effects 0.3; and no effect plays louder than -25 dB (its loudest 50 ms RMS), SMM2's loudest course sounds.
+**Why:** the owner's report (SMM1's effects louder than SMM2's). Measured with `LARECOMP_AUDIO_WAV`: SMM2 plays its
+menu sounds (about -29 to -37 dB in Course World) well under its course sounds (-25 to -29), and SMM1's screen
+sounds are mastered hot, so one factor can't fit both. The screens' factor is set on a sound both games have: the
+map's Go jump is SMB1's jump wave, and at 0.1 it plays as loud as SMM2's own (-28.4 against -28.3 / -28.9 dB). The
+costumes' sounds were already at SMM2's course level at the median; what was louder is a quarter of them (shouts
+near full scale, up to 9 dB over), and a cap fixes those without changing the rest. SMM1's own engine levels (its
+sound players' volumes) aren't known; the costume banks' `.bameta` volume field is 0, read as unset (1).
+**What would change it:** SMM1's real output levels from its engine (a sound player or category volume per group),
+or the owner hearing a group as off: each factor is one constant, and `LARECOMP_SMM1_SE_GAIN` /
+`LARECOMP_SMM1_COSTUME_GAIN` try others without a build.

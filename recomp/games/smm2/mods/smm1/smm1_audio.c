@@ -7,6 +7,7 @@
 // BFWAV (Cafe wave): INFO (encoding, loop, rate, loop start / end, channel table: sample reference into DATA and the
 // ADPCM coefficients per channel). Both written from public descriptions of the NW4F formats; the DSP-ADPCM decoder
 // follows SMCraft's mmk-formats audio/dsp.rs.
+#include <math.h>
 #include <stddef.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -185,22 +186,61 @@ typedef struct {
     float gain, fade;  // fade: gain change per output sample (< 0 fading out)
     bool loop, on;
     int ch0;  // the first channel played (a multi-track stream's track: channels 2t, 2t + 1)
-    float vol;  // the sound's own volume (its .bameta; a stream's also its track's) times SMM1_MIX
+    float vol;  // the sound's own volume (its .bameta; a stream's also its track's) times its mix factor below
 } Voice;
 
 // SMM1's sounds against SMM2's mix: SMM1 played them through its own engine at its own output level, which SMM2's
-// mix doesn't share. The .bameta volumes keep SMM1's balance between its sounds; this sets their level next to
-// SMM2's (LARECOMP_SMM1_GAIN overrides it, for measuring). Measured 2026-10-21 (LARECOMP_AUDIO_WAV, macOS): at 1 the
-// select's music was -27 dB RMS against -38 dB for SMM2's Endless menu and Course World music; 0.3 is -10.5 dB.
+// mix doesn't share. The .bameta volumes keep SMM1's balance between its sounds; these factors set their level next
+// to the SMM2 sounds they stand in for. Measured with LARECOMP_AUDIO_WAV (macOS; levels are the loudest 50 ms RMS):
+// - SMM1_MIX, the music (LARECOMP_SMM1_GAIN overrides it, for measuring). 2026-10-21: at 1 the select's music was
+//   -27 dB RMS against -38 dB for SMM2's Endless menu and Course World music; 0.3 is -10.5 dB.
+// - SMM1_SE_MIX, the screens' sound effects (select, map, card, pause, clear, ending; LARECOMP_SMM1_SE_GAIN). They
+//   stand in for SMM2's menu sounds, which SMM2 plays quieter than its course sounds. 2026-10-23: at 0.3 the map's
+//   loud ones (the Go's jump, M3_MoveMap, M3_Wipe, M3_StarsGather) were -18 to -19 dB, the same SMB1 jump wave in an
+//   SMM2 course -28.3 to -28.9 dB, SMM2's loudest Course World menu sound -28.7 dB; 0.1 is -9.5 dB.
+// - SMM1_COSTUME_MIX, the costumes' sounds (LARECOMP_SMM1_COSTUME_GAIN). They stand in for SMM2's course sounds, at
+//   whose level they already are: 2026-10-23, at 0.3 the median costume jump / powerup / goal is -27.7 / -26.3 / -25.7
+//   dB against SMM2's SMB1 jump -28.3 to -28.9, power-ups -26.1 to -27.1, goal fanfare -26.2.
+// - SMM1_SE_CAP: no effect plays louder than SMM2's loudest course sounds (-24.5 to -26 dB: power-up, power-down,
+//   Big Mushroom, goal fanfare). A quarter of the costumes' sounds are over it at their factor, the loudest by 9 dB
+//   (a few jumps, goals and misses are shouts mastered near full scale); each is played at the cap instead.
 #define SMM1_MIX 0.3f
+#define SMM1_SE_MIX 0.1f
+#define SMM1_COSTUME_MIX 0.3f
+#define SMM1_SE_CAP 0.0562f  // (-25 dBFS)
+static float env_gain(const char *name, float def) {
+    const char *e = getenv(name);
+    float g = e && *e ? (float)atof(e) : def;
+    return g < 0 ? 0 : g;
+}
 static float smm1_mix(void) {
     static float g = -1;
-    if (g < 0) {
-        const char *e = getenv("LARECOMP_SMM1_GAIN");
-        g = e && *e ? (float)atof(e) : SMM1_MIX;
-        if (g < 0) g = 0;
-    }
+    if (g < 0) g = env_gain("LARECOMP_SMM1_GAIN", SMM1_MIX);
     return g;
+}
+static float se_mix(bool costume) {
+    static float g[2] = {-1, -1};
+    if (g[costume] < 0)
+        g[costume] = costume ? env_gain("LARECOMP_SMM1_COSTUME_GAIN", SMM1_COSTUME_MIX) : env_gain("LARECOMP_SMM1_SE_GAIN", SMM1_SE_MIX);
+    return g[costume];
+}
+// a sound's loudest 50 ms RMS (0..1, all channels: a window sliding one frame at a time), the level SMM1_SE_CAP is in
+static float pcm_level(const SPcm *p) {
+    size_t ch = (size_t)p->channels, w = (size_t)(p->rate / 20 > 0 ? p->rate / 20 : 1), frames = (size_t)p->frames;
+    if (w > frames) w = frames;
+    double sum = 0, best = 0;
+    for (size_t f = 0; f < frames; f++) {
+        for (size_t c = 0; c < ch; c++) {
+            double a = p->pcm[f * ch + c];
+            sum += a * a;
+            if (f >= w) {
+                double b = p->pcm[(f - w) * ch + c];
+                sum -= b * b;
+            }
+        }
+        if (f + 1 >= w && sum > best) best = sum;
+    }
+    return w ? (float)(sqrt(best / (double)(w * ch)) / 32768) : 0;
 }
 
 // A .bameta (AMTA, big-endian): +0xC its DATA section's offset. DATA (after its 8-byte header): +0xC the volume
@@ -307,7 +347,7 @@ void smm1_game_sound(bool on) { g_game_target = on ? 1 : 0; }
 // costumes) besides the screens' own; a bank past that is not loaded (once said in the log), never loaded twice
 #define SFX_BANKS 256
 #define SFX_SOUNDS 4096
-static struct { char name[80]; SPcm *p; float vol; } g_sfx[SFX_SOUNDS];
+static struct { char name[80]; SPcm *p; float vol; } g_sfx[SFX_SOUNDS];  // vol: as played (factor and cap in)
 static int g_nsfx;
 static char g_banks[SFX_BANKS][64];
 static int g_nbanks;
@@ -335,11 +375,15 @@ void smm1_se_bank(const char *bank) {
         float track[8];
         snprintf(meta, sizeof meta, "%.*s.bameta", (int)(dot - nm), nm);
         const uint8_t *m = lyt_sarc_get(&s, meta, &mn);
-        g_sfx[g_nsfx].vol = 1;
-        if (m) amta_volumes(m, mn, &g_sfx[g_nsfx].vol, track);
+        float vol = 1, level = pcm_level(p);
+        if (m) amta_volumes(m, mn, &vol, track);
         // (a costume's bank: its waves are named "<bank>/<wave>", every costume has a "jump", a "goal"...)
-        if (!strncmp(bank, "CharaMario_", 11)) snprintf(g_sfx[g_nsfx].name, sizeof g_sfx[0].name, "%s/%.*s", bank, (int)(dot - nm), nm);
+        bool costume = !strncmp(bank, "CharaMario_", 11);
+        if (costume) snprintf(g_sfx[g_nsfx].name, sizeof g_sfx[0].name, "%s/%.*s", bank, (int)(dot - nm), nm);
         else snprintf(g_sfx[g_nsfx].name, sizeof g_sfx[0].name, "%.*s", (int)(dot - nm), nm);
+        vol *= se_mix(costume);
+        if (level * vol > SMM1_SE_CAP) vol = SMM1_SE_CAP / level;
+        g_sfx[g_nsfx].vol = vol;
         g_sfx[g_nsfx++].p = p;
     }
     lyt_sarc_close(&s);
@@ -355,7 +399,7 @@ bool smm1_se(const char *name) {
         if (!strcmp(g_sfx[i].name, name)) {
             pthread_mutex_lock(&g_mx);
             for (int k = 0; k < 8; k++)
-                if (!g_se[k].on) { g_se[k] = (Voice){g_sfx[i].p, 0, 1, 0, false, true, 0, g_sfx[i].vol * smm1_mix()}; break; }
+                if (!g_se[k].on) { g_se[k] = (Voice){g_sfx[i].p, 0, 1, 0, false, true, 0, g_sfx[i].vol}; break; }
             pthread_mutex_unlock(&g_mx);
             return true;
         }
