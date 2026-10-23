@@ -22,8 +22,10 @@
 //     replaces the costume. The item looks like SMM1's "?" mushroom (its model in the generated pack,
 //     smm1/costume_gen.c mystery_item).
 //   - Damage: a hit takes the costume off with the Super -> small power-down (the form is read as 1 for the game's
-//     damage function, hook point 0x15a50a4), as a costume absorbs a hit in SMM1; the power-down's flicker shows the
-//     costume in place of Super Mario.
+//     damage function, hook point 0x15a50a4), as a costume absorbs a hit in SMM1; its freeze and invulnerability blink
+//     are SMM2's, its look SMM1's: small, costume, small, costume, small, 6 updates each (LOSS_FRAMES), then small
+//     Mario blinking.
+//   - Facing: slot 12 is Balloon Mario's, which the holder's placement never turns; for a costume it does (holder_place).
 //   - Taunt: Up held 8 updates standing still, in costume: the costume's appeal pose for 120 updates (its appeal.0 frame
 //     written over the model's textures; moving, jumping or a hit ends it) and its appeal sound.
 //   - Sound: the costume's own power-up, jump, landing, taunt, goal and death sounds (SMM1's Sound/CharaMario banks,
@@ -348,7 +350,8 @@ typedef struct {
     char wear[48];          // the costume worn ("" none)
     int up, taunt;          // updates Up was held standing still; taunt pose updates left
     bool was_ground;
-    int losing;             // the costume-loss flicker: updates left showing the costume for slot 1
+    int losing;             // the costume loss (SMM1's): updates left of its model changes (LOSS_FRAMES down to 0)
+    int lost;               // updates left in which the game's big slot is small Mario (the power-down it plays)
     volatile bool asked;    // "Mystery Mushroom costume now" (the menu's thread): the costume in want
     char want[48];
 } Wearer;
@@ -466,13 +469,53 @@ void costume_model_building(uint64_t holder, uint32_t style) {
     g_building = 0, g_new = NULL;
 }
 
-// the visual slot setter: a player in costume shows slot 12 for small, and for Super while the costume comes off
+// The costume loss, as SMM1 draws it (Block.rpx v208: the damage takes form 7 to 0, a change of the same size class,
+// transform type 3 from the matrix at 0x100ca480; the transform's Active state, enter 0x0268151c, runs 30 updates, and
+// its update 0x02681530 shows the new form while (6 - timer / 6) is even and the old one while it is odd, both at
+// scale 1 for type 3): small, costume, small, costume, small, 6 updates each, then small Mario with the game's
+// invulnerability blink. In SMM2 the hit is the Super -> small power-down (the form read as 1), whose freeze and blink
+// are kept; what the holders show during it is this sequence, and the big slot it asks for is small Mario after it.
+#define LOSS_FRAMES 30
+#define LOSS_STEP 6
+#define LOST_FRAMES 180  // (longer than the power-down and its blink: only while the player is still form 0)
+static int32_t loss_slot(const Wearer *w) {
+    int k = LOSS_FRAMES - w->losing;
+    return (k / LOSS_STEP) & 1 ? COSTUME_SLOT : 0;
+}
+// the slot a costume wearer's holder shows for the one the game asks (slot); -1: the game's
+static int32_t wearer_slot(const Wearer *w, int32_t slot) {
+    if (w->losing > 0 && (slot == 0 || slot == 1)) return loss_slot(w);
+    if (slot == 0 && w->wear[0]) return COSTUME_SLOT;
+    if (slot == 1 && w->lost > 0 && !w->wear[0] && g32(w->player + P_FORM) == 0 && g32(w->player + P_PENDING) == 0)
+        return 0;  // (the power-down's big frames: the player is small now, as in SMM1)
+    return -1;
+}
+// the visual slot setter: a player in costume shows slot 12 for small, and the loss's sequence while it comes off
 int32_t costume_visual_slot(uint64_t holder, int32_t slot) {
     if (!costumes_on() || g32(holder + H_STYLE) != 0) return slot;
     Wearer *w = wearer_of_holder(holder);
-    if (w && ((slot == 0 && w->wear[0]) || (slot == 1 && w->losing))) return COSTUME_SLOT;
-    return slot;
+    int32_t s = w ? wearer_slot(w, slot) : -1;
+    if (g_debug > 0 && w && (w->losing > 0 || w->lost > 0))
+        LOG("[costume] player %d: the game asks slot %d, shown %d (loss %d)\n", (int)(w - g_p), slot, s < 0 ? slot : s,
+            LOSS_FRAMES - w->losing);
+    return s < 0 ? slot : s;
 }
+// The holder's placement each frame (0x7101561bb0, holder vtable +0xb8: holder, the matrix, the scale, the facing):
+// for slot 12 the facing is taken as 0 (Balloon Mario never turns: cmp w8, #0xc; csel w26, wzr, w3, eq), unless the
+// holder's facing override (+0x4b0, -1 none) is set. A costume turns as small Mario does, so for an SMB1 holder showing
+// slot 12 the override is the facing passed, for the call (and +0x4ac, the facing it keeps, is what slot 0's would be).
+#define HOLDER_PLACE MAIN_ADDR(0x1561bb0)
+#define H_FACING_SET 0x4b0  // the holder's facing override (-1 none)
+#define H_FACING 0x4ac      // the facing of the last placement (the override aside)
+static void holder_place(Cpu *c) {
+    uint64_t h = c->x[0];
+    uint32_t facing = (uint32_t)c->x[3];
+    bool turn = costumes_on() && g32(h + H_SLOT) == COSTUME_SLOT && g32(h + H_STYLE) == 0 && g32(h + H_FACING_SET) == ~0u;
+    if (turn) s32(h + H_FACING_SET, facing);
+    guest_call_orig(c, HOLDER_PLACE);
+    if (turn) s32(h + H_FACING_SET, ~0u), s32(h + H_FACING, facing);
+}
+
 // (each update: the slots the holders show, as the setter would, and the model showing the costume worn: a model built
 // again mid-course starts as its own costume)
 static void show(Wearer *w) {
@@ -481,9 +524,10 @@ static void show(Wearer *w) {
     if (g && (strcmp(g->look, w->wear) || g->appeal != (w->taunt > 0))) set_look(g, w->wear, w->taunt > 0);
     for (int k = 0; k < 2; k++) {
         if (!h[k] || g32(h[k] + H_STYLE) != 0) continue;
-        uint32_t shown = g32(h[k] + H_SLOT);
-        if (w->wear[0] && shown == 0) s32(h[k] + H_SLOT, COSTUME_SLOT);
-        if (!w->wear[0] && !w->losing && shown == COSTUME_SLOT) s32(h[k] + H_SLOT, 0);
+        int32_t shown = (int32_t)g32(h[k] + H_SLOT), s = wearer_slot(w, shown);
+        if (w->losing > 0 && shown == COSTUME_SLOT) s = loss_slot(w);  // (the sequence's own last change)
+        if (s < 0 && !w->wear[0] && !w->losing && shown == COSTUME_SLOT) s = 0;  // (the costume is off)
+        if (s >= 0 && s != shown) s32(h[k] + H_SLOT, (uint32_t)s);
     }
 }
 
@@ -550,7 +594,8 @@ void costume_player_frame(Cpu *c, uint64_t player) {
     last_form[i] = form, last_pending[i] = pending;
     if (w->wear[0] && form != 0 && pending != 0) wear(w, NULL, "another power-up");  // (Super -> costume: form 1
                                                                                        // until the change is done)
-    if (w->losing && --w->losing == 0 && g_debug > 0) LOG("[costume] player %d: the costume-loss flicker ends\n", i);
+    if (w->losing && --w->losing == 0 && g_debug > 0) LOG("[costume] player %d: the costume loss ends (small Mario)\n", i);
+    if (w->lost > 0) w->lost--;
     if (w->asked) w->asked = false, give_now(c, w, player);
     show(w);
     motion(w, player);
@@ -607,7 +652,8 @@ bool costume_after(Cpu *c, uint64_t addr) {
         c->x[8] = 1;                                                                            // Super -> small
         LOG("[costume] hit: player %d's %s comes off\n", i, w->wear);
         wear(w, NULL, "a hit");
-        w->losing = 90;  // (the power-down's big frames show the costume: SMM1's costume -> small)
+        w->losing = LOSS_FRAMES, w->lost = LOST_FRAMES;  // (SMM1's costume -> small, from this update: the holders are
+        show(w);                                         // set now, as the power-down never calls the slot setter)
     }
     return true;
 }
@@ -722,6 +768,7 @@ static void give_now(Cpu *c, Wearer *w, uint64_t player) {
 __attribute__((constructor)) static void costume_register(void) {
     hle_override(GOAL_FANFARE, goal_fanfare, "costume: goal fanfare");
     hle_override(DOWN_FANFARE, down_fanfare, "costume: death fanfare");
+    hle_override(HOLDER_PLACE, holder_place, "costume: the holder's placement (a costume turns)");
     static const GameModTrigger t = {
         "Mystery Mushroom costume now",
         "Player 1 takes a Mystery Mushroom with the costume chosen above (as small, Super or Fire Mario) in the Super "

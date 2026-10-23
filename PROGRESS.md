@@ -15,7 +15,8 @@
   2. The liquid fixes' Vulkan side runs untested (compiles); check with `tools/linux_vk_docker.sh`.
   3. Vulkan compute without host memory import (plan in the Vulkan entry below).
      The 3D World Mario eye NaN on lavapipe (needs a tester's real GPU).
-  4. Mystery Mushroom: its 2 x 2 size and palette icon.
+  4. Mystery Mushroom: its 2 x 2 size and palette icon. (Done 2026-10-23, for v0.4.6: the owner's two costume
+     reports, the loss's look now SMM1's and the costume facing left; seen on the Mac, not yet on the iPad.)
      The Worldbot's own title "SUPER Player WORLD" (needs a Mii in the database: overlaps PR #18).
   5. Waiting on the owner:
      - PR #18 (OpenCourse World): theirs to test; don't review or merge.
@@ -244,7 +245,11 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     owned minus the one worn), put on by writing its texels over the loaded model's textures (every costume model is
     the same template; the textures found through the runtime's new `game_texture_init` hook) - seen: Peach, then
     Pikachu / Yoshi at the second pickup; ✅ **a hit removes the costume**: a Koopa's hit (test course `--variant
-    hit`) takes it off through the Super → small power-down (the costume flickers, then small Mario blinking); ✅ **the
+    hit`) takes it off through the Super → small power-down; ✅ **the loss looks like SMM1's** (owner's v0.4.5 report,
+    2026-10-23): small, costume, small, costume, small, 6 updates each (SMM1's transform: 30 updates, Block.rpx
+    0x0268151c / 0x02681530), then small Mario blinking (before: the costume stood still through the freeze and blinked
+    for 60 more updates, small Mario only after 90); ✅ **the costume turns** (owner's v0.4.5 report): slot 12 is
+    Balloon Mario's, which the holder's placement (0x7101561bb0) never faces left; for a costume it now does; ✅ **the
     taunt**: Up held 8 updates standing still → the costume's appeal frame for 120 updates (Peach's parasol, Samus
     facing front) and its appeal sound; not after the goal; ✅ **the reward window**: its lower-right frame was cut off
     by the layout player's four-frame window texcoords (a flipped frame mirrored about its middle); now anchored at

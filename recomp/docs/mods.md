@@ -890,8 +890,20 @@ A Mods-tab switch, "Mystery Mushroom costumes", off by default (`costumes=0/1` i
   regenerates it when the item changes). The item is still the Big Mushroom's 2 x 2 for the game (its hit box), and
   the Course Maker's palette icon is still the Big Mushroom's.
 - **Hit:** the damage function's form load (hook point main+0x15a50a4) reads 1 for a player in costume, so a hit
-  takes the costume off with SMM2's Super -> small power-down and its invulnerability (SMM1: costume -> small); the
-  power-down's big frames show the costume (90 updates).
+  takes the costume off with SMM2's Super -> small power-down: its freeze (about 30 updates) and invulnerability blink
+  are SMM2's. What the player looks like is SMM1's costume -> small (Block.rpx v208: a change within one size class,
+  transform type 3; its Active state runs 30 updates, enter 0x0268151c, and shows the new form while (6 - timer / 6)
+  is even, the old one while odd, both at scale 1, update 0x02681530): small, costume, small, costume, small, 6 updates
+  each, from the hit's own update, then small Mario blinking. SMM2's power-down never calls the slot setter, so the
+  holders' slot is set each update (`show`, and at the hit); a request for the big slot in the 180 updates after,
+  while the player is still form 0 with nothing pending, shows small Mario. Seen with the hit test course: per-update
+  frames 6 / 6 / 6 / 6 / 6, then the blink as small Mario (before: the costume stood still through the freeze, then
+  blinked as the costume for 60 more updates).
+- **Facing:** the holder's placement each frame (0x7101561bb0, holder vtable +0xb8: holder, matrix, scale, facing)
+  takes the facing as 0 for slot 12 (Balloon Mario never turns: `cmp w8, #0xc; csel w26, wzr, w3, eq`) unless the
+  holder's facing override (+0x4b0, -1 none) is set. For an SMB1 holder showing slot 12 the mod sets that override to
+  the facing passed for the call (hle_override, `holder_place`), so the costume turns as small Mario does (and so does
+  its shadow); seen walking left and standing after it (Link).
 - **Taunt:** Up held 8 updates standing still, in costume (Up: the input block at player +0x550, +0x10): the costume's
   appeal frame on every texture of its model for 120 updates (moving, jumping, a hit or a new costume end it) and its
   `appeal` sound. Not after the goal (the goal fanfare's request ends taunts until the next course).

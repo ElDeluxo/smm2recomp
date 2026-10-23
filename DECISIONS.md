@@ -2095,3 +2095,17 @@ not found) changes nothing, so one failed match doesn't switch Network Play off.
 **Would change:** a way to run the game's NEX login only when Network Play is opened (then Course World would never
 wait on it at all).
 
+## 2026-10-23 — Costume loss: SMM1's look over SMM2's power-down; a costume turns through the holder's facing override
+
+**Decision (agent):** a hit in costume stays SMM2's Super -> small power-down for the game (its freeze, sound and
+invulnerability), but what the holders show is SMM1's costume -> small sequence, driven by the mod each update:
+small, costume, small, costume, small, 6 updates each (SMM1's transform type 3, 30 updates, Block.rpx v208
+0x0268151c / 0x02681530), then small Mario. A costume faces left by setting the holder's facing override (+0x4b0)
+to the facing passed to its placement (0x7101561bb0) for slot 12, which SMM2 otherwise never turns (Balloon Mario).
+**Why:** the owner's v0.4.5 reports (the loss looked wrong; the costume kept facing right). SMM2's SMB1 power-down
+never calls the slot setter, so mapping its "Super" frames to the costume (v0.4.5) left the costume on screen through
+the freeze and its blink; a schedule of our own matches SMM1 frame for frame. SMM1's freeze length was an open item
+(smm1-extras-costume.md §9): the transform's 30 updates, the same as SMM2's freeze here. The facing override is the
+holder's own mechanism, so the placement keeps everything else (offsets, shadow) as for small Mario.
+**What would change it:** a costume damage pose (SMM1 has none: no damage frame in the costume textures), or a slot
+other than 12 for the costume (then the placement turns it by itself).
