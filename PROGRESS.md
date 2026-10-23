@@ -1,13 +1,18 @@
 # Progress
 
-## Where this stands / next (paused 2026-10-23 after v0.4.6, owner's call; resume from here)
-- **Released:** v0.4.6 (2026-10-23), installed on the Mac and the iPad (iPad build 297; build numbers are the commit
-  count). It fixes the owner's v0.4.5 reports:
-  - "course ID not found" on the first try;
-  - the costume-loss animation, now as SMM1;
-  - costumes facing left.
+## Where this stands / next (paused 2026-10-23 after v0.4.7, owner's call; resume from here)
+- **Released:** v0.4.7 (2026-10-23), installed on the Mac and the iPad (iPad build 302; build numbers are the commit
+  count). It contains:
+  - Course World scrolling without stalls (pictures fetched ahead at TGRCode's pace);
+  - "Show memory use";
+  - SMM1's sound effects at SMM2's level.
   No new release or iPad install without the owner.
-- **For v0.4.7:** the owner's v0.4.6 report, Course World scrolling (see "Owner's v0.4.6 report" below).
+- **Private Windows build with the game** (owner's request; Mac only, never upload or commit):
+  - `~/Documents/Dev/SMM2-private/SMM2-windows-x64-v0.4.7-WITH-GAME.zip` (3.06 GB);
+  - made with `/Volumes/SSD/smm-work/winready/build47.sh` (a v0.4.7 worktree with links to the venv, data and zig)
+    and `assemble46.sh v0.4.7`;
+  - the game DLL is built for x86-64-v2, so it runs on any 64-bit PC.
+- **Earlier:** v0.4.6 fixed "course ID not found" on the first try and the costume hit / facing.
 - **In v0.4.5:** everything listed in its release notes, including the owner's three v0.4.4 reports:
   - taps through the menu;
   - Course World falling back from a failed Nextendo login;
