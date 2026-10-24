@@ -646,7 +646,8 @@ Setup failures first, since they block new players:
   object's vtable is the C++ runtime's `__cxa_pure_virtual` (0x70044b52a8, the crash's own frame) has its object
   cleared, which the game's code takes as a failed request on every path. Checked: the guard is reached; the race
   itself doesn't happen on the Mac yet. The black screen may be the same race (a request that never completes); the
-  owner's next play on the iPad test build will tell.
+  owner's next play on the iPad test build will tell. iPad test build 320 (main at dd2653e) installed 2026-10-24
+  over the local network (`xcrun devicectl device install app`; the iPad is local, not on Tailscale).
 - ⬜ (stuck run after a corrupt first course) a partial fix - New Game when the menu has no Continue - is saved in
   the scratchpad (`stuckrun_newgame.patch`): the bridge chose New Game but its press didn't land; to finish.
 - ⬜ **A run whose first course is corrupt gets stuck** (found 2026-10-24 while testing the Super Expert crash): the
