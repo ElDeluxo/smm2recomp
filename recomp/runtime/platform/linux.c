@@ -276,7 +276,9 @@ void plat_fatal_notice(void) {
     if (!g_log_path[0]) return;
     fflush(stderr);
     char text[1200];
-    snprintf(text, sizeof text, GAME_TITLE " stopped because of an error.\n\nDetails: %s", g_log_path);
+    extern char g_fatal_hint[400];  // runtime/services/fs.c
+    snprintf(text, sizeof text, GAME_TITLE " stopped because of an error.%s%s\n\nDetails: %s", g_fatal_hint[0] ? "\n\n" : "",
+             g_fatal_hint, g_log_path);
     SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, GAME_TITLE, text, NULL);
 }
 

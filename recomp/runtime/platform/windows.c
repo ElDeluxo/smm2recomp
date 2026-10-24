@@ -161,7 +161,7 @@ static void require_cpu(void) {
 void plat_fatal_notice(void) {
     if (!g_log_path[0]) return;
     fflush(stderr);
-    char text[1024] = GAME_TITLE " stopped because of an error.";
+    char text[1600] = GAME_TITLE " stopped because of an error.";
     FILE *f = fopen(g_log_path, "rb");
     if (f) {
         static char tail[16384];
@@ -185,7 +185,9 @@ void plat_fatal_notice(void) {
             }
         }
     }
+    extern char g_fatal_hint[400];  // runtime/services/fs.c
     size_t l = strlen(text);
+    if (g_fatal_hint[0]) snprintf(text + l, sizeof text - l, "\n\n%s", g_fatal_hint), l = strlen(text);
     snprintf(text + l, sizeof text - l, "\n\nDetails: %s", g_log_path);
     MessageBoxA(NULL, text, GAME_TITLE, MB_ICONERROR | MB_OK);
 }

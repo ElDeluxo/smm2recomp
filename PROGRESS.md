@@ -548,6 +548,13 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     went). Cross-compiled for Windows and Linux; not run on a Vulkan machine.
 
 ### GitHub issues (triaged 2026-10-22; owner: no replies needed, fix what they reveal)
+- ✅ **Linux: "stopped because of an error" right after the first start** (#28, 2026-10-23): the game asked for the
+  console's Mii data (system title 0100000000000802) and the data folder's `sysdata/0100000000000802` was empty: setup
+  had found the title in the firmware but hactool extracted nothing (the keys open the header, not the contents - an
+  older prod.keys than the firmware, most likely), and setup went on; SMM2 then stops at its first Mii (svcBreak,
+  2002-1001). Now setup checks that each data archive came out non-empty and stops with `MII_DATA` (what to choose)
+  when the Mii data didn't; a game that hits it anyway says so in its error message (Linux / Windows), not only "see
+  the log". Needs the reporter to set up again.
 Release times (UTC, 2026-10-21): v0.3.0 06:51, v0.3.1 09:23, v0.3.2 12:58. #9 (prod.keys legal): the owner's, no action.
 Setup failures first, since they block new players:
 - ✅ (v0.4.1) **"hactool stopped without a message (exit code 1)" on the cnmt NCA** (#10, #17, a comment on #7;

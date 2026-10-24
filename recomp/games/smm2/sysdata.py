@@ -49,6 +49,8 @@ def nca_path(entry):
 
 
 FAILS = []  # (exit code, output) of the NCAs hactool couldn't read, for the error
+EMPTY = {}  # data titles found but extracted to nothing: title -> hactool's last words
+MII_MODEL = '0100000000000802'  # (required: SMM2 stops at its first Mii without it, issue #28)
 
 
 def title_id(hactool, keys, nca):
@@ -121,8 +123,13 @@ def main():
             if os.path.isdir(out):
                 shutil.rmtree(out)
             os.makedirs(out)
-            run([a.hactool, '-k', a.keys, '--disablekeywarns', '-t', 'nca', '--romfsdir', out, p])
-            nd += 1 if os.listdir(out) else 0
+            r = run([a.hactool, '-k', a.keys, '--disablekeywarns', '-t', 'nca', '--romfsdir', out, p])
+            if os.listdir(out):
+                nd += 1
+            else:  # (read but nothing came out: the keys open the header, not the contents - an older prod.keys)
+                shutil.rmtree(out)
+                tail = [ln for ln in masked(r.stdout + r.stderr).splitlines() if ln.strip()][-2:]
+                EMPTY[tid] = ' / '.join(tail)
     missing = sorted(want - set(found))
     print(f'sysdata: {nf} shared font files, {nd} data archives'
           + (f' (not in this firmware: {", ".join(missing)})' if missing else ''))
@@ -137,6 +144,12 @@ def main():
         fail('KEYS', 'No system titles could be read from the firmware' + why,
              'prod.keys must be your console\'s and hold the keys for that firmware version (dump them again with a '
              'current Lockpick_RCM after updating). A newer firmware than this program\'s hactool knows can also do this.')
+    if MII_MODEL not in found or MII_MODEL in EMPTY:
+        why = f' (hactool: {EMPTY[MII_MODEL]})' if EMPTY.get(MII_MODEL) else ''
+        fail('MII_DATA', 'The console\'s Mii data (0100000000000802) couldn\'t be read from the firmware' + why,
+             'The game needs it to draw Miis. Choose the complete folder of your console\'s system NCAs (e.g. '
+             'Ryujinx\'s bis/system/Contents/registered) and the prod.keys dumped from the same console after its last '
+             'update (a current Lockpick_RCM): an older prod.keys opens a newer firmware\'s headers but not its contents.')
     if 'nintendo_udsg-r_std_003.bfttf' not in os.listdir(fonts):
         fail('FONTS_MISSING', 'The console\'s shared fonts were not found in the firmware',
              'Choose the folder of your console\'s system NCAs (with the shared font titles 0100000000000810-814).')

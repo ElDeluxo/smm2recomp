@@ -462,6 +462,9 @@ static Service *open_romfs_storage(void) {
     return service_new("IStorage(romfs)", storage, st);
 }
 
+// What a fatal error is likely about, for the error message (runtime/platform: plat_fatal_notice); "" when unknown
+char g_fatal_hint[400];
+
 // ---- system data archives (OpenDataStorageByDataId): the RomFS of each, from the player's own firmware, in
 // sysdata/<data id>/ of the data root (games/<game>/sysdata.py extracts them), served through an index like the game's
 static void data_storage(Service *s, IpcReq *req, IpcResp *resp) {
@@ -713,6 +716,10 @@ SERVICE("fsp-srv", fsp_srv) {
         Service *d = open_data_storage(IN(uint64_t, 8));
         if (d) { ipc_return_object(resp, d); break; }
         LOG("[fs] OpenDataStorageByDataId %llx (not available: run games/<game>/sysdata.py)\n", IN(uint64_t, 8));
+        if (IN(uint64_t, 8) == 0x0100000000000802ull)  // (games draw Miis with it: SMM2 stops at once without it)
+            snprintf(g_fatal_hint, sizeof g_fatal_hint, "The console's Mii data (system title 0100000000000802) is missing "
+                     "from the data folder's sysdata: set the game up again with your firmware and that firmware's "
+                     "prod.keys (Settings > Game files).");
         resp->result = MAKE_RESULT(2, 1001);
         break;
     }
