@@ -1,6 +1,18 @@
 # Progress
 
-## PAUSED 2026-10-24 after v0.5.1 (owner's call: all remaining effort on SMCraft); resume from here
+## PAUSED 2026-10-25 after v0.5.2 (owner's call: all remaining effort on SMCraft); resume from here
+- **v0.5.2 (2026-10-25):** Windows starts without vulkan-1.dll and says what to install (a user's "vulkan-1.dll was not
+  found", `research/user-vulkan-1-dll-error.png`): the exe no longer imports the loader; `tools/gen_vk_shim.py` builds
+  its 265 entry points as forwarders to vulkan-1.dll loaded at run time, and `plat_init` checks for it first
+  (`require_vulkan`). Checked: the released exe imports no Vulkan DLL. Not run on a Windows PC (none here). README:
+  Troubleshooting. Mac 0.5.2 installed; iPad not rebuilt (nothing changed for iOS); private Windows build v0.5.2.
+- **GitHub sweep (2026-10-25, owner: reply to all):** closed as fixed, with the version: #4, #6, #7, #10, #11, #14,
+  #15, #17, #21, #29 (answered, with a Mods tab screenshot); #5 closed as a duplicate of #12. Asked to retry on
+  v0.5.1 with logs: #12, #13, #16, #25, #28, #30. Noted, labelled enhancement, in the backlog: #19, #20, #26, #27.
+  #9 (prod.keys): a short factual reply, left open. PR #22 (OpenCourse World): reviewed, changes requested, not
+  merged (the owner tests OCW first). Watch these for answers on resume.
+
+## v0.5.1 (2026-10-24 night)
 - **v0.5.1 (2026-10-24 night):** the owner's two v0.5.0 reports (iPad build 325, quick level return on;
   `research/ipad-v050-2026-10-24/`):
   - **Black screen after a miss (a sound, then silence): FOUND and fixed.** Reproduced on the Mac (2 of 3 forced-miss
