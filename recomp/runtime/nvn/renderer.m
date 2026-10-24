@@ -1110,12 +1110,16 @@ static id<MTLLibrary> precompiled_library(char kind, const char *msl) {
 // LARECOMP_NO_PIPELINE_CACHE=1: off. Delete cache/ to reset.
 #define PIPELINE_FILES_MAX 256
 #define PIPELINE_FILES_MERGE 8
-static NSArray *g_archives;                 // the saved files (read only)
+// The saved files, loaded in the background and published once (never released after: readers need no lock); nil until
+// then, a cache miss for every pipeline meanwhile. (Loading was on the start-up path: Metal took more than two minutes
+// - for good, as far as was seen - to deserialize one 63 MB merged archive, and the game never drew a frame.)
+static void *_Atomic g_archives_ref;
+static NSArray *loaded_archives(void) { void *p = atomic_load(&g_archives_ref); return p ? (__bridge NSArray *)p : nil; }
 static dispatch_queue_t g_archive_q;
 static NSMutableArray *g_archive_pending;   // descriptors not saved yet (g_archive_q only)
 static int g_archive_next, g_archive_hits, g_archive_fails;
 static double g_archive_saved, g_archive_added, g_archive_first;  // (last save, last addition, oldest unsaved)
-static NSArray *pipeline_archives(void) { return g_archives.count ? g_archives : nil; }
+static NSArray *pipeline_archives(void) { NSArray *a = loaded_archives(); return a.count ? a : nil; }
 static void pipeline_cache_save_now(void);
 
 // A pipeline's description: its shaders' entry-point names (v_/f_/c_<hash>: the source in cache/shaders/, precompiled
@@ -1280,43 +1284,59 @@ static void pipeline_cache_open(void) {
     if (done++ || getenv("LARECOMP_NO_PIPELINE_CACHE") || !pipeline_archives_usable()) return;
     mkdir("cache", 0755);
     mkdir("cache/pipelines", 0755);
-    double t0 = now_ms();
-    pipeline_cache_merged();
-    NSMutableArray *got = [NSMutableArray new];
-    NSArray *names = [[[NSFileManager defaultManager] contentsOfDirectoryAtPath:@"cache/pipelines" error:nil]
-        sortedArrayUsingSelector:@selector(compare:)];
-    for (NSString *n in names) {
-        if (![n hasSuffix:@".bin"]) continue;
-        g_archive_next = MAX(g_archive_next, n.intValue + 1);
-        if (![names containsObject:[[n stringByDeletingPathExtension] stringByAppendingString:@".txt"]]) {
-            // (from before the descriptions: it could never be merged)
-            unlink([@"cache/pipelines" stringByAppendingPathComponent:n].fileSystemRepresentation);
-            continue;
-        }
-        if (got.count >= PIPELINE_FILES_MAX) continue;
-        MTLBinaryArchiveDescriptor *d = [MTLBinaryArchiveDescriptor new];
-        d.url = [NSURL fileURLWithPath:[@"cache/pipelines" stringByAppendingPathComponent:n]];
-        NSError *e = nil;
-        id<MTLBinaryArchive> a = [dev newBinaryArchiveWithDescriptor:d error:&e];
-        if (a) [got addObject:a];
-        else LOG("[shader] pipeline cache file %s unreadable (%s): removed\n", n.UTF8String, e.localizedDescription.UTF8String),
-             unlink(d.url.fileSystemRepresentation);
-    }
-    g_archives = got;
-    if (got.count) LOG("[shader] pipeline cache: %lu files loaded (%.0f ms)\n", (unsigned long)got.count, now_ms() - t0);
     g_archive_pending = [NSMutableArray new];
     g_archive_q = dispatch_queue_create("recomp.pipeline-cache", DISPATCH_QUEUE_SERIAL);
     atexit(pipeline_cache_save_now);
-    int merge_at = getenv("LARECOMP_PIPELINE_MERGE") ? atoi(getenv("LARECOMP_PIPELINE_MERGE")) : PIPELINE_FILES_MERGE;
-    if ((int)got.count > merge_at) {  // (LARECOMP_PIPELINE_MERGE=<n>: tests)
-        int upto = g_archive_next - 1, into = g_archive_next++;
-        dispatch_async(g_archive_q, ^{ pipeline_cache_merge(upto, into); });
-    }
+    // (the next file number now, before the game can save: the loading below may take a while)
+    for (NSString *n in [[NSFileManager defaultManager] contentsOfDirectoryAtPath:@"cache/pipelines" error:nil])
+        if ([n hasSuffix:@".bin"]) g_archive_next = MAX(g_archive_next, n.intValue + 1);
+    // (its own queue: one that never returns mustn't hold up the saves, or the one at exit)
+    dispatch_async(dispatch_queue_create("recomp.pipeline-cache-load", DISPATCH_QUEUE_SERIAL), ^{
+        double t0 = now_ms();
+        // a load that never finished (the game stopped or hung in it): those files go, they don't hang it again
+        if (access("cache/pipelines/loading", F_OK) == 0) {
+            LOG("[shader] pipeline cache: the last start didn't finish loading it: its files are removed\n");
+            for (NSString *n in [[NSFileManager defaultManager] contentsOfDirectoryAtPath:@"cache/pipelines" error:nil])
+                if ([n hasSuffix:@".bin"] || [n hasSuffix:@".txt"] || [n isEqualToString:@"merged"])
+                    unlink([@"cache/pipelines" stringByAppendingPathComponent:n].fileSystemRepresentation);
+        }
+        pipeline_cache_merged();
+        FILE *mark = fopen("cache/pipelines/loading", "w");
+        if (mark) fclose(mark);
+        NSMutableArray *got = [NSMutableArray new];
+        NSArray *names = [[[NSFileManager defaultManager] contentsOfDirectoryAtPath:@"cache/pipelines" error:nil]
+            sortedArrayUsingSelector:@selector(compare:)];
+        for (NSString *n in names) {
+            if (![n hasSuffix:@".bin"]) continue;
+            if (![names containsObject:[[n stringByDeletingPathExtension] stringByAppendingString:@".txt"]]) {
+                // (from before the descriptions: it could never be merged)
+                unlink([@"cache/pipelines" stringByAppendingPathComponent:n].fileSystemRepresentation);
+                continue;
+            }
+            if (got.count >= PIPELINE_FILES_MAX) continue;
+            MTLBinaryArchiveDescriptor *d = [MTLBinaryArchiveDescriptor new];
+            d.url = [NSURL fileURLWithPath:[@"cache/pipelines" stringByAppendingPathComponent:n]];
+            NSError *e = nil;
+            id<MTLBinaryArchive> a = [dev newBinaryArchiveWithDescriptor:d error:&e];
+            if (a) [got addObject:a];
+            else LOG("[shader] pipeline cache file %s unreadable (%s): removed\n", n.UTF8String, e.localizedDescription.UTF8String),
+                 unlink(d.url.fileSystemRepresentation);
+        }
+        unlink("cache/pipelines/loading");
+        if (got.count) {
+            atomic_store(&g_archives_ref, (void *)CFBridgingRetain([got copy]));
+            LOG("[shader] pipeline cache: %lu files loaded (%.0f ms, in the background)\n", (unsigned long)got.count, now_ms() - t0);
+        }
+        int merge_at = getenv("LARECOMP_PIPELINE_MERGE") ? atoi(getenv("LARECOMP_PIPELINE_MERGE")) : PIPELINE_FILES_MERGE;
+        if ((int)got.count > merge_at)  // (LARECOMP_PIPELINE_MERGE=<n>: tests)
+            dispatch_async(g_archive_q, ^{ int upto = g_archive_next - 1, into = g_archive_next++; pipeline_cache_merge(upto, into); });
+    });
 }
 // (a pipeline from the cache, or nil when it isn't there)
 static id<MTLRenderPipelineState> pipeline_cache_find_render(MTLRenderPipelineDescriptor *pd) {
-    if (!g_archives.count) return nil;
-    pd.binaryArchives = g_archives;
+    NSArray *archives = pipeline_archives();
+    if (!archives) return nil;
+    pd.binaryArchives = archives;
     double t0 = now_ms();
     id<MTLRenderPipelineState> ps = [dev newRenderPipelineStateWithDescriptor:pd options:MTLPipelineOptionFailOnBinaryArchiveMiss
                                                                    reflection:nil error:nil];

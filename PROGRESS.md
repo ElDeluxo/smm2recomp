@@ -1,17 +1,20 @@
 # Progress
 
-## URGENT (2026-10-24, end of an SMM2 turn): regenerated game code hangs at startup
-- Since `make smm2` (regenerate) ran on 2026-10-24, the Mac build hangs at boot every time: no frame drawn, the
-  runtime's thread dump shows thread 86 running guest code without returning (main+0x2e6ff4, "after svc 1d") while
-  the main thread waits (svc 0x34). The same with the new worker-queue hook point removed and regenerated again, so the
-  hook isn't it. `setup` (part of `make smm2`) left the game files unchanged (Oct 18). No generator input changed since
-  the last good regeneration (2026-10-22), apart from that hook: suspect the toolchain or environment (Xcode / clang,
-  the tools venv) or a nondeterminism. A run with the OLD game library and today's runtime played fine (deep1).
-- **iPad test build 320 was compiled from this generated code: very likely doesn't start.** The owner was told not to use
-  it; put v0.4.8 (or a fixed build) back on the iPad first thing.
-- Next: regenerate at the v0.4.8 tag in its own worktree (own `generated/`) and boot it; if that hangs too, it's the
-  toolchain (compare `clang --version`, the venv's capstone with the 10-22 state); if not, diff the generated C of
-  the two for main+0x2e6ff4's function and what differs.
+## Start-up hang (2026-10-24): FOUND and fixed; it was the pipeline cache, not the generated code
+- The hang after today's regeneration was a **63 MB merged Metal pipeline archive** (`cache/pipelines/0221.bin`,
+  1757 pipelines, merged 17:02) in the shared dev data folder: Metal never returned from loading it
+  (`newBinaryArchiveWithDescriptor`, stuck in `loadAirntBlocksForSlice`), and that load was on the start-up path.
+  Bisected: a fresh data folder boots, the v0.4.8 tag regenerated boots the same way, and adding back only
+  `cache/pipelines` brings the hang back. The toolchain and the generated code are fine.
+- `~/Library/Application Support/org.smcraft.smm2recomp` is a **symlink to the dev data**, so the owner's installed Mac
+  app would have hung too. The bad file has been deleted (it's only a cache).
+- Fix (renderer.m): the archives load in the background on their own queue, and pipelines compile normally until the
+  load finishes. A `cache/pipelines/loading` marker covers a load that never finishes: the next start removes those
+  files. Tested with the bad cache: 60 fps at boot, and the second start logs the removal.
+- **iPad build 320:** its generated code is fine. It would hang only if its own pipeline cache merged into a file that
+  big (unlikely so far). If it ever hangs at start, the next build (with this fix) recovers by itself.
+- Next: cap the size of a merged archive (merge into chunks of about 500 pipelines), so the cache never builds a file
+  Metal can't load. Then put a build with the fix on the iPad.
 
 ## Where this stands / next (paused 2026-10-23 after v0.4.8, owner's call; resume from here)
 - **Released:** v0.4.8 (2026-10-23), installed on the Mac and the iPad (iPad build 304; build numbers are the commit
