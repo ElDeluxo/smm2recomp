@@ -616,6 +616,9 @@ Setup failures first, since they block new players:
   listened to). Not compared in Cemu this round.
 
 ### Owner's v0.4.8 reports (2026-10-23 evening, iPad)
+- ⬜ **A run whose first course is corrupt gets stuck** (found 2026-10-24 while testing the Super Expert crash): the
+  recovery presses Continue, but SMM2's menu shows no Continue for a run with no clears yet (test course
+  5JM-KJ2-Q9G triggers it).
 - ✅ **No costume reward after a won 100 Mario run** (owner: costumes can be picked at will in Try it now, so the reward
   unlocks nothing): the reward window and its pick are off by default; `costume_reward=1` in smm2mods.ini or
   `RECOMP_COSTUME_REWARD=1` brings them back (costume.c costume_reward_on; ending.c asks it before picking).
