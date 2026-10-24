@@ -623,8 +623,10 @@ Setup failures first, since they block new players:
   presses as a player after each miss and logs a "mash watch" line every 2 s (miss age, play state age, the flow's
   state, quick level return's hidden frames). Ruled out so far: SMM2's skip hint on the 4th attempt hiding under the
   card - in 100 Mario the course's pre-check goes straight from state 2 to 4, the hint's state never comes
-  (`RECOMP_MOD_TEST_SKIP_HINT=1` logs it). Next: repeated misses on one course with A only, many cycles; the iPad's
-  log when it happens again (the watchdog lines say which state stuck).
+  (`RECOMP_MOD_TEST_SKIP_HINT=1` logs it). 2026-10-24: a 10-minute run of A-only mashing got only one miss (autoplay
+  walked into a wall: no quick deaths). Next: a forced-miss test switch (the game's own player death request, so a miss
+  comes every few seconds on the same course) to run hundreds of A-mashed cycles, with and without quick level
+  return; and the iPad's log when it happens again (the watchdog lines say which state stuck).
 - ⬜ (stuck run after a corrupt first course) a partial fix - New Game when the menu has no Continue - is saved in
   the scratchpad (`stuckrun_newgame.patch`): the bridge chose New Game but its press didn't land; to finish.
 - ⬜ **A run whose first course is corrupt gets stuck** (found 2026-10-24 while testing the Super Expert crash): the
