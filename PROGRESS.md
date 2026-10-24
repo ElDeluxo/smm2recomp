@@ -1,5 +1,21 @@
 # Progress
 
+## PAUSED 2026-10-24 after v0.5.0 (owner's call: all remaining effort on SMCraft); resume from here
+- **Released v0.5.0** (2026-10-24): https://github.com/smm2recomp/smm2recomp/releases/tag/v0.5.0. Installed on the
+  Mac (`/Applications/Super Mario Maker 2.app` 0.5.0; its first start rebuilds the game code) and the iPad (build 325,
+  installed over the local network with `xcrun devicectl device install app`; it started at 60 fps, and its 18 pipeline
+  files took 23.6 s to load, now in the background). Private Windows build: see below.
+- **In it:** the start-up hang (pipeline cache, below), the 100 Mario sound-queue lock (black screen / "Pure virtual"
+  crash after many misses, see the fade-to-black entry), the Super Expert R crash, no costume reward window, the setup's
+  Mii data check (#28), native Intel Mac support (PR #24, build from source).
+- **First on resume:** the owner's play on v0.5.0. If 100 Mario still goes black after misses, get the iPad's
+  `smm2recomp.log`: "worker queue: the game thread and the worker met" lines, the course scene state and the 10 s
+  fallback line say where it stopped.
+- **Then:** the stuck run after a corrupt first course (`/Volumes/SSD/smm-work/patches/stuckrun_newgame.patch`: New Game when
+  the menu has no Continue; the press didn't land), then the "Next, in order" list further down.
+- **Test tools added today:** `RECOMP_MOD_TEST_PIT=<frames>[:<jitter>]` (a pit miss that far into each attempt),
+  `RECOMP_MOD_MISS_MASH`, `tools/death_course.py`, `LARECOMP_PIPELINE_FILE=<n>`.
+
 ## Start-up hang (2026-10-24): FOUND and fixed; it was the pipeline cache, not the generated code
 - The hang after today's regeneration was a **63 MB merged Metal pipeline archive** (`cache/pipelines/0221.bin`,
   1757 pipelines, merged 17:02) in the shared dev data folder: Metal never returned from loading it
@@ -16,7 +32,7 @@
 - Done (bd8b739): a merge puts at most 500 pipelines in one file and takes only the files that aren't full yet
   (`LARECOMP_PIPELINE_FILE=<n>` for tests), so the cache never builds a file that big again.
 
-## Where this stands / next (paused 2026-10-23 after v0.4.8, owner's call; resume from here)
+## Where this stood after v0.4.8 (2026-10-23)
 - **Released:** v0.4.8 (2026-10-23), installed on the Mac and the iPad (iPad build 304; build numbers are the commit
   count). It fixes the 3D World memory leak (feedback snapshot views kept alive; the owner's iPad was killed at
   ~12 GB). The `[metal]` stats line now logs memory. No new release or iPad install without the owner.
@@ -681,7 +697,7 @@ Setup failures first, since they block new players:
   owner's next play on the iPad test build will tell. iPad test build 320 (main at dd2653e) installed 2026-10-24
   over the local network (`xcrun devicectl device install app`; the iPad is local, not on Tailscale).
 - ⬜ (stuck run after a corrupt first course) a partial fix - New Game when the menu has no Continue - is saved in
-  the scratchpad (`stuckrun_newgame.patch`): the bridge chose New Game but its press didn't land; to finish.
+  `/Volumes/SSD/smm-work/patches/stuckrun_newgame.patch`: the bridge chose New Game but its press didn't land; to finish.
 - ⬜ **A run whose first course is corrupt gets stuck** (found 2026-10-24 while testing the Super Expert crash): the
   recovery presses Continue, but SMM2's menu shows no Continue for a run with no clears yet (test course
   5JM-KJ2-Q9G triggers it).
