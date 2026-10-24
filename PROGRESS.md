@@ -619,6 +619,21 @@ Setup failures first, since they block new players:
 - ✅ **No costume reward after a won 100 Mario run** (owner: costumes can be picked at will in Try it now, so the reward
   unlocks nothing): the reward window and its pick are off by default; `costume_reward=1` in smm2mods.ini or
   `RECOMP_COSTUME_REWARD=1` brings them back (costume.c costume_reward_on; ending.c asks it before picking).
+- ✅ **Crash on R to the newly unlocked Super Expert tab right after winning 100 Mario Expert** (fine after reopening).
+  Cause: the flow's texture table (`lyt_formats.c`, every SMM1 layout texture and font sheet) was one array grown by
+  `realloc` on the flow thread, while the raster threads (`flow.c`'s worker and `lyt_raster`'s bands) read it for the
+  frame being drawn. A growth moved the array under them; they then read a texture's pixels through freed memory.
+  R loaded the Super Expert map; after the ending's layouts that load pushed the table from 512 to 1024 entries,
+  logged on the Mac exactly at that press. In a fresh session the growths fall elsewhere, which is why reopening
+  "fixed" it. Fix: chunks of 256 entries that never move (and a lock for adders). Evidence (Mac,
+  `MallocScribble=1` so a freed read fails at once):
+  - before: SIGSEGV in `sample` on a band thread right at a growth;
+  - after: Expert won → R onto Super Expert → a Super Expert run started and cleared 3 courses, no crash.
+  Test switch `RECOMP_HUNDRED_SELECT_KEYS=<n>:<tick>:<BUTTON>,...`: presses on the n-th select screen of the session.
+  Recipe in `recomp/docs/mods.md` ("A won run on demand").
+  Side finding, not fixed: a corrupt course as a run's *first* course leaves the run stuck. The way back presses
+  Continue, but SMM2's menu shows no Continue for a run without a clear. Seen with the broken test course
+  5JM-KJ2-Q9G.
 
 ### Owner's v0.4.7 report (2026-10-23, iPad)
 - ✅ **Memory climbing to ~12 GB until the app was killed** (100 Mario Expert, a 3D World castle; "maybe from the

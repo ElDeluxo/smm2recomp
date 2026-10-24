@@ -3,6 +3,7 @@
 // lyt/), which was written from public descriptions of these formats.
 #include "lyt.h"
 
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -118,19 +119,38 @@ void lyt_sarc_close(LSarc *s) {
 }
 
 // ================================================================ textures
-static LTex *g_tex;
-static int g_ntex, g_captex;
+// The table is read by the raster threads (flow.c's worker, lyt_raster's bands) while the flow thread adds to it (a
+// layout opening: lay_open; a font sheet on first use): its entries never move. Chunks of 256, allocated as they fill
+// and never freed; an id is published (g_ntex) once its entry is written, and the quads naming it reach the raster
+// threads through flow.c's job lock. (It was one array grown by realloc: a growth while a frame was being rastered
+// freed the array under the bands, which then read a texture's pixels through a freed entry. After a won 100 Mario
+// run, R on the select (the Super Expert map's textures) was such a growth; reopening the game moved it elsewhere.)
+#define TEX_CHUNK 256
+#define TEX_CHUNKS 1024  // (262144 textures; a session uses about a thousand)
+static LTex *g_tex[TEX_CHUNKS];
+static int g_ntex;  // (atomic: written under g_tex_lock, read anywhere)
+static pthread_mutex_t g_tex_lock = PTHREAD_MUTEX_INITIALIZER;
 int lyt_tex_add(int w, int h, uint8_t *px) {
-    if (g_ntex == g_captex) {
-        g_captex = g_captex ? g_captex * 2 : 256;
-        g_tex = realloc(g_tex, (size_t)g_captex * sizeof *g_tex);
+    pthread_mutex_lock(&g_tex_lock);
+    int id = g_ntex;
+    LTex **c = &g_tex[id / TEX_CHUNK];
+    if (id >= TEX_CHUNK * TEX_CHUNKS || (!*c && !(*c = calloc(TEX_CHUNK, sizeof(LTex))))) {
+        pthread_mutex_unlock(&g_tex_lock);
+        free(px);
+        return -1;
     }
-    g_tex[g_ntex] = (LTex){w, h, px};
-    return g_ntex++;
+    (*c)[id % TEX_CHUNK] = (LTex){w, h, px};
+    __atomic_store_n(&g_ntex, id + 1, __ATOMIC_RELEASE);
+    pthread_mutex_unlock(&g_tex_lock);
+    return id;
 }
-const LTex *lyt_tex(int id) { return id >= 0 && id < g_ntex ? &g_tex[id] : NULL; }
+const LTex *lyt_tex(int id) {
+    if (id < 0 || id >= __atomic_load_n(&g_ntex, __ATOMIC_ACQUIRE)) return NULL;
+    return &g_tex[id / TEX_CHUNK][id % TEX_CHUNK];
+}
 void lyt_tex_srgb(int id) {
-    if (id >= 0 && id < g_ntex) g_tex[id].srgb = true;
+    LTex *t = (LTex *)lyt_tex(id);
+    if (t) t->srgb = true;
 }
 
 // ================================================================ GX2 (R7xx AddrLib) untiling, thin modes, mip 0

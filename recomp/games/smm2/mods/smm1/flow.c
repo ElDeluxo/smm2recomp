@@ -230,6 +230,7 @@ static void sound_banks(void) {
     for (int i = 0; banks[i]; i++) smm1_se_bank(banks[i]);
 }
 
+static int g_selects;  // (select screens opened so far: RECOMP_HUNDRED_SELECT_KEYS)
 static void to_select(void) {
     status();
     course_world_music(F.d);
@@ -238,6 +239,7 @@ static void to_select(void) {
     ov_hide(&F.ov);
     F.sel = s;
     F.state = s ? S_SELECT : S_CLOSED;
+    if (s) g_selects++;
     F.back_due = false, F.exit_wait = 0;
     if (F.covered) F.covered = false, X.veil_to = 0;  // (out of the black that hid SMM2's menu coming back)
     if (s && X.veil <= 0 && !WP.anim) fade_in();  // (over SMM2's screen; after the ending the dip covers it)
@@ -477,6 +479,27 @@ static int auto_d(void) {
     if (d == -2) d = getenv("RECOMP_HUNDRED_AUTO") ? atoi(getenv("RECOMP_HUNDRED_AUTO")) : -1;
     return d;
 }
+// RECOMP_HUNDRED_SELECT_KEYS=<n>:<tick>:<BUTTON>,... presses on the n-th select screen of the session (1 the first),
+// at that select tick: e.g. a Continue on the first and R on the one after a won run ("1:90:R,1:130:R,1:220:A,2:60:R")
+static unsigned select_keys(int tick) {
+    static const char *spec;
+    static bool read;
+    if (!read) read = true, spec = getenv("RECOMP_HUNDRED_SELECT_KEYS");
+    if (!spec) return 0;
+    static const char *nm[16] = {"A", "B", "X", "Y", "LS", "RS", "L", "R", "ZL", "ZR", "PLUS", "MINUS", "LEFT", "UP", "RIGHT", "DOWN"};
+    unsigned b = 0;
+    char buf[1024];
+    snprintf(buf, sizeof buf, "%s", spec);
+    for (char *tok = strtok(buf, ","); tok; tok = strtok(NULL, ",")) {
+        int n = 0, at = 0;
+        char name[16] = "";
+        if (sscanf(tok, "%d:%d:%15[A-Z]", &n, &at, name) < 3 || n != g_selects || at != tick) continue;
+        for (int i = 0; i < 16; i++)
+            if (!strcmp(name, nm[i])) b |= 1u << i;
+    }
+    if (b) LOGF("test: select %d, tick %d: buttons %#x\n", g_selects, tick, b);
+    return b;
+}
 static void shot(const char *what) {
 #ifndef SMM1UI_STANDALONE
     static int n;
@@ -552,6 +575,7 @@ static void tick(unsigned buttons) {
             if (t == 200) in.pressed |= BT_DOWN;  // (New Game, not Continue)
             if (t == 240) in.pressed |= BT_A, auto_started = true;
         }
+        in.pressed |= select_keys(F.sel->tick);  // (tests: RECOMP_HUNDRED_SELECT_KEYS)
         // (B takes SMM2's menu underneath back to Course World: one pressed while it is still coming in counts once
         // it is in, so that menu doesn't come and go on screen after the select has left)
         if (in.pressed & BT_B) F.back_due = true;

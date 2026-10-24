@@ -578,6 +578,19 @@ Flow test extras: `RECOMP_MOD_FLOW_TEST_CONTINUE=1` (Continue instead of New Gam
 `build/<name>_<n>_<what>.png`). On the result screen the D-pad and the stick don't move the focus off Next in the
 port yet [obs]; touch reaches every button.
 
+**A won run on demand** (with the real flow on top; used for the owner's v0.4.8 crash after a win). Use a copy of
+the test server's folder (below), and edit its `endless.json` so the player has a 100 Mario run one clear short of
+its goal. For example `hundred_runs.expert` = `{"active": true, "lives": 100, "clears": 15, "passed": 15, "goal": 16,
+"ruleset": "hundred", "queue": [<short test courses>], "history": [15 entries {code, result "clear", seq 1..15,
+style, theme}]}`. Without a history SMM2's menu shows no Continue and the run side's Continue becomes a New Game.
+Lock or unlock tabs with `social.json` `endless`: `{"hundred_normal": {"<maker id>": 1}}` opens Expert and leaves
+Super Expert locked. Then drive the flow's select with
+`RECOMP_HUNDRED_SELECT_KEYS=<n>:<tick>:<BUTTON>,...` (presses on the n-th select screen of the session, at that
+select tick). For example `1:90:R,1:130:R,1:220:A,2:60:R,2:240:A` continues Expert, wins it with
+`RECOMP_MOD_AUTOPLAY=jump`, then on the select after the ending presses R onto the newly unlocked Super Expert and
+starts it. Leave out `LARECOMP_INPUT`'s `5200:DOWN,5300:A` with this server: they land on SMM2's menu under the
+select and press its New Game. The test course 5JM-KJ2-Q9G is reported corrupt by the game; drop it from a run.
+
 ### Test recipe (end to end, unattended)
 
 The whole chain (difficulty select -> map -> card -> course -> clear -> ... -> ending) against a local server, the
