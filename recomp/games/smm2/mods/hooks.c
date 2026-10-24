@@ -43,9 +43,9 @@ void smm2_mod_after(Cpu *c, uint64_t addr) {
     if (lanky_after(c, addr)) return;
     extern bool costume_after(Cpu *c, uint64_t addr);  // (costume.c: its own hook points)
     if (costume_after(c, addr)) return;
-    if (addr == MAIN_ADDR(0x4d2d90)) {  // the worker request queue (worker_guard.c)
-        extern void worker_guard_check(Cpu *c);
-        worker_guard_check(c);
+    if (addr >= MAIN_ADDR(0x4d2d90) && addr <= MAIN_ADDR(0x4d41e8)) {  // the worker request queue (worker_guard.c)
+        extern void worker_queue_after(Cpu *c, uint64_t addr);
+        worker_queue_after(c, addr);
         return;
     }
     if (addr == MAIN_ADDR(0x263db0)) {  // co-op (coop.c): the controllers' poll reads Npads 0 .. w8 ([x0 + 0x28])

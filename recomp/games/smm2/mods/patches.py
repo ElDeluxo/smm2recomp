@@ -15,8 +15,29 @@ MAIN = 0x7000000000
 # offset in main -> (expected instruction word, what the host does there when the mod is on)
 HOOK_POINTS = {
     # The game's worker request queue (main+0x4d2d80, after its prologue: x0 is the queue): a request whose object was
-    # destroyed is made to fail instead of calling into it ("Pure virtual function called!"; worker_guard.c)
-    0x4d2d90: (0x9100C3FD, 'worker queue: a destroyed object\'s request fails'),
+    # destroyed is made to fail instead of calling into it ("Pure virtual function called!"; worker_guard.c) ...
+    0x4d2d90: (0x9100C3FD, 'worker queue: a destroyed object\'s request fails; the queue step takes the queue lock'),
+    # ... and the queue's other changes, under one host lock (worker_guard.c): the queue has none of its own, and a
+    # request added from the game thread while the worker steps the queue could be lost or a finished one come back
+    # (each point: where the lock is taken - the count loaded again under it - or released)
+    0x4d2db4: (0xB94002EB, 'worker queue step: the head request read (lock released unless it is a kind 3)'),
+    0x4d2dec: (0xAA1303E0, 'worker queue step: kind 3 popped (lock released)'),
+    0x4d2f0c: (0xB9407A68, 'worker queue step: count for the pop (lock)'),
+    0x4d2f8c: (0xB9407A68, 'worker queue step: count for the pop (lock)'),
+    0x4d2f2c: (0xA9437BFD, 'worker queue step: exit (lock released)'),
+    0x4d32f8: (0xB9407B69, 'worker queue: a request added (lock)'),
+    0x4d3330: (0x910083E0, 'worker queue: a request added (lock released)'),
+    0x4d3720: (0xB9407809, 'worker queue: an attach request added (lock)'),
+    0x4d3760: (0xA9000509, 'worker queue: an attach request added (lock released)'),
+    0x4d3768: (0x2A1F03E0, 'worker queue: queue full (lock released)'),
+    0x4d3fe4: (0xB9407A68, 'worker queue: kind 3 requeues (lock)'),
+    0x4d4064: (0xA9457BFD, 'worker queue: kind 3 requeues (lock released)'),
+    0x4d4134: (0xB9407A69, 'worker queue: an attach request added (lock)'),
+    0x4d4170: (0xA9000109, 'worker queue: an attach request added (lock released)'),
+    0x4d4184: (0x2A1F03E0, 'worker queue: queue full (lock released)'),
+    0x4d41a0: (0xB9407809, 'worker queue: a detach request added (lock)'),
+    0x4d41e0: (0xA9000509, 'worker queue: a detach request added (lock released)'),
+    0x4d41e8: (0x2A1F03E0, 'worker queue: queue full (lock released)'),
     # 100 Mario: the in-course lives clamp is 99 (per-frame score / coin / lives update): one point loads the cap
     # the clamps fall back to, the others compare a new lives count with it. With the mod: 100.
     0x16ce764: (0x52800C6E, 'lives cap: cap value'),

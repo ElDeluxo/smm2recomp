@@ -743,8 +743,31 @@ bool bridge_endless_course(void) {
     return e && e + 30 >= p;
 }
 
+// (test) RECOMP_MOD_TEST_PIT=<frames>[:<jitter>]: after <frames> (+ 0..<jitter>, a different amount each attempt) play
+// frames of an attempt, player 1 is put below the course: a pit miss, the game's own, wherever the attempt got to (deep
+// into a busy course with RECOMP_MOD_AUTOPLAY): many misses on one course after another, quick level return on or off.
+static void test_pit(void) {
+    static const char *spec;
+    static bool read;
+    static long base, jitter, frames, want, n;
+    static uint64_t attempt;
+    if (!read) read = true, spec = getenv("RECOMP_MOD_TEST_PIT"), spec && sscanf(spec, "%ld:%ld", &base, &jitter);
+    if (!spec || base <= 0) return;
+    if (attempt != miss_at + 1) attempt = miss_at + 1, frames = 0, want = base + (jitter > 0 ? (n++ * 97) % (jitter + 1) : 0);
+    if (started_pending || g_present_hidden) { frames = 0; return; }  // (from the attempt's start on screen)
+    if (++frames < want || frames > want + 60) return;
+    uint64_t pm = g64(MAIN_ADDR(0x2c19290)), pl = pm ? g64(pm + 0x28) : 0;  // (lanky.c PLAYERS: player 1)
+    if (!pl) return;
+    float y = -400.0f, vy = -20.0f;
+    uint32_t w, wv;
+    memcpy(&w, &y, 4), memcpy(&wv, &vy, 4);
+    if (frames == want) LOG("[mod] test pit: player 1 below the course after %ld play frames\n", frames);
+    s32(pl + 0x234, w), s32(pl + 0x240, wv);  // (y: lanky.c / smw_goal.c's +0x234; vy +0x240), for a second
+}
+
 static void play_exec(Cpu *c) {
     g_scene = c->x[0];
+    test_pit();
     // A course loaded underneath the flow's map waits at its first play frame until the flow's card is up
     // (hundred_flow_ready_to_start), so it doesn't run hidden.
     static bool holding;

@@ -13,8 +13,8 @@
   files. Tested with the bad cache: 60 fps at boot, and the second start logs the removal.
 - **iPad build 320:** its generated code is fine. It would hang only if its own pipeline cache merged into a file that
   big (unlikely so far). If it ever hangs at start, the next build (with this fix) recovers by itself.
-- Next: cap the size of a merged archive (merge into chunks of about 500 pipelines), so the cache never builds a file
-  Metal can't load. Then put a build with the fix on the iPad.
+- Done (bd8b739): a merge puts at most 500 pipelines in one file and takes only the files that aren't full yet
+  (`LARECOMP_PIPELINE_FILE=<n>` for tests), so the cache never builds a file that big again.
 
 ## Where this stands / next (paused 2026-10-23 after v0.4.8, owner's call; resume from here)
 - **Released:** v0.4.8 (2026-10-23), installed on the Mac and the iPad (iPad build 304; build numbers are the commit
@@ -632,7 +632,23 @@ Setup failures first, since they block new players:
   listened to). Not compared in Cemu this round.
 
 ### Owner's v0.4.8 reports (2026-10-23 evening, iPad)
-- 🔄 **The 100 Mario fade-to-black after a death came back** (owner, 2026-10-23/24: after dying on the same course
+- 🔄 **The 100 Mario fade-to-black after a death came back** - **2026-10-24 evening: likely cause found and fixed, in
+  v0.5.0; not yet seen fixed on the owner's iPad.** The game's per-frame sound request queue (main+0x4d2d80, one per
+  channel; entries {kind 1 attach / 2 detach / 3, state, object}) has no lock of its own. Requests are added on the
+  game's thread (main+0x4d3720 / 0x4d4110 / 0x4d41a0 / 0x4d32f8, and the kind 3 handler's requeue at 0x4d3fe4)
+  while the WorkerMgr worker steps the queue: a count increment, then the entry, against a pop's count decrement.
+  When the two meet, a request can be lost: its object waits for good, and SMM2 sits on the course's start after a
+  retry, which is the iPad's black screen. Or a finished request can come back after its object is destroyed: the
+  owner's "Pure virtual function called!" crash at the same moment. Fix (`mods/worker_guard.c`, 19 hook points in
+  `mods/patches.py`): each of those spans runs under one host lock (the count loaded again under it). None of the
+  spans calls anything, so the lock is never nested and never waits on the game's own locks. A contended lock is
+  logged ("the game thread and the worker met at main+..."); the old guard stays. Mac tests (Expert, TGRCode
+  courses, autoplay with jumps, A-mashing after each miss): 52 misses on one course with quick level return on,
+  51 with it off. No hang, no crash, no fallback, and no contention either, so the race doesn't show on the Mac;
+  the iPad (more thread preemption) is where it showed. New test switch `RECOMP_MOD_TEST_PIT=<frames>[:<jitter>]`
+  (bridge.c): a pit miss that many play frames into each attempt, wherever it got to. Next: the owner's play on
+  v0.5.0; if it happens again, the log's "met" lines and the course scene state say where.
+  Earlier notes: (owner, 2026-10-23/24: after dying on the same course
   several times and tapping A each time to get back in quickly; with and without quick level return). Not reproduced
   yet on the Mac: 77 misses with A / B / touch / swipe mashing from the death to the course's return (quick level return
   on in a third of the runs), no hang. New test tools (bridge.c): `RECOMP_MOD_MISS_MASH=<from>:<to>[:<keys>[:<jitter>]]`
