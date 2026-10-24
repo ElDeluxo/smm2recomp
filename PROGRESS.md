@@ -955,6 +955,11 @@ Setup failures first, since they block new players:
 11. ✅ Exact sound timing: the owner found it fine in play (2026-10-22); no change made, nothing concrete to fix
 
 ### Future (owner's backlog, not scheduled)
+- ⬜ **From GitHub (2026-10-25, replied "noted"):** #26 Course Maker PC controls (wheel zoom, right-click erase,
+  middle-click pan, Ctrl+Z / Y / C / V, number keys for the palettes); #27 package repositories (Flatpak / Snap,
+  Homebrew cask, Scoop); #19 a Discord server for players and contributors (the owner's call); #20 OpenCourse World:
+  PR #22 (mm2srv), reviewed 2026-10-25 with changes requested (verify OCW's Let's Encrypt chain instead of
+  `tls_trust=any`, drop tasks/todo.md, build other platforms). The owner tests OCW before it is merged.
 - 🔄 **120 fps output by frame generation** (owner, 2026-10-19): built 2026-10-20 (Video tab, `frame_gen`,
   off by default; our own interpolation for Metal and Vulkan, not MetalFX's; game logic stays 60 Hz). Owner on
   the iPad: "doesn't look amazing at this stage". Left: picture quality, the iPad's shown-frames count, a real

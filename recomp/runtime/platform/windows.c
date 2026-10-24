@@ -157,6 +157,28 @@ static void require_cpu(void) {
     ExitProcess(1);
 }
 
+// No Vulkan loader (vulkan-1.dll comes with the graphics driver: missing with no Vulkan driver, a basic display driver,
+// most VMs and Remote Desktop): say what to install, instead of the Windows loader's "vulkan-1.dll was not found" (the
+// exe doesn't import it: tools/gen_vk_shim.py).
+static void require_vulkan(void) {
+    extern int vk_shim_load(void);  // ($(B)/vk_shim.c)
+    if (vk_shim_load()) return;
+    fprintf(stderr, "FATAL: vulkan-1.dll not found: no Vulkan graphics driver\n");
+    int r = MessageBoxA(NULL,
+        GAME_TITLE " needs a graphics driver with Vulkan 1.3, and none was found on this PC (vulkan-1.dll is missing).\n\n"
+        "Install the latest driver for your graphics card:\n"
+        "    NVIDIA: nvidia.com/drivers\n"
+        "    AMD: amd.com/support\n"
+        "    Intel: intel.com/support (Intel Driver & Support Assistant)\n\n"
+        "The driver from Windows Update or the PC maker is often too old. Remote Desktop and most virtual machines have "
+        "no Vulkan driver: start the game on the PC itself.\n\n"
+        "Open the help page?",
+        GAME_TITLE, MB_ICONERROR | MB_YESNO);
+    if (r == IDYES)
+        ShellExecuteA(NULL, "open", "https://github.com/smm2recomp/smm2recomp#troubleshooting", NULL, NULL, SW_SHOWNORMAL);
+    ExitProcess(1);
+}
+
 // Fatal error (rt_fatal_trace): the last FATAL / exception line of the log in a message box, when there is no console.
 void plat_fatal_notice(void) {
     if (!g_log_path[0]) return;
@@ -195,6 +217,7 @@ void plat_fatal_notice(void) {
 void plat_init(void) {
     log_to_file_without_console();
     require_cpu();
+    require_vulkan();
     _fmode = _O_BINARY;  // fopen/open default to binary (the runtime's "r"/"w" files are binary or LF text)
     _setmode(_fileno(stdout), _O_BINARY);
     _setmode(_fileno(stderr), _O_BINARY);

@@ -234,8 +234,11 @@ OSFLAGS  := -D_FILE_OFFSET_BITS=64 -D_POSIX_THREAD_SAFE_FUNCTIONS -D_CRT_RAND_S 
 GENARCH  ?= $(if $(CROSS_CC),-mcpu=x86_64_v2,-march=x86-64-v2)  # (baseline; gamebuild.c upgrades to v3 where available)
 GENFLAGS += -D_FILE_OFFSET_BITS=64 $(GENARCH)
 LDFLAGS  := $(LLD) -Wl,--stack,16777216 $(if $(DEPS),-L$(DEPS)/lib) -lSDL3 $(FFMPEG_LIBS) \
-            -lvulkan-1 -lwinmm -lole32 -lshell32 -lcomdlg32 -luuid -lshaderc_shared -lws2_32 -lbcrypt
+            -lwinmm -lole32 -lshell32 -lcomdlg32 -luuid -lshaderc_shared -lws2_32 -lbcrypt
 RES_OBJ  := $(B)/windows.res  # (the exe's icon: runtime/platform/windows.rc)
+# (vulkan-1.dll is looked up at run time, not imported: without it, the exe still starts and says what to install -
+# tools/gen_vk_shim.py, runtime/platform/windows.c)
+RES_OBJ  += $(B)/rt/vk_shim.o
 BACKEND_SRC := $(wildcard runtime/nvn/vulkan/*.c) $(wildcard runtime/nvn/vulkan/*.cpp)
 BACKEND_OBJ := $(patsubst runtime/%.cpp,$(B)/rt/%.o,$(patsubst runtime/%.c,$(B)/rt/%.o,$(BACKEND_SRC)))
 IMGUI_OBJ += $(B)/imgui/imgui_impl_vulkan.o
@@ -348,6 +351,15 @@ $(EXE): $(RT_OBJ) $(MBEDTLS_OBJ) $(BACKEND_OBJ) $(UI_OBJ) $(IMGUI_OBJ) $(EXE_GAM
 	mv -f $(dir $@)link/$(notdir $@) $@
 	$(if $(and $(CROSS_CC),$(filter windows,$(PLATFORM))),(echo LIBRARY $(notdir $@); cat runtime/platform/windows_exports.def) > $(B)/exports.def && \
 	    $(ZIG) dlltool -m i386:x86-64 -d $(B)/exports.def -l $(B)/$(GAME_ID)recomp.dll.a)
+
+# Windows: the Vulkan loader's entry points, forwarded to vulkan-1.dll loaded at run time (its export list:
+# runtime/platform/vulkan-1.exports; the prototypes from the Vulkan headers)
+$(B)/vk_shim.c: tools/gen_vk_shim.py runtime/platform/vulkan-1.exports
+	@mkdir -p $(dir $@)
+	$(or $(PY),python3) tools/gen_vk_shim.py $(if $(DEPS),$(DEPS)/include,/usr/include) runtime/platform/vulkan-1.exports $@
+$(B)/rt/vk_shim.o: $(B)/vk_shim.c
+	@mkdir -p $(dir $@)
+	$(CC) $(RTFLAGS) -Wno-unused-parameter -c $< -o $@
 
 # Windows: the app icon as a resource (docs/branding/app-icon.ico, tools/make_icons.sh), compiled by zig's rc
 $(B)/windows.res: runtime/platform/windows.rc ../docs/branding/app-icon.ico

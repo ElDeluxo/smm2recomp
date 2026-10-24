@@ -33,7 +33,7 @@ checks it, recompiles the game code on your computer, and then runs it.
    | Windows 10 / 11, x64 | `SMM2Recomp-windows-x86_64.zip` | a CPU with x86-64-v2 (AVX2 used when available), a Vulkan 1.3 graphics driver ([docs/windows.md](docs/windows.md)) |
    | Linux, x64 or arm64 | `SMM2Recomp-linux-x86_64.tar.gz`, `-linux-aarch64.tar.gz` | SDL3 3.2+ and a Vulkan 1.3 driver from your distribution (Debian 13, Ubuntu 25.04, Fedora 41, Arch or newer); x64: x86-64-v2 (AVX2 used when available) |
    | macOS 15+, Apple silicon | `SMM2Recomp-macos-arm64.zip` (`Super Mario Maker 2.app`) | nothing; the app isn't notarized: right-click > Open the first time (macOS then checks the whole app once, which can take a few minutes) |
-| macOS 15+, Intel (x86-64) | no package yet: build it from source (see [Building](#building)) | a CPU with AVX2 (Intel Haswell / 2013 or newer); Homebrew `sdl3` |
+   | macOS 15+, Intel (x86-64) | no package yet: build it from source (see [Building](#building)) | a CPU with AVX2 (Intel Haswell / 2013 or newer); Homebrew `sdl3` |
 
 2. **Unpack it and start it** (`smm2recomp.exe`, `./smm2recomp` or `Super Mario Maker 2.app`). Windows
    keeps everything in the unpacked folder, so put it somewhere writable.
@@ -63,6 +63,22 @@ session's log as `smm2recomp.previous.log`: attach that one. The data folder is:
 The setup screen tells you when a newer release is out and links to it; nothing is downloaded by
 itself. Android and iOS / iPadOS have no download: they're built yourself from source
 ([recomp/README.md](recomp/README.md)); iOS needs a Mac to build, sign and install the app.
+
+## Troubleshooting
+
+- **Windows: "vulkan-1.dll was not found", or "needs a graphics driver with Vulkan 1.3".** The game draws with Vulkan,
+  which comes with your graphics driver. Install the latest driver from [NVIDIA](https://www.nvidia.com/drivers),
+  [AMD](https://www.amd.com/support) or [Intel](https://www.intel.com/support) (the one from Windows Update or the PC
+  maker is often too old). Remote Desktop and most virtual machines have no Vulkan driver: start the game on the PC
+  itself. GPUs from before about 2016 may not support Vulkan 1.3 at all.
+- **macOS: "can't be opened" or "is damaged".** The app isn't notarized: right-click it and choose Open, once.
+- **Setup stops at the fonts or the Mii data.** Point it at your console's firmware (the folder of its system `.nca`
+  files) and the `prod.keys` that go with that firmware.
+- **Where are the mods?** In the overlay menu: F1 or Esc (a controller: the Home / Guide button, or − and + together;
+  a touch screen: the menu button in a corner), then the **Mods** tab
+  ([screenshot](docs/screenshots/mods-tab.jpg)). The SMM1 ones need Super Mario Maker (Wii U) chosen at setup.
+- **Anything else:** open an [issue](https://github.com/smm2recomp/smm2recomp/issues) with `smm2recomp.log` (and
+  `smm2recomp.previous.log` after a crash) from the data folder above.
 
 ## Screenshots
 
