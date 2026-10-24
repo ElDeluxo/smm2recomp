@@ -1,5 +1,18 @@
 # Progress
 
+## URGENT (2026-10-24, end of an SMM2 turn): regenerated game code hangs at startup
+- Since `make smm2` (regenerate) ran on 2026-10-24, the Mac build hangs at boot every time: no frame drawn, the
+  runtime's thread dump shows thread 86 running guest code without returning (main+0x2e6ff4, "after svc 1d") while
+  the main thread waits (svc 0x34). The same with the new worker-queue hook point removed and regenerated again, so the
+  hook isn't it. `setup` (part of `make smm2`) left the game files unchanged (Oct 18). No generator input changed since
+  the last good regeneration (2026-10-22), apart from that hook: suspect the toolchain or environment (Xcode / clang,
+  the tools venv) or a nondeterminism. A run with the OLD game library and today's runtime played fine (deep1).
+- **iPad test build 320 was compiled from this generated code: very likely doesn't start.** The owner was told not to use
+  it; put v0.4.8 (or a fixed build) back on the iPad first thing.
+- Next: regenerate at the v0.4.8 tag in its own worktree (own `generated/`) and boot it; if that hangs too, it's the
+  toolchain (compare `clang --version`, the venv's capstone with the 10-22 state); if not, diff the generated C of
+  the two for main+0x2e6ff4's function and what differs.
+
 ## Where this stands / next (paused 2026-10-23 after v0.4.8, owner's call; resume from here)
 - **Released:** v0.4.8 (2026-10-23), installed on the Mac and the iPad (iPad build 304; build numbers are the commit
   count). It fixes the 3D World memory leak (feedback snapshot views kept alive; the owner's iPad was killed at

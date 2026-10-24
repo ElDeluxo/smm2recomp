@@ -66,6 +66,7 @@ static int test_difficulty(void);
 static void mod_shot(const char *what, uint64_t after_frames);
 static void result(int outcome);
 static volatile bool started_pending;    // a course start / retry not yet seen playing
+static volatile uint64_t g_scene;       // the course's play scene (its state machine: current state at +0x280)
 static volatile uint64_t started_since;
 static void course_started(const char *why);
 static void course_scene(const char *why);
@@ -378,7 +379,25 @@ static void *driver(void *arg) {
             break;
         default: break;
         }
-        if (started_pending && now - started_since > 600 && hundred_flow_ready_to_start()) course_started("fallback");
+        // (diagnosis: the course scene's state while a start / retry is pending - the owner's black screen after a
+        // miss was a retry whose play state never came: the log now says which state it stayed in)
+        if (started_pending && g_scene) {
+            static uint32_t last = ~0u;
+            static uint64_t for_start;
+            uint32_t st = g32(g_scene + 0x280);
+            if (for_start != started_since) for_start = started_since, last = ~0u;
+            if (st != last) {
+                last = st;
+                MLOG("bridge: course scene state %u, %llu frames after the start\n", st, (unsigned long long)(now - started_since));
+            }
+        }
+        if (started_pending && now - started_since > 600 && hundred_flow_ready_to_start()) {
+            char d[256];
+            hundred_flow_describe(d, sizeof d);
+            LOG("[mod] bridge: no play state 10 s after the start: course scene %#llx in state %u (flow: %s)\n",
+                (unsigned long long)g_scene, g_scene ? g32(g_scene + 0x280) : 0, d);
+            course_started("fallback");
+        }
         if (awaiting_next && next_menu_since && now - next_menu_since > 300) {
             // back on the menu after a clear and no map walk: Quit on the result screen, the run is kept
             awaiting_next = false, next_menu_since = 0;
@@ -725,6 +744,7 @@ bool bridge_endless_course(void) {
 }
 
 static void play_exec(Cpu *c) {
+    g_scene = c->x[0];
     // A course loaded underneath the flow's map waits at its first play frame until the flow's card is up
     // (hundred_flow_ready_to_start), so it doesn't run hidden.
     static bool holding;
@@ -757,6 +777,7 @@ static void play_exec(Cpu *c) {
 #define EXPLAIN_EXEC MAIN_ADDR(0x1bbac20)
 static void precheck_exec(Cpu *c) {
     uint64_t s = c->x[0];
+    g_scene = s;
     uint32_t before = g32(s + 0x280);
     guest_call_orig(c, PRECHECK_EXEC);
     static int nlog;
