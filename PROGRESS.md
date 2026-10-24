@@ -19,6 +19,9 @@
     each retry: no leak, removes stay 6 behind adds over 67 retries).
   - Diagnosis now in the log: the 10 s "no play state" fallback dumps every guest thread (and the effect counts);
     long core waits (2 s+) are logged after the first 10 warnings.
+- **Installed:** https://github.com/smm2recomp/smm2recomp/releases/tag/v0.5.1; Mac `/Applications/Super Mario Maker 2.app`
+  0.5.1 (its first start rebuilds the game code); iPad build 327 (installed over the local network with `xcrun devicectl
+  device install app`; not started: the iPad was locked overnight); the private Windows build v0.5.1.
 - **v0.5.0 (earlier the same day):** the start-up hang (pipeline cache), the 100 Mario sound-queue lock, the Super
   Expert R crash, no costume reward window, the setup's Mii data check (#28), Intel Mac support (build from source).
 - **First on resume:** the owner's play on v0.5.1. If 100 Mario still goes black, the iPad's `smm2recomp.log` has a
