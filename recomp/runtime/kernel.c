@@ -140,8 +140,11 @@ static void core_acquire(KThread *t) {
         struct timespec ts;
         deadline(&ts, 250000000);
         if (pthread_cond_timedwait(&t->cond, &g_klock, &ts) != 0 && c->owner != t) {
-            static int warned;
-            if (warned++ < 10 && c->owner)
+            static int warned, warned_long;
+            uint64_t waited = (plat_now_ns() - t0) / 1000000;
+            // (the first ones; and from then on the long ones - a core held for seconds by a thread that makes no
+            // kernel call - so a stall's log says which thread held it)
+            if (c->owner && (warned++ < 10 || (waited >= 2000 && waited < 2300 && warned_long++ < 40)))
                 LOG("[kernel] thread %llu waits %llums for core %d (held by thread %llu, last svc %02x)\n", (unsigned long long)t->id,
                     (unsigned long long)((plat_now_ns() - t0) / 1000000), t->core, (unsigned long long)c->owner->id,
                     c->owner->last_svc & 0xFF);
@@ -326,8 +329,12 @@ uint32_t kernel_current_thread_handle(void) { return t_cur ? t_cur->handle : 0; 
 Cpu *kernel_current_cpu(void) { return t_cur ? &t_cur->cpu : NULL; }
 KThread *kernel_current_thread(void) { return t_cur; }
 
-// A service about to wait in the host (a socket or TLS wait in runtime/services/bsd.c, ssl.c): the calling guest
-// thread gives its core up meanwhile, as a wait in the kernel does, so the other threads of that core run.
+// A service about to wait in the host (a socket or TLS wait in runtime/services/bsd.c, ssl.c; the present's pacing
+// sleep and drawable wait, runtime/nvn/objects.c): the calling guest thread gives its core up meanwhile, as a wait in
+// the kernel does, so the other threads of that core run. (SMM2's render thread paces itself only by presenting:
+// holding its core through the present's sleep, it left that core's WorkerMgr workers of worse priority almost no
+// time; one woken holding the workers' message queue lock never ran, and the sound worker waiting for that lock
+// stopped the game - 100 Mario: a sound after a miss, then silence and a course that never came back.)
 void kernel_host_wait_begin(void) {
     if (!t_cur) return;
     pthread_mutex_lock(&g_klock);

@@ -775,15 +775,17 @@ NVN(nvnQueuePresentTexture) {
         int ow, oh, of;
         uint64_t os;
         (void)game_overlay_image(&ow, &oh, &of, &os);
-    } else {
-        display_pace(w->interval);
     }
+    // (the pacing sleep and the drawable wait are the console's present wait: the thread's core is free meanwhile)
+    kernel_host_wait_begin();
+    if (!g_frame_hidden) display_pace(w->interval);
     if (i >= 0 && i < w->num) {
         pthread_mutex_lock(&g_present_mx);
         backend_present(HOST(NvnTexture, w->textures[i]));
         atomic_store(&g_game_present_ns, plat_now_ns());
         pthread_mutex_unlock(&g_present_mx);
     }
+    kernel_host_wait_end();
 }
 
 // A game thread waiting in a host dialog (runtime/ui/menu.mm menu_keyboard_run) presents the last frame again so the

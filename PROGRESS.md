@@ -1,20 +1,34 @@
 # Progress
 
-## PAUSED 2026-10-24 after v0.5.0 (owner's call: all remaining effort on SMCraft); resume from here
-- **Released v0.5.0** (2026-10-24): https://github.com/smm2recomp/smm2recomp/releases/tag/v0.5.0. Installed on the
-  Mac (`/Applications/Super Mario Maker 2.app` 0.5.0; its first start rebuilds the game code) and the iPad (build 325,
-  installed over the local network with `xcrun devicectl device install app`; it started at 60 fps, and its 18 pipeline
-  files took 23.6 s to load, now in the background). Private Windows build: see below.
-- **In it:** the start-up hang (pipeline cache, below), the 100 Mario sound-queue lock (black screen / "Pure virtual"
-  crash after many misses, see the fade-to-black entry), the Super Expert R crash, no costume reward window, the setup's
-  Mii data check (#28), native Intel Mac support (PR #24, build from source).
-- **First on resume:** the owner's play on v0.5.0. If 100 Mario still goes black after misses, get the iPad's
-  `smm2recomp.log`: "worker queue: the game thread and the worker met" lines, the course scene state and the 10 s
-  fallback line say where it stopped.
-- **Then:** the stuck run after a corrupt first course (`/Volumes/SSD/smm-work/patches/stuckrun_newgame.patch`: New Game when
-  the menu has no Continue; the press didn't land), then the "Next, in order" list further down.
-- **Test tools added today:** `RECOMP_MOD_TEST_PIT=<frames>[:<jitter>]` (a pit miss that far into each attempt),
+## PAUSED 2026-10-24 after v0.5.1 (owner's call: all remaining effort on SMCraft); resume from here
+- **v0.5.1 (2026-10-24 night):** the owner's two v0.5.0 reports (iPad build 325, quick level return on;
+  `research/ipad-v050-2026-10-24/`):
+  - **Black screen after a miss (a sound, then silence): FOUND and fixed.** Reproduced on the Mac (2 of 3 forced-miss
+    runs stalled at the first miss). Thread dumps plus a host `sample` of the stuck game: SMM2's render thread
+    (thread 81, priority 30, core 1) paces itself only by presenting. Our present slept in host code (display pacing,
+    the drawable wait) while still holding its guest core, so the core's WorkerMgr workers of worse priority (85, 92:
+    priority 44/45) almost never ran. One of them, woken and handed the workers' message-queue lock, never ran; the
+    sound worker (thread 90, core 2) waited for that lock for good (in `nn::os::TrySendMessageQueue`), and the course
+    restart waited on sound. Fix: the present gives its core up during those waits (`kernel_host_wait_begin/end`, as the
+    socket waits already do; runtime/nvn/objects.c). On the console that wait is a kernel wait. After it: 6 + 1 runs
+    with forced misses (quick level return on), no stall.
+  - **Crash after a checkpoint and a miss: guarded.** `nn::audio::AddAux` got a sound effect whose send / return
+    buffers were already gone (effect +0x58 / +0x60 null) and wrote through null. Most likely the same starvation:
+    the workers' commands ran after the course's teardown. `mods/audio_guard.c` refuses an effect without buffers (an
+    error result: the game takes it as an effect that couldn't be added) and counts effect adds / removes (logged at
+    each retry: no leak, removes stay 6 behind adds over 67 retries).
+  - Diagnosis now in the log: the 10 s "no play state" fallback dumps every guest thread (and the effect counts);
+    long core waits (2 s+) are logged after the first 10 warnings.
+- **v0.5.0 (earlier the same day):** the start-up hang (pipeline cache), the 100 Mario sound-queue lock, the Super
+  Expert R crash, no costume reward window, the setup's Mii data check (#28), Intel Mac support (build from source).
+- **First on resume:** the owner's play on v0.5.1. If 100 Mario still goes black, the iPad's `smm2recomp.log` has a
+  thread dump at the fallback line; `[kernel] thread N waits ...ms for core` lines say which thread held a core.
+- **Then:** the stuck run after a corrupt first course (`/Volumes/SSD/smm-work/patches/stuckrun_newgame.patch`: New Game
+  when the menu has no Continue; the press didn't land), then the "Next, in order" list further down.
+- **Test tools:** `RECOMP_MOD_TEST_PIT=<frames>[:<jitter>]` (a pit miss that far into each attempt),
   `RECOMP_MOD_MISS_MASH`, `tools/death_course.py`, `LARECOMP_PIPELINE_FILE=<n>`.
+- **Private Windows build:** `~/Documents/Dev/SMM2-private/SMM2-windows-x64-<version>-WITH-GAME.zip`, made with
+  `/Volumes/SSD/smm-work/winready/build50.sh`-style scripts (a worktree at the tag, `src<NN>`) and `assemble46.sh <tag>`.
 
 ## Start-up hang (2026-10-24): FOUND and fixed; it was the pipeline cache, not the generated code
 - The hang after today's regeneration was a **63 MB merged Metal pipeline archive** (`cache/pipelines/0221.bin`,

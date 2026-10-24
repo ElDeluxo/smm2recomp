@@ -396,6 +396,14 @@ static void *driver(void *arg) {
             hundred_flow_describe(d, sizeof d);
             LOG("[mod] bridge: no play state 10 s after the start: course scene %#llx in state %u (flow: %s)\n",
                 (unsigned long long)g_scene, g_scene ? g32(g_scene + 0x280) : 0, d);
+            // (what every guest thread waits for: the owner's black screen after a retry, where the play state never
+            // came - the next occurrence's log says where the game stopped)
+            static int dumps;
+            if (dumps++ < 3) {
+                extern void kernel_dump_threads(void);
+                extern void audio_guard_report(const char *when);
+                kernel_dump_threads(), audio_guard_report("no play state");
+            }
             course_started("fallback");
         }
         if (awaiting_next && next_menu_since && now - next_menu_since > 300) {
@@ -902,6 +910,8 @@ void bridge_event(const char *what, uint32_t d) {
     } else if (!strcmp(what, "retry")) {  // (hooks.c: the course is set up again after a miss / Start Over)
         drv = DRV_COURSE, drv_since = renderer_present_count();  // (the autoplay's skip time counts on)
         LOG("[mod] bridge: the course again (retry)\n");
+        extern void audio_guard_report(const char *when);  // (audio_guard.c: effects added / removed so far)
+        audio_guard_report("retry");
         started_since = renderer_present_count(), started_pending = true;
     } else if (!strcmp(what, "clear") || !strcmp(what, "clear_last")) {
         // (the result screen's comment button wants the course's "comments on" flag, course global +0x860 [inf,
@@ -1183,6 +1193,8 @@ static void tab_probe(Cpu *c) {
 }
 
 void bridge_register(void) {
+    extern void audio_guard_register(void);  // (audio_guard.c)
+    audio_guard_register();
     hle_override(MENU_DISP_EXEC, menu_disp, "mod: Endless menu Disp (bridge)");
     hle_override(SEQ_ACTIVATE_EXEC, seq_activate, "mod: Course World's Endless Activate (bridge)");
     hle_override(FADE_OUT_ENTER, fade_out, "mod: scene fade Out (bridge)");
