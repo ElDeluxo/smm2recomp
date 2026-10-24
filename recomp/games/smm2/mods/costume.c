@@ -248,6 +248,12 @@ const char *costume_reward_pick(int difficulty) {
 }
 // ending.c's weak hook: the run is won (the reward itself is drawn by the ending, which asks costume_reward_pick)
 void hundred_costume_reward(int difficulty) { (void)difficulty; }
+// The costume reward after a won 100 Mario run, off by default (owner, 2026-10-24: any costume can be chosen in Try it
+// now, so the reward unlocks nothing worth a window): costume_reward=1 in smm2mods.ini, or RECOMP_COSTUME_REWARD=1
+bool costume_reward_on(void) {
+    const char *e = getenv("RECOMP_COSTUME_REWARD");
+    return costumes_on() && (e ? atoi(e) != 0 : ini_int("costume_reward", 0) != 0);
+}
 
 bool smb1_course(void) {
     uint64_t g = g64(STYLE_PTR);

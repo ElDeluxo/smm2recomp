@@ -600,6 +600,11 @@ Setup failures first, since they block new players:
   (Normal, NSMBU) Peach and her line at 60 fps. Music is chosen by difficulty and style as in the spec (not
   listened to). Not compared in Cemu this round.
 
+### Owner's v0.4.8 reports (2026-10-23 evening, iPad)
+- ✅ **No costume reward after a won 100 Mario run** (owner: costumes can be picked at will in Try it now, so the reward
+  unlocks nothing): the reward window and its pick are off by default; `costume_reward=1` in smm2mods.ini or
+  `RECOMP_COSTUME_REWARD=1` brings them back (costume.c costume_reward_on; ending.c asks it before picking).
+
 ### Owner's v0.4.7 report (2026-10-23, iPad)
 - ✅ **Memory climbing to ~12 GB until the app was killed** (100 Mario Expert, a 3D World castle; "maybe from the
   Cat Suit"):

@@ -11,7 +11,8 @@
 //    SMM2's own course card (Play_CourseIn_00 from the game's romfs: the yellow course-name banner with the course ID
 //    and the maker underneath, no Mii, no flag), placed where SMM1's row is on each frame, so the roll keeps SMM1's
 //    timing.
-//    180 frames after the credits the Mystery Mushroom costume window opens (the costumes mod: hundred_costume_reward).
+//    180 frames after the credits the Mystery Mushroom costume window opens (the costumes mod: hundred_costume_reward;
+//    off unless costume_reward=1: costume.c costume_reward_on).
 // Neither scene reads the controller: nothing skips [obs].
 #include "ending.h"
 
@@ -27,6 +28,8 @@ __attribute__((weak)) void hundred_costume_reward(int difficulty) { (void)diffic
 // the costumes mod (mods/costume.c): a costume not owned yet for the won run, NULL without the mod or when none is left
 // (tests without the mod: RECOMP_HUNDRED_TEST_REWARD=<res>)
 __attribute__((weak)) const char *costume_reward_pick(int difficulty) { (void)difficulty; return getenv("RECOMP_HUNDRED_TEST_REWARD"); }
+// (the reward is off unless asked for: costume.c costume_reward_on; the offline test tool's reward test asks by its env)
+__attribute__((weak)) bool costume_reward_on(void) { return getenv("RECOMP_HUNDRED_TEST_REWARD") != NULL; }
 void costume_name(const char *res, char *name, size_t cap, char *title, size_t tcap);  // costume_gen.c
 int costume_sprite(const char *res);
 __attribute__((weak)) int hundred_ending_costume(void) { return -1; }  // costume id at the goal (-1 none)
@@ -168,7 +171,7 @@ int ending_step(Ending *e, const UiIn *in) {
     if (e->tick >= e->end && !e->reward_asked) {  // 180 frames after the credits: the Mystery Mushroom reward
         e->reward_asked = true;
         hundred_costume_reward(e->d);
-        const char *res = costume_reward_pick(e->d);
+        const char *res = costume_reward_on() ? costume_reward_pick(e->d) : NULL;  // (off: the ending goes straight on)
         if (res && (e->cm = lay_open("Cmn_CMListWindow_01"))) {
             char name[96], title[128];
             costume_name(res, name, sizeof name, title, sizeof title);

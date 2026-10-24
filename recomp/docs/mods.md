@@ -942,7 +942,8 @@ A Mods-tab switch, "Mystery Mushroom costumes", off by default (`costumes=0/1` i
   plays).
 - **Sub-areas:** the player object and its model stay through a pipe to the sub-area and back, so the costume stays
   on (checked: main → sub → main → sub on the test course's `--variant subarea`).
-- **Reward:** after a won 100 Mario run, SMM1's costume window (`Cmn_CMListWindow_01`, `smm1/ending.c`) shows one
+- **Reward (off by default since 2026-10-24, owner: any costume can be chosen in Try it now; `costume_reward=1` in
+  smm2mods.ini or `RECOMP_COSTUME_REWARD=1` turns it back on):** after a won 100 Mario run, SMM1's costume window (`Cmn_CMListWindow_01`, `smm1/ending.c`) shows one
   costume not owned yet, from SMM1's pools by difficulty; owned costumes are kept in `costumes-owned.txt`. The
   window's frame is a four-frame window whose bottom frame is flipped; the layout player now anchors each frame's
   texture at its corner as nw::lyt does (`lyt_player.c` `frame4_uv`), which drew the lower-right frame cut off
