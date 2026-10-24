@@ -548,6 +548,14 @@ framework ideas; Ryujinx as the reference). Nothing counts as done without the e
     went). Cross-compiled for Windows and Linux; not run on a Vulkan machine.
 
 ### GitHub issues (triaged 2026-10-22; owner: no replies needed, fix what they reveal)
+- 🔄 **Windows: Vulkan "device lost" at the same moment in story mode's level 87** (#30, 2026-10-23; a screenshot:
+  `vkWaitSemaphores: -4 (device lost)`, guest frames 70002abc00 / 700061f700 ...): a GPU fault on the player's GPU, at a
+  fixed point. Version unknown (v0.4.7 and earlier had the 128 MB storage-buffer range on some GPUs: the SM35 memory
+  fix landed in v0.4.7). Next: play story level 87 under lavapipe with validation (`tools/linux_vk_docker.sh`) once a
+  save that reaches it exists.
+- ✅ (likely) **The game froze when the system keyboard was needed** (#21, v0.4.4, naming a level): the keyboard's
+  re-present raced the game's own presents (fixed in v0.4.5, `nvn_represent`, for every backend).
+- ⬜ **Bazzite (Linux) stuck at 18 fps** (#25): no log yet; another tester gets 60 on Windows with integrated graphics.
 - ✅ **Linux: "stopped because of an error" right after the first start** (#28, 2026-10-23): the game asked for the
   console's Mii data (system title 0100000000000802) and the data folder's `sysdata/0100000000000802` was empty: setup
   had found the title in the firmware but hactool extracted nothing (the keys open the header, not the contents - an
