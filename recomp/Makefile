@@ -174,7 +174,11 @@ else ifeq ($(PLATFORM),macos)
 HOMEBREW := $(if $(filter x86_64,$(ARCH)),/usr/local,/opt/homebrew)
 SDL      := $(or $(DEPS),$(HOMEBREW)/opt/sdl3)
 FFMPEG   := $(or $(DEPS),$(HOMEBREW)/opt/ffmpeg)
+# (only when set: an empty append would leave a trailing space in GENFLAGS, which is part of GAMELIB_ID, and make
+# every Apple silicon player's game code library be rebuilt)
+ifneq ($(GENARCH),)
 GENFLAGS += $(GENARCH)
+endif
 EXE      := $(B)/$(GAME_ID)recomp
 DEPINC   := -I$(SDL)/include -I$(FFMPEG)/include
 LDFLAGS  := -L$(SDL)/lib -lSDL3 -Wl,-rpath,$(SDL)/lib $(if $(FFMPEG_LIBS),-L$(FFMPEG)/lib $(FFMPEG_LIBS) -Wl$(comma)-rpath$(comma)$(FFMPEG)/lib) \

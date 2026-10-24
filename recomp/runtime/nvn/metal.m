@@ -793,10 +793,13 @@ static void wrap_guest_heap(void) {
     for (int i = 0; i < 4; i++) g_guest_chunks[i] = nil;
     g_guest_chunk_count = 0;
     g_guest_wrapped = 0;
-    uint64_t len = GUEST_CHUNK_MAX;
+    // Apple GPUs keep one buffer over the whole heap (or the device's largest, from the heap's start: iOS), as before:
+    // global-memory shaders (GMEM_BUFFER_INDEX) and texture readbacks reach all of it there. Chunks only elsewhere.
+    bool one = [dev supportsFamily:MTLGPUFamilyApple2];
+    uint64_t len = one ? HEAP_MAX : GUEST_CHUNK_MAX;
     if ((uint64_t)dev.maxBufferLength < len) len = (uint64_t)dev.maxBufferLength & ~0x3fffull;
     g_guest_chunk_len = len;
-    while (len && g_guest_wrapped < HEAP_MAX && g_guest_chunk_count < 4) {
+    while (len && g_guest_wrapped < HEAP_MAX && g_guest_chunk_count < (one ? 1 : 4)) {
         uint64_t n = HEAP_MAX - g_guest_wrapped < len ? HEAP_MAX - g_guest_wrapped : len;
         id<MTLBuffer> b = [dev newBufferWithBytesNoCopy:(void *)(uintptr_t)(HEAP_BASE + g_guest_wrapped)
                                                 length:n options:MTLResourceStorageModeShared deallocator:nil];
@@ -1488,6 +1491,7 @@ void backend_present(NvnTexture *t) {
                 float cv[8] = {0, 0, 0, 0, 0, 0, 1, 1};
                 [ce setRenderPipelineState:present_pipe];
                 [ce setVertexBytes:cv length:sizeof cv atIndex:0];
+                { float zero[4] = {0, 0, 0, 0}; [ce setFragmentBytes:zero length:sizeof zero atIndex:1]; }  // (fs: no solid)
                 [ce setFragmentTexture:from atIndex:0];
                 [ce setFragmentSamplerState:present_sampler atIndex:0];
                 [ce drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];

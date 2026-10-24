@@ -154,8 +154,11 @@ static void st_defaults(void) {
     for (int i = 0; i < 8; i++) { st.blend[i][1] = 2; st.blend[i][2] = 1; st.blend[i][3] = 2; st.blend[i][4] = 1; st.blend[i][5] = 1; st.blend[i][6] = 1; }
 }
 
+static bool swizzle_view_supported(void);
 void renderer_init(id<MTLDevice> d) {
     dev = d;
+    // the translated shaders apply texture swizzles only where the driver has no swizzle views (TSWZ_BUFFER_INDEX)
+    maxwell_msl_tex_swizzle = !swizzle_view_supported();
     { const char *m = getenv("LARECOMP_AHEAD"); shader_ahead_set_enable(!m || strcmp(m, "0")); }  // (shader_ahead.h)
     cache = [NSMutableDictionary new];
     st_defaults();
@@ -1265,7 +1268,8 @@ static void pipeline_cache_merge(int upto, int into) {  // (on g_archive_q)
 static bool pipeline_archives_usable(void) {
     static int ok = -1;
     if (ok < 0) {
-        ok = [dev supportsFamily:MTLGPUFamilyMac2] ? 1 : 0;
+        // (Apple GPUs always have them: iPhones' and iPads' are not all in the Mac2 family)
+        ok = [dev supportsFamily:MTLGPUFamilyApple2] || [dev supportsFamily:MTLGPUFamilyMac2] ? 1 : 0;
         if (!ok) LOG("[shader] this driver has no Metal binary archives: pipelines are compiled on each run\n");
     }
     return ok == 1;
@@ -2236,7 +2240,7 @@ static void bind_textures(int stage, ShaderInfo *si) {
         if (stage == 0) { [enc setVertexTexture:tex atIndex:i]; [enc setVertexSamplerState:smp atIndex:i]; }
         else { [enc setFragmentTexture:tex atIndex:i]; [enc setFragmentSamplerState:smp atIndex:i]; }
     }
-    if (si->ntex) {
+    if (si->ntex && maxwell_msl_tex_swizzle) {
         if (stage == 0) [enc setVertexBytes:swz length:(NSUInteger)si->ntex * 16 atIndex:TSWZ_BUFFER_INDEX];
         else [enc setFragmentBytes:swz length:(NSUInteger)si->ntex * 16 atIndex:TSWZ_BUFFER_INDEX];
     }
@@ -2465,7 +2469,7 @@ static void dispatch_compute(uint32_t gx, uint32_t gy, uint32_t gz) {
         for (int i = 0; i < si->ntex && i < 64; i++) { rs[1 + i][0] = tex_sc[0][i][0]; rs[1 + i][1] = tex_sc[0][i][1]; }
         [ce setBytes:rs length:(NSUInteger)(1 + si->ntex) * 16 atIndex:RSCALE_BUFFER_INDEX];
     }
-    if (si->ntex) [ce setBytes:swz length:(NSUInteger)si->ntex * 16 atIndex:TSWZ_BUFFER_INDEX];
+    if (si->ntex && maxwell_msl_tex_swizzle) [ce setBytes:swz length:(NSUInteger)si->ntex * 16 atIndex:TSWZ_BUFFER_INDEX];
     CST("dispatch");
     extern bool g_debug_frame;
     if (g_debug_frame) {

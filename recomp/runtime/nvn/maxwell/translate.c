@@ -24,6 +24,7 @@
 
 uint64_t maxwell_gmem_base, maxwell_gmem_size;
 bool maxwell_glsl_bda, maxwell_glsl_gmap_gfx;
+bool maxwell_msl_tex_swizzle;  // (shader.h TSWZ_BUFFER_INDEX)
 const uint8_t *maxwell_dbg_code;
 uint32_t maxwell_dbg_pc;
 int maxwell_dbg_reg;
@@ -514,7 +515,7 @@ static const char *tex_type_name(int t) {
 static void write_tex_result(Ctx *c, int slot, const char *call, uint32_t mask, int d0, int d1, bool texs, bool f16) {
     // (the texture's channel swizzle: identity where Metal applies it as a texture view, the shader's job where the
     // driver has no swizzle views - Intel Macs' NVIDIA driver: see renderer_swizzle_row)
-    if (c->glsl) sp(&c->body, "    { float4 t = %s;\n", call);
+    if (c->glsl || !maxwell_msl_tex_swizzle) sp(&c->body, "    { float4 t = %s;\n", call);
     else sp(&c->body, "    { float4 t = tex_swz(%s, tswz[%d]);\n", call, slot);
     if (f16) {
         // TEXS/TLDS .F16: components (in mask order) packed as half pairs into d0 (lo, hi) and d1 (lo, hi)
@@ -2301,7 +2302,7 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
     sp(&s, "static inline uint hpack(float2 r, uint merge, uint old) { if (merge == 1u) return as_type<uint>(r.x); half2 o = as_type<half2>(old), n = half2(r); if (merge == 2u) o.x = n.x; else if (merge == 3u) o.y = n.y; else o = n; return as_type<uint>(o); }\n");
     sp(&s, "static inline uint prmt(uint a, uint b, uint sel) { uint r = 0; for (uint i = 0; i < 4; i++) { uint s = (sel >> (i * 4)) & 7u; uint byte = s < 4 ? (a >> (s * 8)) & 0xFFu : (b >> ((s - 4) * 8)) & 0xFFu; r |= byte << (i * 8); } return r; }\n");
     // The texture's channel swizzle (identity where the driver applies it as a texture view: see renderer_swizzle_row).
-    if (info->ntex)
+    if (info->ntex && maxwell_msl_tex_swizzle)
         sp(&s, "static inline float4 tex_swz(float4 v, uint4 s) { return float4("
                "s.x == 0u ? 0.0f : s.x == 1u ? 1.0f : v[s.x - 2u], "
                "s.y == 0u ? 0.0f : s.y == 1u ? 1.0f : v[s.y - 2u], "
@@ -2370,7 +2371,7 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
         sp(&args, ", constant float4 *ltint [[buffer(19)]]");
         info->uses_tint = true;
     }
-    if (info->ntex) {
+    if (info->ntex && maxwell_msl_tex_swizzle) {
         sp(&args, ", constant uint4 *tswz [[buffer(%d)]]", TSWZ_BUFFER_INDEX);
         sp(&fnp, ", constant uint4 *tswz");
         sp(&fna, ", tswz");

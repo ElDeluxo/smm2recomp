@@ -2163,6 +2163,7 @@ should be the picture the player is most likely to see next. A card that refresh
 path (the card update main+0x1a2cec0, the image-job worker main+0x17b78f0), not traced yet.
 **Would change:** the card's own picture refresh found (a late picture would show at once); TGRCode offering several
 pictures a request or a higher limit; our own server holding the pictures (then all of this is local).
+
 ## 2026-10-22 — macOS x86-64 builds natively, with the portable-C lowering
 
 **Decision:** macOS is a native-only target: `make` builds for the host architecture (`uname -m`), so an Intel
