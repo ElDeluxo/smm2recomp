@@ -627,6 +627,17 @@ Setup failures first, since they block new players:
   walked into a wall: no quick deaths). Next: a forced-miss test switch (the game's own player death request, so a miss
   comes every few seconds on the same course) to run hundreds of A-mashed cycles, with and without quick level
   return; and the iPad's log when it happens again (the watchdog lines say which state stuck).
+  **2026-10-24, the iPad's own logs** (`research/ipad-2026-10-24/`, from this morning): both sessions show the owner's
+  case - 9 and 18 misses in a row on one course (Super Expert), A tapped each time - and both end the same way: after
+  the last miss SMM2 sets the course up again ("the course again (retry)") but its play state never comes; the bridge
+  calls it on screen only by its fallback, and the game sits on a light screen (about 7,400 draws in 2 s, against
+  30,000+ while playing; black to the owner) until the app went to the background. With quick level return off (the
+  9-miss session) and on (the 18-miss one: its fast-forward never saw the restart and gave up). So it is the course's
+  start after a retry, not the card or the veil; the hang came on the 10th and the 19th attempt.
+  Mac test: `tools/death_course.py` builds a pit course (a miss every few seconds); with RECOMP_MOD_TEST_BREAK it is the
+  run's first course: 55 A-mashed misses on it, no hang (Easy, quick level return off). Next: the same with quick
+  level return on and on Super Expert; log which play state the course's scene is in when it sticks (the play
+  scene's state at +0x280, as the pre-check logging does) so the next iPad occurrence says where it stopped.
 - ⬜ (stuck run after a corrupt first course) a partial fix - New Game when the menu has no Continue - is saved in
   the scratchpad (`stuckrun_newgame.patch`): the bridge chose New Game but its press didn't land; to finish.
 - ⬜ **A run whose first course is corrupt gets stuck** (found 2026-10-24 while testing the Super Expert crash): the
