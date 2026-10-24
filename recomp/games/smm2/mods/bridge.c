@@ -160,6 +160,71 @@ static void switch_test(uint64_t now) {
     else if (c == 't') touch_test(400, 40, true), tap_down = true;
 }
 
+// (test) RECOMP_MOD_MISS_MASH=<from>:<to>[:<keys>[:<jitter>]]: after each miss, from <from> to <to> presented frames
+// on (both later by 0..<jitter> frames, a different amount each miss), the
+// player's own presses as a real player makes them (key events through the bindings; taps on the touch screen):
+// one of <keys> every 8 frames in turn (a the A key, b the B key, t a tap mid-screen, w / W a swipe left / right, p Plus,
+// m Minus, y Y, . none),
+// held 4 frames ("ab" by default). With it, every 2 s a line says where the run is (the hang watch's evidence).
+static volatile uint64_t miss_at;
+static volatile uint64_t endless_play_at;
+extern _Atomic int g_present_hidden;  // runtime/nvn/objects.c (quick level return)
+static void miss_mash(uint64_t now) {
+    static const char *spec;
+    static bool read;
+    static long from0, to0, jitter, from, to;
+    static char keys[32] = "ab";
+    if (!read) {
+        read = true, spec = getenv("RECOMP_MOD_MISS_MASH");
+        if (spec) sscanf(spec, "%ld:%ld:%31[^:]:%ld", &from0, &to0, keys, &jitter);
+        from = from0, to = to0;
+    }
+    if (!spec) return;
+    static uint64_t logged;
+    if (now - logged >= 120) {
+        logged = now;
+        char d[256];
+        hundred_flow_describe(d, sizeof d);
+        LOG("[mod] mash watch: frame %llu, miss %lld ago, play state %lld ago, started pending %d, hidden %d, drv %d "
+            "(flow: %s)\n", (unsigned long long)now, miss_at ? (long long)(now - miss_at) : -1LL,
+            endless_play_at ? (long long)(now - endless_play_at) : -1LL, started_pending, (int)g_present_hidden,
+            drv, d);
+    }
+    static uint64_t shots_for;  // (shots of what shows: 5, 10, 20 s after each miss)
+    if (miss_at && shots_for != miss_at) {
+        static long n;
+        long j = jitter > 0 ? (n++ * 53) % (jitter + 1) : 0;
+        from = from0 + j, to = to0 + j;
+        LOG("[mod] mash: frames %ld..%ld after this miss, '%s'\n", from, to, keys);
+        shots_for = miss_at, mod_shot("mash5", 300), mod_shot("mash10", 600), mod_shot("mash20", 1200);
+    }
+    extern void input_test_key(const char *name, bool down);  // runtime/hle/input.c
+    extern void touch_test(int32_t x, int32_t y, bool down);  // runtime/hle/touch.c
+    static const char *key_down;
+    static bool tap_down;
+    static int32_t tap_x;
+    long t = miss_at ? (long)(now - miss_at) : -1;
+    bool in = t >= from && t < to;
+    long k = in ? (t - from) / 8 : -1, ph = in ? (t - from) % 8 : 8;
+    if (ph >= 4 || !in) {
+        if (key_down) input_test_key(key_down, false), key_down = NULL;
+        if (tap_down) touch_test(tap_x, 360, false), tap_down = false;
+        return;
+    }
+    char c = keys[k % (long)strlen(keys)];
+    if (c == 'w' || c == 'W') {  // (a swipe across the screen: left, or W right, over the 4 frames)
+        long x = c == 'w' ? 1000 - ph * 200 : 280 + ph * 200;
+        tap_x = (int32_t)x, touch_test(tap_x, 360, true), tap_down = true;
+        return;
+    }
+    if (key_down || tap_down) return;
+    if (c == 't') tap_x = 640, touch_test(640, 360, true), tap_down = true;
+    else if (c != '.') {
+        const char *n = c == 'a' ? "K" : c == 'b' ? "J" : c == 'p' ? "Return" : c == 'm' ? "Backspace" : c == 'y' ? "I" : NULL;
+        if (n) input_test_key(key_down = n, true);
+    }
+}
+
 static void *driver(void *arg) {
     (void)arg;
     const char *ap = getenv("RECOMP_MOD_AUTOPLAY");
@@ -173,6 +238,7 @@ static void *driver(void *arg) {
         uint64_t now = renderer_present_count(), t = now - drv_since, b = 0;
         if (mod_hundred_offered()) switch_sample(&sw_prev_b, &sw_prev_touch, now);
         switch_test(now);
+        miss_mash(now);
         if ((drv == DRV_NEW_GAME || drv == DRV_CONTINUE) && tab_target >= 0 && now - menu_seen > 10) {
             // (not on SMM2's Endless menu yet, e.g. still leaving the last run: wait for it)
             static uint64_t logged;
@@ -652,7 +718,6 @@ static void course_started(const char *why) {
 
 // The course being played is an Endless / 100 Mario run's (SMM2's Endless and SMM1's 100 Mario keep records): the
 // Endless scene's play state ran within a few frames of the last player update (games/smm2/trace.c, lanky.c).
-static volatile uint64_t endless_play_at;
 bool bridge_endless_course(void) {
     extern uint64_t lanky_last_player_update(void);
     uint64_t p = lanky_last_player_update(), e = endless_play_at;
@@ -680,6 +745,45 @@ static void play_exec(Cpu *c) {
     endless_play_at = renderer_present_count();
     if (started_pending) course_started("play state");
     guest_call_orig(c, PLAY_EXEC);
+}
+
+// ---- SMM2's skip hint (cExplainSlidePass, play state 0x10): on the 4th attempt at a course (after 3 misses) SMM2
+// explains the skip in a window before the course plays, while the player has skipped fewer than 3 times
+// (research/specs/endless-challenge.md 2.5). PreCheck (state 0x0f, exec main+0x1bba8d0) decides it once the scene
+// fade is done; the window's state waits for its answer (message 6) [obs main+0x1bbac20].
+// (test) RECOMP_MOD_TEST_SKIP_HINT=1: the hint comes at the next course start, whatever the attempt.
+#define PRECHECK_EXEC MAIN_ADDR(0x1bba8d0)
+#define EXPLAIN_ENTER MAIN_ADDR(0x1bbab80)
+#define EXPLAIN_EXEC MAIN_ADDR(0x1bbac20)
+static void precheck_exec(Cpu *c) {
+    uint64_t s = c->x[0];
+    uint32_t before = g32(s + 0x280);
+    guest_call_orig(c, PRECHECK_EXEC);
+    static int nlog;
+    if (getenv("RECOMP_MOD_TEST_SKIP_HINT") && nlog < 6 && before != g32(s + 0x280))
+        nlog++, LOG("[mod] bridge: (test) pre-check state %u -> %u, run %llx\n", before, g32(s + 0x280), (unsigned long long)g64(RUN_OBJECT));
+    static int force = -1;
+    if (force < 0) force = getenv("RECOMP_MOD_TEST_SKIP_HINT") && atoi(getenv("RECOMP_MOD_TEST_SKIP_HINT"));
+    uint64_t run = g64(RUN_OBJECT);
+    if (before != 3 && g32(s + 0x280) == 3 && run)
+        MLOG("bridge: course pre-check (run from the menu %u, hint shown %u, attempt %u)\n", g8(run + 0x49),
+             g8(run + 0x4a), g8(run + 0x4b));
+    if (force && before == 2 && g32(s + 0x280) == 3 && run && !g8(run + 0x4a)) {
+        LOG("[mod] bridge: (test) SMM2's skip hint on this attempt\n");
+        s8(run + 0x4a, 1);
+        change_state(c, s + 0x238, 0x10);
+    }
+}
+static void explain_enter(Cpu *c) {
+    LOG("[mod] bridge: SMM2's skip hint window (4th attempt)\n");
+    mod_shot("hint", 30), mod_shot("hint", 120);
+    guest_call_orig(c, EXPLAIN_ENTER);
+}
+static void explain_exec(Cpu *c) {
+    uint64_t s = c->x[0];
+    guest_call_orig(c, EXPLAIN_EXEC);
+    static uint64_t logged_for;
+    if (g32(s + 0x280) == 4 && logged_for != started_since) logged_for = started_since, LOG("[mod] bridge: the skip hint answered\n");
 }
 
 bool bridge_take_start_over(void) {  // endless.c: the life being posted is a Start Over
@@ -748,6 +852,7 @@ void bridge_event(const char *what, uint32_t d) {
         drv = DRV_COURSE, drv_since = course_since = renderer_present_count();
         started_since = renderer_present_count(), started_pending = true;
     } else if (!strcmp(what, "miss")) {
+        miss_at = renderer_present_count();
         drv = DRV_COURSE, drv_since = renderer_present_count();  // (SMM2 retries the course by itself)
         result(HUNDRED_MISS);
     } else if (!strcmp(what, "retry")) {  // (hooks.c: the course is set up again after a miss / Start Over)
@@ -1040,6 +1145,9 @@ void bridge_register(void) {
     hle_override(FADE_BLACK_ENTER, fade_black, "mod: scene fade black (bridge)");
     hle_override(PAUSE_EXEC, pause_exec, "mod: Endless pause (bridge)");
     hle_override(PLAY_EXEC, play_exec, "mod: Endless play state (bridge)");
+    hle_override(PRECHECK_EXEC, precheck_exec, "mod: Endless play cPreCheck (bridge)");
+    hle_override(EXPLAIN_ENTER, explain_enter, "mod: Endless play cExplainSlidePass enter (bridge)");
+    hle_override(EXPLAIN_EXEC, explain_exec, "mod: Endless play cExplainSlidePass (bridge)");
     hle_override(MENU_DISAPPEAR_EXEC, menu_disappear, "mod: Endless menu Disappear (bridge)");
     hle_override(END_NEXT_SCENE_ENTER, end_next_scene, "mod: course end cNextScene (bridge)");
     hle_override(END_ENDLESS_STATUS_ENTER, end_endless_status, "mod: course end cEndlessMode_GetStatus (bridge)");

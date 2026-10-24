@@ -616,6 +616,17 @@ Setup failures first, since they block new players:
   listened to). Not compared in Cemu this round.
 
 ### Owner's v0.4.8 reports (2026-10-23 evening, iPad)
+- 🔄 **The 100 Mario fade-to-black after a death came back** (owner, 2026-10-23/24: after dying on the same course
+  several times and tapping A each time to get back in quickly; with and without quick level return). Not reproduced
+  yet on the Mac: 77 misses with A / B / touch / swipe mashing from the death to the course's return (quick level return
+  on in a third of the runs), no hang. New test tools (bridge.c): `RECOMP_MOD_MISS_MASH=<from>:<to>[:<keys>[:<jitter>]]`
+  presses as a player after each miss and logs a "mash watch" line every 2 s (miss age, play state age, the flow's
+  state, quick level return's hidden frames). Ruled out so far: SMM2's skip hint on the 4th attempt hiding under the
+  card - in 100 Mario the course's pre-check goes straight from state 2 to 4, the hint's state never comes
+  (`RECOMP_MOD_TEST_SKIP_HINT=1` logs it). Next: repeated misses on one course with A only, many cycles; the iPad's
+  log when it happens again (the watchdog lines say which state stuck).
+- ⬜ (stuck run after a corrupt first course) a partial fix - New Game when the menu has no Continue - is saved in
+  the scratchpad (`stuckrun_newgame.patch`): the bridge chose New Game but its press didn't land; to finish.
 - ⬜ **A run whose first course is corrupt gets stuck** (found 2026-10-24 while testing the Super Expert crash): the
   recovery presses Continue, but SMM2's menu shows no Continue for a run with no clears yet (test course
   5JM-KJ2-Q9G triggers it).
