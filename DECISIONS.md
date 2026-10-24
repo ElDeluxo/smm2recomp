@@ -2163,3 +2163,56 @@ should be the picture the player is most likely to see next. A card that refresh
 path (the card update main+0x1a2cec0, the image-job worker main+0x17b78f0), not traced yet.
 **Would change:** the card's own picture refresh found (a late picture would show at once); TGRCode offering several
 pictures a request or a higher limit; our own server holding the pictures (then all of this is local).
+
+## 2026-10-22 — macOS x86-64 builds natively, with the portable-C lowering
+
+**Decision:** macOS is a native-only target: `make` builds for the host architecture (`uname -m`), so an Intel
+Mac builds an x86-64 executable and `.app` without a cross toolchain. The host architecture also selects the game
+code's FP/SIMD lowering: the generated code's inline asm on Apple silicon (`generated/smm2`, `--simd asm`), the
+portable-C lowering on x86-64 (`generated/smm2-c`, `--simd c`), the same one Windows / Linux x64 use, built with
+`-march=x86-64-v3` (AVX2 + BMI2/FMA, checked at startup by `require_cpu()` in `runtime/platform/macos.c`; a CPU
+without them gets a message instead of an illegal instruction). Homebrew paths are detected for both prefixes
+(`/opt/homebrew` and `/usr/local`), and the tool scripts (`bundle_macos.sh`, `build_deps_macos.sh`,
+`build_hactool.sh`, `fetch_python.sh`, `fetch_zig.sh`, `package_lib.sh`) and `requirements-gen.txt` take
+`macos-x86_64` where they took `macos-arm64`.
+**Why:** the recompiler emits host code and the Metal layer is host architecture-agnostic, so an Intel build is the
+same pipeline with a different code generator; the x86-64 SIMD asm lowering doesn't exist yet, and the portable-C
+one is proven on Windows / Linux x64 (the SIMD differential test passes for `x86_64-macos` with zig cc: 3000
+encodings, 35988 cases).
+**Would change:** an x86-64 inline-asm lowering (for speed and to match the other platforms' code shape), or a
+universal (arm64 + x86-64) `.app`.
+
+## 2026-10-22 — ASTC is decoded on the CPU where the Metal GPU has no ASTC textures
+
+**Decision:** at backend init the Metal renderer sets `g_astc_soft` unless the device reports the Apple GPU family
+(`supportsFamily:MTLGPUFamilyApple2`; `RECOMP_ASTC_SOFT=1|0` overrides it). In that mode `mtl_format` maps NVN's
+ASTC LDR formats (`0x79`-`0x94`) to `RGBA8Unorm` / `RGBA8Unorm_sRGB` (the sRGB half of the range), and
+`upload_texture` decodes each level's blocks with `runtime/nvn/astc.c` (the decoder the Vulkan path already uses)
+before uploading, per depth slice.
+**Why:** opening the Course World on a Metal 2-only Intel Mac (NVIDIA GT 755M, GPU family Common1/2) aborted in
+`-[MTLTextureDescriptorInternal validateWithDevice:]` with "invalid pixelFormat (204)" (`ASTC_4x4_LDR`); Metal
+validates descriptor formats at creation and there is no support query that would let the renderer fall back per
+texture. The alternatives were to guess from the device name / `Mac2` (the GT 755M reports `Mac2 = 0`, but older
+Intel GPUs are ambiguous) or to decode always. Checking Apple GPU families is exact for the GPUs that have ASTC and
+falls back to a known-correct (just slower at upload) path elsewhere; Intel Macs with native ASTC merely lose a
+one-time hardware decode.
+**Would change:** a per-pixel-format support query arriving in Metal, or Intel Macs' upload cost mattering enough
+to allow `Mac2` devices through after checking their vendor another way.
+
+## 2026-10-22 — Packed 16-bit colour textures are decoded on the CPU where the Metal GPU rejects them
+
+**Decision:** the same non-Apple-GPU test that turns on the ASTC fallback turns on `g_soft16`
+(`RECOMP_SOFT16=1|0` overrides it). `mtl_format` then maps NVN's packed colour formats — RGBA4 `0x39`, RGB5 `0x3a`,
+RGB5A1 `0x3b`, RGB565 `0x3c` (and the BGR5 variants `0x95`-`0x97`, which the Metal path already maps to `A1BGR5`) — to
+`RGBA8Unorm`. `upload_texture` expands each 16-bit texel on the CPU with the same bit layouts `vulkan/textures.c`
+uses (`R4G4B4A4`, `R5G6B5`, `R5G5B5A1`), and buffer→texture copies do the same expansion. Texture→buffer readbacks of
+these textures are skipped like the other host-expanded formats (SMM2 does none).
+**Why:** shooting a fireball in the first level made the game create an RGB565 texture, and the GT 755M's Metal 2
+driver aborted in `MTLTextureDescriptor` validation with "invalid pixelFormat (40)" (`B5G6R5Unorm`). `A1BGR5Unorm`
+(41, `0x3b`/`0x95`-`0x97`) and `ABGR4Unorm` (42, `0x39`) are rejected the same way (`RGBA8Unorm_sRGB` /
+`RG8Unorm_sRGB` 11/31 too, but no NVN format maps to them). `BGR5A1Unorm` (43) is supported, but its bit layout
+(`A` in the low bit) is not NVN's `0x3b`, so it can't substitute. There is no per-format support query, as with ASTC;
+on a device where the formats exist the decoded path is still correct, just slower at upload. The first level
+then completed on the GT 755M with fireballs and no abort (2026-10-22).
+**Would change:** a per-pixel-format support query in Metal, or proof that some non-Apple families support the
+formats (all of them are gated on `Apple2` today, so Intel Macs with native RGB565 pay a one-time CPU expansion).

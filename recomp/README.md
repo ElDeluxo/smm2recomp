@@ -26,11 +26,16 @@ and `build/`, which git ignores and the repo's proprietary-content check blocks.
 | `docs/` | findings from the bring-up (names and behaviour only, no game code) |
 | `private/`, `generated/`, `build/` | made from your dump (ignored; may be symlinks to another disk) |
 
-## Building (macOS, Apple Silicon)
+## Building (macOS, Apple silicon or Intel)
 
 Requirements: Xcode command line tools (clang), Homebrew `sdl3`, Python 3 (3.12+). About 0.7 GB of disk for the
 generated C and 1 GB for the build. (FFmpeg is only for games whose code plays movies; SMM2's has none:
 `GAME_MOVIES := 0` in `games/smm2/game.mk`.)
+
+Both architectures build natively (there is no macOS cross target): the game code's FP/SIMD lowering follows the
+host. On Apple silicon it is the generated code's own inline asm (`generated/smm2`, `--simd asm`); on Intel
+(x86-64) it is the portable C lowering (`generated/smm2-c`, `--simd c`), the same one as on Windows / Linux x64,
+built for x86-64-v3 (AVX2 + FMA, checked at startup).
 
 You need your own extracted dump: the base game's RomFS and the v3.0.3 update's ExeFS (`main`, `sdk`, `rtld`,
 `main.npdm`) and RomFS. By default `make` looks in `~/smm-work/extracted/` (`smm2-romfs`, `smm2-v303-exefs`,
@@ -309,6 +314,8 @@ Added for SMM2:
 | `RECOMP_NO_MOUSE_TOUCH=1` | the left mouse button no longer touches the console's touch screen (desktop) |
 | `LARECOMP_HOST_INPUT="<frame>:tap:<x>/<y>:<frames>"` | (tests) a finger on the touch screen at game pixel x, y (1280x720) for that many frames |
 | `RECOMP_BC_SOFT=1` | (Metal) decode BC textures on the CPU, as on GPUs without BC support |
+| `RECOMP_ASTC_SOFT=1` | (Metal) decode ASTC textures on the CPU, as on GPUs without ASTC support |
+| `RECOMP_SOFT16=1` | (Metal) decode packed 16-bit colour textures (RGBA4 / RGB565 / RGB5A1) on the CPU, as on GPUs without them |
 | `RECOMP_NO_CORES=1` | run guest threads without per-core exclusivity (LAS's behaviour; SMM2 races then) |
 | `SMM2_SEED_ALL=1` | with `SMM2_SEED`: every later `sead::Random` gets the same seed too (what the Ryujinx trace build's seed patch does; replays with enemies) |
 | `RECOMP_PAD_SCRIPT=<file>` | play an input script instead of the keyboard / controllers (which are left out meanwhile): `N BUTTONS` per line, the Ryujinx trace tooling's format (A B X Y L R ZL ZR PLUS MINUS UP DOWN LEFT RIGHT LSTICK RSTICK, and JUMP=A RUN=Y SPIN=ZR; `-` = nothing) |
