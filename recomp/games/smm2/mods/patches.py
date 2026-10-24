@@ -14,6 +14,9 @@ MAIN = 0x7000000000
 
 # offset in main -> (expected instruction word, what the host does there when the mod is on)
 HOOK_POINTS = {
+    # The game's worker request queue (main+0x4d2d80, after its prologue: x0 is the queue): a request whose object was
+    # destroyed is made to fail instead of calling into it ("Pure virtual function called!"; worker_guard.c)
+    0x4d2d90: (0x9100C3FD, 'worker queue: a destroyed object\'s request fails'),
     # 100 Mario: the in-course lives clamp is 99 (per-frame score / coin / lives update): one point loads the cap
     # the clamps fall back to, the others compare a new lives count with it. With the mod: 100.
     0x16ce764: (0x52800C6E, 'lives cap: cap value'),

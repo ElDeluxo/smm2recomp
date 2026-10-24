@@ -638,6 +638,15 @@ Setup failures first, since they block new players:
   run's first course: 55 A-mashed misses on it, no hang (Easy, quick level return off). Next: the same with quick
   level return on and on Super Expert; log which play state the course's scene is in when it sticks (the play
   scene's state at +0x280, as the pre-check logging does) so the next iPad occurrence says where it stopped.
+  **2026-10-24, the owner's crash log** (iPad, v0.4.8, right after a death on Super Expert as the course was set up
+  again, quick level return on): "Pure virtual function called!" on the WorkerMgr worker. The game's per-frame audio
+  request queue (main+0x4d2d80, from main+0x4d2d20 / the update at main+0x4e0b30; requests that fade a channel, found
+  by a 16-bit id, in (1.0) or out (0.0)) called a sound object destroyed in the restart's teardown while its request was
+  still queued. Guard (`mods/worker_guard.c`, a hook point after the queue step's prologue, 0x4d2d90): a request whose
+  object's vtable is the C++ runtime's `__cxa_pure_virtual` (0x70044b52a8, the crash's own frame) has its object
+  cleared, which the game's code takes as a failed request on every path. Checked: the guard is reached; the race
+  itself doesn't happen on the Mac yet. The black screen may be the same race (a request that never completes); the
+  owner's next play on the iPad test build will tell.
 - ⬜ (stuck run after a corrupt first course) a partial fix - New Game when the menu has no Continue - is saved in
   the scratchpad (`stuckrun_newgame.patch`): the bridge chose New Game but its press didn't land; to finish.
 - ⬜ **A run whose first course is corrupt gets stuck** (found 2026-10-24 while testing the Super Expert crash): the
