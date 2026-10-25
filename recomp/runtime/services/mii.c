@@ -4,13 +4,16 @@
 //
 // SMM2's Course World asks the console for a Mii for the player's maker profile and refuses to go on without one,
 // which an empty database could not answer (the player was asked to make a Mii, with no way to). The entry is
-// served through Get (CharInfoElement) and Get1 (CharInfo). Get2 / Get3 want StoreData, the database's own packed
-// record with its checksum, which is not built here: they still answer "none", and say so in the log.
+// served through Get (CharInfoElement) and Get1 (CharInfo), with the ocw backend only (net/netcfg.h): with any other
+// the database stays empty, as before (the recomp's own Course World, games/smm2/mods, needs no Mii). Get2 / Get3 want
+// StoreData, the database's own packed record with its checksum, which is not built here: they still answer "none",
+// and say so in the log.
 #include <stdlib.h>
 #include <string.h>
 
 #include "../hle.h"
 #include "../ipc.h"
+#include "../net/netcfg.h"
 
 // nn::mii::CharInfo (0x58 bytes, layout as in Ryujinx's CharInfo) of the console's first default Mii (Ryujinx's
 // DefaultMii table, entry 2, colours through its Ver3 tables): a valid Mii for games that need one (BuildDefault,
@@ -48,6 +51,8 @@ void mii_default_charinfo(uint8_t out[0x58], const char *nickname) {
     memcpy(out + 0x26, face, sizeof face);
 }
 
+static bool one_mii(void) { return net_backend() == NET_BACKEND_OCW; }
+
 static void database(Service *s, IpcReq *req, IpcResp *resp) {
     (void)s;
     switch (req->cmd) {
@@ -56,11 +61,12 @@ static void database(Service *s, IpcReq *req, IpcResp *resp) {
         resp_size(resp, 0x58);
         break;
     case 0: case 1: case 20: OUT(uint8_t, 0) = 0; resp_size(resp, 1); break;  // IsUpdated, IsFullDatabase, IsBroken..
-    case 2: OUT(uint32_t, 0) = 1; resp_size(resp, 4); break;                   // GetCount(flag): the one Mii
+    case 2: OUT(uint32_t, 0) = one_mii(); resp_size(resp, 4); break;           // GetCount(flag): the one Mii
     case 3: case 4: {  // Get -> CharInfoElement[] (CharInfo + source), Get1 -> CharInfo[]; both return the count
         IpcBuf *b = out_buf(req, 0);
         size_t want = req->cmd == 3 ? 0x5c : 0x58;  // (CharInfoElement: CharInfo then u32 source, 0 = the database)
         int32_t n = 0;
+        if (!one_mii()) b = NULL;  // (the empty database)
         if (b && b->addr && b->size >= want) {
             uint8_t *p = (uint8_t *)(uintptr_t)b->addr;
             memset(p, 0, want);
