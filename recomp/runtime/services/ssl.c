@@ -67,7 +67,7 @@ typedef struct {
     uint32_t verify_opt, io_mode;
     bool opt[4];
     bool alpn_asked;
-    bool ready, done, closed;
+    bool ready, done, closed, ended;  // ended: the far end finished (said once)
     uint32_t verify_result;  // the last handshake's (0: trusted)
     mbedtls_ssl_context ssl;
     mbedtls_ssl_config conf;
@@ -291,7 +291,19 @@ static int run(SslConn *c, SslOp op, void *buf, size_t n, uint32_t *res) {
         int r = c->ready ? op(c, buf, n) : MBEDTLS_ERR_SSL_BAD_INPUT_DATA;
         pthread_mutex_unlock(&c->mu);
         if (r >= 0) return r;
-        if (r == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY || r == MBEDTLS_ERR_SSL_CONN_EOF) return 0;
+        if (r == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY || r == MBEDTLS_ERR_SSL_CONN_EOF) {
+            // The far end finished: a 0-byte read is how that reaches the game, as on the console. Said once per
+            // connection, because "did the server hang up, or did the game stop asking?" is otherwise unanswerable
+            // from a log - the read itself leaves no trace.
+            if (!c->ended) {
+                c->ended = true;
+                NLOG("[ssl] %s: the server closed the connection (%s; %llu bytes out, %llu in)\n",
+                     c->sni[0] ? c->sni : "?",
+                     r == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY ? "close_notify" : "the socket ended",
+                     (unsigned long long)c->sent, (unsigned long long)c->recvd);
+            }
+            return 0;
+        }
         if (r != MBEDTLS_ERR_SSL_WANT_READ && r != MBEDTLS_ERR_SSL_WANT_WRITE) {
             if (r == MBEDTLS_ERR_X509_CERT_VERIFY_FAILED) {
                 char why[256];
