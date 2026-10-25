@@ -1,5 +1,21 @@
 # Progress
 
+## PAUSED 2026-10-25 after v0.5.4 (owner's call); resume from here
+- **Released v0.5.4** (https://github.com/smm2recomp/smm2recomp/releases/tag/v0.5.4): mods (LayeredFS + GameBanana +
+  the rebuilt Mods tab), co-op in 3D World, 100 Mario's castle finish, the co-op skip fix, mods off after a crash, the
+  version in the menu (Quit > About > Version). Mac 0.5.4 installed; iPad build 334 installed (not launched: locked);
+  private Windows build v0.5.4 (`~/Documents/Dev/SMM2-private`, made from `/Volumes/SSD/smm-work/winready/src54`).
+- **The owner's mods:** 16 working ones installed in the Mac data folder (`/Volumes/SSD/smm-work/recomp-play/private/
+  smm2/mods`, which the Mac app uses) and on the iPad (`Documents/mods`), only NSMB DS Style on. The downloads are kept
+  in `/Volumes/SSD/smm-work/gb-mods` (never in git); the test data folder `/Volumes/SSD/smm-work/modtest` has all 23;
+  `/Volumes/SSD/smm-work/patches/install_mods.py` / `test_mods.sh` install and check them outside the game.
+- **First on resume:** the owner's play on v0.5.4 (mods on the iPad, co-op skip into 3D World: the thread dump at the
+  fallback says where if it goes black again); the Windows extraction (archiveint.dll / tar.exe) and the iOS libarchive
+  path of a GameBanana install are untested; GitHub: #30 and #13 waiting for answers; PR #22 waiting for the owner's
+  OCW test and a rebase onto the new Mods tab.
+- **Then:** the stuck run after a corrupt first course (`/Volumes/SSD/smm-work/patches/stuckrun_newgame.patch`), the
+  backlog's mods items (code patches, level packs), the "Next, in order" list below.
+
 ## 2026-10-25 (resumed, owner: until credits run out, alongside SMCraft): mods, co-op fixes
 - **Mod loading (LayeredFS):** `runtime/usermods.c`: mods in the data folder's `mods/<id>/romfs` (+ `mod.info`: name,
   author, licence, page), on / off and order in `mods/mods.ini`; the game's RomFS overlay is now a list (romfs_build.c
@@ -34,7 +50,7 @@
   log), #13 (Deck desktop-mode freeze after building: start from Gaming Mode; to look at); PR #22 reworked by mm2srv (all
   three points done); told them to put the OCW rows on the new Online page; still waiting for the owner's OCW test.
 
-## PAUSED 2026-10-25 after v0.5.2 (owner's call: all remaining effort on SMCraft); resume from here
+## v0.5.2 (2026-10-25)
 - **v0.5.2 (2026-10-25):** Windows starts without vulkan-1.dll and says what to install (a user's "vulkan-1.dll was not
   found", `research/user-vulkan-1-dll-error.png`): the exe no longer imports the loader; `tools/gen_vk_shim.py` builds
   its 265 entry points as forwarders to vulkan-1.dll loaded at run time, and `plat_init` checks for it first
