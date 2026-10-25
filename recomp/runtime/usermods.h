@@ -34,6 +34,9 @@ void usermods_move(int i, int delta);     // in the order (later = wins)
 bool usermods_remove(int i);              // deletes its folder
 int usermods_conflicts(int i, char *names, size_t cap);  // enabled mods that share a file with it (count; names)
 bool usermods_changed_since_start(void);  // the set differs from the one the running game was started with
+// The last run stopped on a fatal error with mods on: those were turned off at this start (their names; "" when not).
+const char *usermods_crash_note(void);
+void usermods_note_crash(void);  // (the crash path: notes which mods were on)
 
 // The game's side (at its RomFS's opening): the enabled mods' romfs folders, lowest priority first, one per line
 // (each ending in '\n'); the length written.

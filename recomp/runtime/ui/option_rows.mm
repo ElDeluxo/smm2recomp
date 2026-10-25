@@ -101,7 +101,8 @@ static int row(const char *label, const std::string &value, bool changed, const 
     float ty = p.y + (h - fs) * 0.5f;
     ImU32 label_col = off ? IM_COL32(110, 110, 102, 255) : IM_COL32(240, 236, 224, 255);  // (greyed out: clearly dim)
     {  // a label that would run into the value is cut short with "..." (long names: mods, courses)
-        float vspace = value.empty() ? 0 : ImGui::CalcTextSize(value.c_str()).x + fs * (arrows ? 2.4f : 0.9f);
+        float vw0 = value.empty() ? 0 : ImGui::CalcTextSize(value.c_str()).x;
+        float vspace = value.empty() ? 0 : (vw0 < w * 0.6f ? vw0 : w * 0.6f) + fs * (arrows ? 2.4f : 0.9f);
         float room = w - 2 * pad - vspace;
         if (room > fs && ImGui::CalcTextSize(t.c_str()).x > room) {
             while (!t.empty() && ImGui::CalcTextSize((t + "...").c_str()).x > room) t.pop_back();
@@ -125,7 +126,15 @@ static int row(const char *label, const std::string &value, bool changed, const 
         }
         right = rx - gap;
     }
-    if (!value.empty()) {
+    std::string shown = value;  // (a value wider than most of the row is cut short too)
+    if (!shown.empty() && ImGui::CalcTextSize(shown.c_str()).x > w * 0.6f) {
+        while (!shown.empty() && ImGui::CalcTextSize((shown + "...").c_str()).x > w * 0.6f) shown.pop_back();
+        while (!shown.empty() && (shown.back() & 0xC0) == 0x80) shown.pop_back();
+        if (!shown.empty() && (unsigned char)shown.back() >= 0xC0) shown.pop_back();
+        shown += "...";
+    }
+    if (!shown.empty()) {
+        const std::string &value = shown;
         float vw = ImGui::CalcTextSize(value.c_str()).x, vx = right - vw;
         dl->AddText(ImVec2(vx, ty), off ? IM_COL32(110, 110, 102, 255) : changed ? IM_COL32(255, 255, 255, 255)
                                                                                  : IM_COL32(205, 205, 195, 255), value.c_str());

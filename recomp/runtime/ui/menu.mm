@@ -619,6 +619,19 @@ static void tab_mods(void) {
 // Quit: back to the start screen (in game: the game reboots to it) or out to the desktop. Each asks first (progress
 // since the last save is lost); B / Esc or Cancel backs out.
 extern "C" void rt_request_reboot(int kind);  // runtime/main.c (RT_REBOOT_TITLE = 2: the start screen)
+// "v0.5.3" and, in an app bundle (iOS, the macOS app), its build number: "v0.5.3 (330)"
+extern "C" const char *launcher_version(void);  // runtime/ui/launcher.mm (RECOMP_VERSION)
+static const char *app_version(void) {
+    static char v[64];
+    if (!v[0]) {
+        snprintf(v, sizeof v, "%s", launcher_version());
+#ifdef __APPLE__
+        NSString *b = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleVersion"];
+        if (b.length && ![b isEqualToString:@"1"]) snprintf(v + strlen(v), sizeof v - strlen(v), " (%s)", b.UTF8String);
+#endif
+    }
+    return v;
+}
 static void tab_quit(float scale, bool in_game) {
     static int ask;  // 0: the two choices; 1: start screen?; 2: desktop?
     if (ask && (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)))
@@ -648,6 +661,9 @@ static void tab_quit(float scale, bool in_game) {
         }
         if (opt_action("Cancel", "", "Stays where you are.")) ask = 0;
     }
+    opt_section("About");
+    opt_action("Version", app_version(), "This program's version (and build number, in an app). Please include it "
+               "in bug reports.", false);
     opt_end();
 }
 

@@ -38,6 +38,9 @@ static bool is_dir(const char *p) {
     return !stat(p, &st) && S_ISDIR(st.st_mode);
 }
 
+static void append_name(char *buf, size_t cap, const char *name);
+static void save_ini(void);
+
 // ---------------------------------------------------------------- mod.info (key=value; "\n" in values as \n)
 static void unescape(char *s) {
     char *o = s;
@@ -63,7 +66,14 @@ static void read_info(const char *id, UserMod *m) {
         if (!strcmp(k, "name") && *v) snprintf(m->name, sizeof m->name, "%s", v);
         else if (!strcmp(k, "author")) snprintf(m->author, sizeof m->author, "%s", v);
         else if (!strcmp(k, "category")) snprintf(m->category, sizeof m->category, "%s", v);
-        else if (!strcmp(k, "license")) snprintf(m->license, sizeof m->license, "%s", v);
+        else if (!strcmp(k, "license")) {  // (tags out: GameBanana's can be a link)
+            size_t o = 0;
+            for (const char *p = v; *p && o + 1 < sizeof m->license; p++) {
+                if (*p == '<') { const char *e = strchr(p, '>'); if (!e) break; p = e; continue; }
+                m->license[o++] = *p;
+            }
+            m->license[o] = 0;
+        }
         else if (!strcmp(k, "version")) snprintf(m->version, sizeof m->version, "%s", v);
         else if (!strcmp(k, "url")) snprintf(m->url, sizeof m->url, "%s", v);
         else if (!strcmp(k, "description")) snprintf(m->description, sizeof m->description, "%s", v);
@@ -197,8 +207,37 @@ static void scan_locked(void) {
     g_scanned = true;
     if (nn) save_ini();
 }
+// A run that stopped on a fatal error with mods on (usermods_note_crash, from the crash path) left mods/.crashed with
+// their ids: at the next start they're turned off, so a mod that breaks the game can't keep it from starting; the
+// Mods tab says so (usermods_crash_note), and the player can turn them back on.
+static char g_crash_note[600];
+static void crash_recovery_locked(void) {
+    FILE *f = fopen(USERMODS_DIR "/.crashed", "r");
+    if (!f) return;
+    char line[256];
+    bool any = false;
+    while (fgets(line, sizeof line, f)) {
+        line[strcspn(line, "\r\n")] = 0;
+        int i = find_id(line);
+        if (i < 0 || !g_e[i].m.enabled) continue;
+        g_e[i].m.enabled = false, any = true;
+        append_name(g_crash_note, sizeof g_crash_note, g_e[i].m.name);
+    }
+    fclose(f);
+    remove(USERMODS_DIR "/.crashed");
+    if (any) save_ini(), LOG("[usermods] the last run stopped with an error while mods were on: turned off: %s\n", g_crash_note);
+}
 static void ensure_scanned(void) {
-    if (!g_scanned) scan_locked();
+    if (!g_scanned) scan_locked(), crash_recovery_locked();
+}
+const char *usermods_crash_note(void) { return g_crash_note; }
+void usermods_note_crash(void) {
+    if (!g_started_set || !g_started[0] || pthread_mutex_trylock(&g_lock)) return;  // (no mods in this run, or busy)
+    FILE *f = fopen(USERMODS_DIR "/.crashed", "w");
+    for (int i = 0; f && i < g_n; i++)
+        if (g_e[i].m.enabled && g_e[i].m.has_romfs) fprintf(f, "%s\n", g_e[i].m.id);
+    if (f) fclose(f);
+    pthread_mutex_unlock(&g_lock);
 }
 
 void usermods_scan(void) {

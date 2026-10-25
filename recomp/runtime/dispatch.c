@@ -255,6 +255,8 @@ void rt_fatal_trace(void) {
     }
     extern void fnprof_dump_ring(void);
     fnprof_dump_ring();
+    extern void usermods_note_crash(void);  // (usermods.c: the mods that were on go off at the next start)
+    usermods_note_crash();
     plat_fatal_notice();
     // our crash handler also catches SIGABRT: without this abort() re-entered it forever (a 5 GB log)
     signal(SIGABRT, SIG_DFL);

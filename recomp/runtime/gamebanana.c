@@ -50,7 +50,8 @@ static Json *get_json(const char *url, char *why, size_t cap) {
     HttpResponse r;
     int st = http_request("GET", url, "Accept: application/json\r\n", NULL, 0, 20000, &r);
     if (st != 200 || !r.body) {
-        snprintf(why, cap, st ? "GameBanana answered %d" : "couldn't reach GameBanana (%s)", st, st ? "" : r.error);
+        if (st) snprintf(why, cap, "GameBanana answered %d", st);
+        else snprintf(why, cap, "couldn't reach GameBanana (%s)", r.error);
         http_free(&r);
         return NULL;
     }
@@ -161,7 +162,7 @@ static bool fetch_details(int id, GbMod *m, char *why, size_t cap) {
     copy_str(m->author, sizeof m->author, json_get(json_get(j, "_aSubmitter"), "_sName"));
     copy_str(m->category, sizeof m->category, json_get(json_get(j, "_aCategory"), "_sName"));
     if (!m->category[0]) copy_str(m->category, sizeof m->category, json_get(json_get(j, "_aRootCategory"), "_sName"));
-    copy_str(m->license, sizeof m->license, json_get(j, "_sLicense"));
+    html_text(json_str(json_get(j, "_sLicense"), ""), m->license, sizeof m->license);  // (it can be HTML: a link)
     copy_str(m->version, sizeof m->version, json_get(j, "_sVersion"));
     m->downloads = (int)json_num(json_get(j, "_nDownloadCount"), 0);
     m->likes = (int)json_num(json_get(j, "_nLikeCount"), 0);

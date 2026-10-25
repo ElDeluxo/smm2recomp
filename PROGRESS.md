@@ -1,5 +1,39 @@
 # Progress
 
+## 2026-10-25 (resumed, owner: until credits run out, alongside SMCraft): mods, co-op fixes
+- **Mod loading (LayeredFS):** `runtime/usermods.c`: mods in the data folder's `mods/<id>/romfs` (+ `mod.info`: name,
+  author, licence, page), on / off and order in `mods/mods.ini`; the game's RomFS overlay is now a list (romfs_build.c
+  merges folders in order; fs.c, mods.c), the player's mods under our generated files, which are built from the mods'
+  versions (generators read through `usermods_find`; the generation id includes the enabled mods). Turning one on turns
+  off the enabled ones that share a file. Changes load at the next start ("Restart the game to apply" on the page).
+- **GameBanana:** `runtime/gamebanana.c` (apiv11: list most downloaded / search, details, install on a worker thread),
+  `runtime/archive.c` (the system's libarchive loaded at run time: macOS / iOS `/usr/lib/libarchive.2.dylib`, Windows
+  `archiveint.dll` then `tar.exe`, Linux `libarchive.so.13`; entries written by us, no "..", no links),
+  `http_download` (streams to a file, redirects), roots: USERTrust RSA and Sectigo R46 (files.gamebanana.com sends its
+  chain out of order). Tested on the Mac end to end in the game (NSMBU Mountain Theme, DS Style, 5 more). Windows'
+  archiveint.dll exports and the iOS dlopen path are untested.
+- **Mods tab rebuilt** (`runtime/ui/mods_page.mm`): pages Built-in / Installed (N) / GameBanana / Online; installed by
+  category with a search, a row opens the mod's page (on, order, open page, remove); GameBanana rows open a page with
+  details, file choice and "Install and turn on" (progress, cancel). Long labels cut with "...". Test switches:
+  `LARECOMP_MODS_PAGE=<n>`, `RECOMP_GB_INSTALL=<id>[:<file>],...` (+ `RECOMP_GB_INSTALL_OFF=1`).
+- **Metal:** mip levels clamped to the texture's size for every texture (a mod's 64x64 with 8 levels aborted Metal).
+- **Co-op (owner's testing):** 3D World courses now co-op too (SMM2 has none there, but they play: Luigi has his 3D World
+  model; `RECOMP_COOP_3DW=0` for SMM2's way); tested 2 and 4 players (all four visible in an SMW course; 4 set up in
+  3D World). The set-up's player count goes back to 1 for a course played alone after a co-op one (the skip into a 3D
+  World course that stayed black on the iPad came right after such a change; not reproduced in 8 co-op skips here).
+- **100 Mario's last course is a castle one** (server: `endless_next`, the queue slot of the run's last course).
+- **Mods that crash the game** are turned off at the next start (`usermods_note_crash` from the fatal path writes
+  `mods/.crashed`; the Installed page says which). GameBanana's top 22 checked in a test data folder
+  (`/Volumes/SSD/smm-work/modtest`, mods downloaded to `/Volumes/SSD/smm-work/gb-mods`, never in git): look confirmed
+  for NSMB DS / NSMB Wii / SMW Bootleg; 14 more load without errors; the two All-Stars styles crash wherever NSMBU or 3D
+  World shows (the author says so too: the title screen often is), NSMBU Tower Theme (2019) crashes at a course's load,
+  Super Modder Maker 2 needs all six parts; the two level packs aren't romfs mods. Nearly all share packs (Static.pack,
+  layouts, fonts): one at a time (the page turns the others off).
+- **Version in the overlay menu:** Quit tab > About > Version (`launcher_version()` + the bundle's build number on Apple).
+- **GitHub (2026-10-25):** replied #30 (try the integrated GPU via `recomp-test.env` `LARECOMP_GPU=1`, asked for the
+  log), #13 (Deck desktop-mode freeze after building: start from Gaming Mode; to look at); PR #22 reworked by mm2srv (all
+  three points done); told them to put the OCW rows on the new Online page; still waiting for the owner's OCW test.
+
 ## PAUSED 2026-10-25 after v0.5.2 (owner's call: all remaining effort on SMCraft); resume from here
 - **v0.5.2 (2026-10-25):** Windows starts without vulkan-1.dll and says what to install (a user's "vulkan-1.dll was not
   found", `research/user-vulkan-1-dll-error.png`): the exe no longer imports the loader; `tools/gen_vk_shim.py` builds
@@ -967,6 +1001,14 @@ Setup failures first, since they block new players:
 11. ✅ Exact sound timing: the owner found it fine in play (2026-10-22); no change made, nothing concrete to fix
 
 ### Future (owner's backlog, not scheduled)
+- ⬜ **Mods (2026-10-25):** IPS / exefs code patches (applied to the NSO before the game code is built: a rebuild per
+  set of code mods); save-file level packs (GameBanana's "Story Mode Levels in Coursebot", "Quest stone": into the save,
+  not the RomFS); a GPU picker in the Video tab (#30: dual-GPU laptops); the Steam Deck freezing after building in
+  desktop mode (#13). Worth a look from GameBanana's next 30 (they install from the GameBanana page as they are; not
+  checked yet): Classic Angry Sun, Peachette over Toadette, Sonic in SMM2, Yoshi's Island, Kirby's Adventure, Super
+  Mario Bros. Wonder (beta), Autumn, Extra Night Backgrounds, NSMBU Beach / Frozen Castle / Desert Cave / Volcano
+  themes, Crystal Caves, Pumpkin Boneyard, SMB2 All-Stars style, star coin (all styles), ChaosMarioMaker / Chaos Mod
+  (probably code patches).
 - ⬜ **From GitHub (2026-10-25, replied "noted"):** #26 Course Maker PC controls (wheel zoom, right-click erase,
   middle-click pan, Ctrl+Z / Y / C / V, number keys for the palettes); #27 package repositories (Flatpak / Snap,
   Homebrew cask, Scoop); #19 a Discord server for players and contributors (the owner's call); #20 OpenCourse World:

@@ -157,6 +157,13 @@ static void page_mod(int i) {
 static void page_installed(void) {
     if (g_mod >= 0) { page_mod(g_mod); return; }
     int n = usermods_count();
+    if (usermods_crash_note()[0]) {
+        opt_section("Turned off after an error");
+        char d[800];
+        snprintf(d, sizeof d, "The game stopped with an error while these mods were on, so they're off now: %s. If "
+                 "the error wasn't theirs, turn them back on below.", usermods_crash_note());
+        opt_action(usermods_crash_note(), "", d, false);
+    }
     apply_row();
     if (!n) {
         opt_section("Installed mods");
@@ -309,6 +316,8 @@ void mods_page_test(void) {
     if (done) return;
     done = true;
     if (const char *p = getenv("LARECOMP_MODS_PAGE")) g_page = atoi(p);
+    if (const char *p = getenv("LARECOMP_MODS_MOD")) g_mod = atoi(p);   // (an installed mod's page open)
+    if (const char *p = getenv("LARECOMP_MODS_GB")) g_gb = atoi(p);     // (a GameBanana mod's page open)
     if (getenv("RECOMP_GB_INSTALL")) {  // (a list: id[:file],...; one after another; RECOMP_GB_INSTALL_OFF=1: installed off)
         static pthread_t t;
         pthread_create(&t, NULL, [](void *) -> void * {
@@ -341,10 +350,10 @@ void mods_page(void) {
     if (np == 3) pages[2] = "Online";
     int page = np == 3 && g_page == 3 ? 2 : g_page;
     opt_section("Mods");
-    if (opt_choice("Show", &page, pages, np, 0, "Built-in: this program's own mods. Installed: mods you added (they "
-                   "load at the next start). GameBanana: get more. Online: the online backend and app settings.")) {
-        g_mod = -1, g_gb = 0;
-    }
+    int before = page;
+    opt_choice("Show", &page, pages, np, 0, "Built-in: this program's own mods. Installed: mods you added (they "
+               "load at the next start). GameBanana: get more. Online: the online backend and app settings.");
+    if (page != before) g_mod = -1, g_gb = 0;  // (another page: no mod's page open)
     g_page = np == 3 && page == 2 ? 3 : page;
     switch (g_page) {
     case 0: page_builtin(); break;
