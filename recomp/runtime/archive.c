@@ -143,7 +143,8 @@ bool archive_extract(const char *archive_path, const char *dest, void (*progress
         while ((n = A.read_data(a, buf, sizeof buf)) > 0)
             if (fwrite(buf, 1, (size_t)n, f) != (size_t)n) { n = -1; break; }
         if (fclose(f) != 0 || n < 0) {
-            snprintf(why, why_cap, n < 0 && A.error_string && A.error_string(a) ? A.error_string(a) : "write failed (disk full?)");
+            snprintf(why, why_cap, "%s",
+                     n < 0 && A.error_string && A.error_string(a) ? A.error_string(a) : "write failed (disk full?)");
             ok = false;
             break;
         }
