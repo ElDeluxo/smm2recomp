@@ -620,11 +620,13 @@ static void tab_mods(void) {
 // since the last save is lost); B / Esc or Cancel backs out.
 extern "C" void rt_request_reboot(int kind);  // runtime/main.c (RT_REBOOT_TITLE = 2: the start screen)
 // "v0.5.3" and, in an app bundle (iOS, the macOS app), its build number: "v0.5.3 (330)"
-extern "C" const char *launcher_version(void);  // runtime/ui/launcher.mm (RECOMP_VERSION)
+#ifndef RECOMP_VERSION
+#define RECOMP_VERSION "dev"  // (the Makefile passes the tag or git's description)
+#endif
 static const char *app_version(void) {
     static char v[64];
     if (!v[0]) {
-        snprintf(v, sizeof v, "%s", launcher_version());
+        snprintf(v, sizeof v, "%s", RECOMP_VERSION);
 #ifdef __APPLE__
         NSString *b = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleVersion"];
         if (b.length && ![b isEqualToString:@"1"]) snprintf(v + strlen(v), sizeof v - strlen(v), " (%s)", b.UTF8String);

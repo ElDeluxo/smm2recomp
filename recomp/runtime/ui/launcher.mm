@@ -116,7 +116,6 @@ static void env_set(const char *k, const char *v) {
 #ifndef RECOMP_VERSION
 #define RECOMP_VERSION "dev"
 #endif
-extern "C" const char *launcher_version(void) { return RECOMP_VERSION; }  // (the overlay menu's About row: menu.mm)
 #define RELEASES_API "https://api.github.com/repos/smm2recomp/smm2recomp/releases/latest"
 #define RELEASES_PAGE "https://github.com/smm2recomp/smm2recomp/releases"
 
