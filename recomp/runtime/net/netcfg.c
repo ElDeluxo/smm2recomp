@@ -59,8 +59,10 @@ static const char *const backend_keys[NET_BACKEND_COUNT] = {"ours", "local-nex",
 static pthread_mutex_t ocw_lock = PTHREAD_MUTEX_INITIALIZER;
 static char ocw_name[128];                 // lower case, as net_resolve compares
 static char ocw_fixed[64];                 // the config's "ip": the name points here, the resolver is never asked
-static uint32_t ocw_ips[OCW_MAX_IPS];      // every address the name has answered with (merged, never dropped: a
-static int ocw_nips;                       // session already connected to one must keep sending to it)
+static uint32_t ocw_ips[OCW_MAX_IPS];      // the addresses the name has answered with lately: a session already
+static int ocw_nips, ocw_oldest;           // connected to one must keep sending to it, so they stay allowed for a
+                                           // while. A ring: full, the oldest goes, so a new one always gets in
+static uint32_t ocw_cur;                   // the newest the name answered with: what net_resolve hands out
 static time_t ocw_when;
 static bool trust_set;  // tls_trust was given explicitly (the ocw backend defaults to "roots" without it)
 
@@ -360,6 +362,8 @@ void net_ocw_set_target(const char *host, const char *ip) {
     while (n && ocw_name[n - 1] == '.') ocw_name[--n] = 0;
     snprintf(ocw_fixed, sizeof ocw_fixed, "%s", ip ? ip : "");
     ocw_nips = 0;
+    ocw_oldest = 0;
+    ocw_cur = 0;
     ocw_when = 0;
     pthread_mutex_unlock(&ocw_lock);
     LOG("[net] ocw host \"%s\"%s%s\n", ocw_name, ocw_fixed[0] ? " at " : "", ocw_fixed);
@@ -378,10 +382,18 @@ bool net_ocw_host(char *out, size_t cap) {
 static void ocw_add(uint32_t ip) {
     for (int i = 0; i < ocw_nips; i++)
         if (ocw_ips[i] == ip) return;
-    if (ocw_nips == OCW_MAX_IPS) return;
-    ocw_ips[ocw_nips++] = ip;
     char a[16];
     ip_to_str(ip, a);
+    if (ocw_nips < OCW_MAX_IPS) {
+        ocw_ips[ocw_nips++] = ip;
+    } else {  // (the oldest goes: a new address must always get in, or the host becomes unreachable for good)
+        char old[16];
+        ip_to_str(ocw_ips[ocw_oldest], old);
+        LOG("[net] ocw %s: %s replaces %s (%d kept)\n", ocw_name, a, old, OCW_MAX_IPS);
+        ocw_ips[ocw_oldest] = ip;
+        ocw_oldest = (ocw_oldest + 1) % OCW_MAX_IPS;
+        return;
+    }
     LOG("[net] ocw %s -> %s\n", ocw_name, a);
 }
 
@@ -394,11 +406,11 @@ static void ocw_lookup_locked(void) {
     ocw_when = now;
     uint32_t ip;
     if (ocw_fixed[0]) {  // the config points the name at an address: the resolver is never asked
-        if (parse_ip(ocw_fixed, &ip)) ocw_add(ip);
+        if (parse_ip(ocw_fixed, &ip)) ocw_add(ip), ocw_cur = ip;
         else LOG("[net] ocw ip=\"%s\": not an IPv4 address\n", ocw_fixed);
         return;
     }
-    if (parse_ip(ocw_name, &ip)) { ocw_add(ip); return; }  // the config's domain is itself an address
+    if (parse_ip(ocw_name, &ip)) { ocw_add(ip), ocw_cur = ip; return; }  // the config's domain is itself an address
     struct addrinfo hints, *res = NULL;
     memset(&hints, 0, sizeof hints);
     hints.ai_family = AF_INET;
@@ -409,10 +421,22 @@ static void ocw_lookup_locked(void) {
         LOG("[net] ocw: cannot resolve %s (%d)\n", ocw_name, e);
         return;
     }
+    uint32_t first = 0;
     for (struct addrinfo *a = res; a; a = a->ai_next)
-        if (a->ai_family == AF_INET && a->ai_addr)
-            ocw_add(ntohl(((struct sockaddr_in *)(void *)a->ai_addr)->sin_addr.s_addr));
+        if (a->ai_family == AF_INET && a->ai_addr) {
+            uint32_t v = ntohl(((struct sockaddr_in *)(void *)a->ai_addr)->sin_addr.s_addr);
+            ocw_add(v);
+            if (!first) first = v;
+        }
     freeaddrinfo(res);
+    // What the game is told from now on. Without this the first address ever seen was handed out for the rest of the
+    // session, so once OCW moved the game dialled a dead address and never recovered.
+    if (first && first != ocw_cur) {
+        char a[16], b[16];
+        ip_to_str(ocw_cur, a), ip_to_str(first, b);
+        if (ocw_cur) LOG("[net] ocw %s now at %s (was %s)\n", ocw_name, b, a);
+        ocw_cur = first;
+    }
 }
 
 // Is `name` the ocw host? Then its address (the first known one).
@@ -421,7 +445,7 @@ static bool ocw_resolve(const char *name, uint32_t *ip) {
     pthread_mutex_lock(&ocw_lock);
     if (ocw_name[0] && !strcmp(ocw_name, name)) {
         ocw_lookup_locked();
-        if (ocw_nips) *ip = ocw_ips[0], hit = true;
+        if (ocw_cur) *ip = ocw_cur, hit = true;
     }
     pthread_mutex_unlock(&ocw_lock);
     if (hit) remember(*ip, name);  // (ssl.c rebuilds the host name from the address for SNI)
@@ -489,7 +513,15 @@ bool net_tls_any_allowed(uint32_t ip) {
 bool net_dest_allowed(uint32_t ip) {
     init();
     if (backend_eff == NET_BACKEND_OURS) return false;
-    if (backend_eff == NET_BACKEND_OCW) return (ip >> 24) == 127 || ocw_owns(ip);
+    if (backend_eff == NET_BACKEND_OCW) {
+        if ((ip >> 24) == 127 || ocw_owns(ip)) return true;
+        // Not one of ours: the name has moved under us (or this is something else entirely). Let the next lookup ask
+        // again instead of waiting out the TTL, so a dropped connection can be remade at the new address.
+        pthread_mutex_lock(&ocw_lock);
+        ocw_when = 0;
+        pthread_mutex_unlock(&ocw_lock);
+        return false;
+    }
     if (backend_eff == NET_BACKEND_NEXTENDO) return ip == nx_server || ip == nx_nat;
     if (backend_eff == NET_BACKEND_LOCAL_NEX && (ip >> 24) == 127) return true;
     for (int i = 0; i < nrules; i++)
