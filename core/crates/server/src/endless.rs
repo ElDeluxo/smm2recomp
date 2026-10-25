@@ -261,6 +261,57 @@ impl Store {
             dealt = p.indices.iter().map(|&i| cands[i].id.clone()).collect();
             rec.enqueue(dealt.iter().cloned(), p.widened);
         }
+        // 100 Mario ends at the castle, as SMM1's does (owner, 2026-10-25): the run's last course is a castle-theme
+        // one when the pool has one that fits (the queue's first course is the one being played)
+        if rec.status.ruleset == Ruleset::Hundred {
+            const CASTLE: u8 = 2; // (SMM2's theme numbers: 0 ground, 1 underground, 2 castle, ...)
+            let last = mmk_modes::hundred::Difficulty::ALL[d.index()].run_length();
+            let pos = last.saturating_sub(1 + rec.status.passed as usize);
+            let castle = |code: &str| {
+                by_code
+                    .get(code)
+                    .is_some_and(|&i| courses[i].theme == CASTLE)
+            };
+            if pos < rec.queue.len() && !castle(&rec.queue[pos]) {
+                let taken: HashSet<String> = rec.excluded().iter().map(|s| s.to_string()).collect();
+                let banned: HashSet<u32> = accounts
+                    .list
+                    .iter()
+                    .filter(|a| a.banned)
+                    .map(|a| a.id)
+                    .collect();
+                let castles: Vec<Candidate> = courses
+                    .iter()
+                    .filter(|m| m.theme == CASTLE && !taken.contains(&m.code))
+                    .map(|m| Candidate {
+                        id: m.code.clone(),
+                        name: m.name.clone(),
+                        maker: m.maker.clone(),
+                        owner: m.maker_id.clone(),
+                        style: m.style.clone(),
+                        theme: m.theme,
+                        attempts: m.attempts,
+                        clears: m.clears,
+                        hint: None,
+                        broken: m.owner != 0 && banned.contains(&m.owner),
+                    })
+                    .collect();
+                let p = pick_hundred(
+                    &castles,
+                    d,
+                    &HashSet::new(),
+                    who,
+                    1,
+                    &mut mmk_modes::Rng::new(seed ^ 0xca57),
+                );
+                if let Some(&i) = p.indices.first() {
+                    rec.queue[pos] = castles[i].id.clone();
+                } else if let Some(j) = (1..pos).find(|&j| castle(&rec.queue[j])) {
+                    // (no fresh one: a castle course already drawn for earlier in the run moves to the end)
+                    rec.queue.swap(j, pos);
+                }
+            }
+        }
         let list: Vec<Meta> = rec
             .queue
             .iter()
@@ -1055,6 +1106,58 @@ mod tests {
         assert_eq!(r["me"]["rank"], 1);
         let (_, r) = call(&store, "GET", "/api/rankings/hundred_easy", None, "");
         assert!(r["me"].is_null());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_hundred_mario_run_ends_at_the_castle() {
+        let dir = tmp("castle");
+        let store = Store::open(&dir).unwrap();
+        let (me, _) = account(&store, "Pia");
+        let (maker, _) = account(&store, "Mo");
+        for _ in 0..12 {
+            course(&store, &maker, 80, 100);
+        }
+        let castles: Vec<String> = (0..3).map(|_| course(&store, &maker, 80, 100)).collect();
+        {
+            let mut g = store.inner.lock().unwrap();
+            for c in &castles {
+                let i = g.by_code[c];
+                g.courses[i].theme = 2;
+            }
+        }
+        let me = Some(me.as_str());
+        call(
+            &store,
+            "POST",
+            "/api/endless/easy/start",
+            me,
+            r#"{"ruleset":"hundred"}"#,
+        );
+        // the 8th course of an Easy run (the last) is the castle one, the first seven aren't
+        let mut seen = Vec::new();
+        for _ in 0..8 {
+            let (_, b) = call(
+                &store,
+                "GET",
+                "/api/endless/easy/next?ruleset=hundred",
+                me,
+                "",
+            );
+            let c = codes(&b)[0].clone();
+            call(
+                &store,
+                "POST",
+                "/api/endless/easy/result?ruleset=hundred",
+                me,
+                &report(&c, "clear", ""),
+            );
+            seen.push(c);
+        }
+        assert!(
+            castles.contains(&seen[7]),
+            "the run's last course is a castle-theme one"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 

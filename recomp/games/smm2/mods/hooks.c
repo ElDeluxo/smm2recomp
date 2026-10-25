@@ -58,13 +58,23 @@ void smm2_mod_after(Cpu *c, uint64_t addr) {
     }
     if (addr == MAIN_ADDR(0xe58328)) {  // co-op (coop.c): the course's play mode, stored at [x19 + 0xe0] (w8)
         int n = coop_players(), style = n > 1 ? endless_course_style() : -1;
-        bool on = n > 1 && (uint32_t)c->x[8] == 0 && style >= 0 && style != 4;  // (3D World: no multiplayer in SMM2)
-        if (n > 1 && style == 4) LOG("[mod] co-op: a 3D World course is played alone (no multiplayer in that style)\n");
+        // (3D World: SMM2 has no multiplayer in it, but the course plays with several players - Luigi has his 3D World
+        // model; tested 2026-10-25, owner: player 2 should be there too. RECOMP_COOP_3DW=0: played alone, as SMM2 does)
+        static int try_3dw = -1;
+        if (try_3dw < 0) try_3dw = !getenv("RECOMP_COOP_3DW") || atoi(getenv("RECOMP_COOP_3DW"));
+        bool on = n > 1 && (uint32_t)c->x[8] == 0 && style >= 0 && (style != 4 || try_3dw);
+        if (n > 1 && style == 4 && !try_3dw) LOG("[mod] co-op: a 3D World course is played alone (no multiplayer in that style)\n");
+        static bool count_raised;  // (the set-up's player count is ours from a co-op course: back to 1 without co-op)
+        uint64_t cnt = g64(MAIN_ADDR(0x2a66fb8));
         if (on) {
-            uint64_t cnt = g64(MAIN_ADDR(0x2a66fb8));
             s32(c->x[19] + 0xe0, 1);  // local multiplayer
-            if (cnt) s32(cnt + 0x40, (uint32_t)n);
+            if (cnt) s32(cnt + 0x40, (uint32_t)n), count_raised = true;
             LOG("[mod] co-op: %d players in this course\n", n);
+        } else if (count_raised && cnt && (uint32_t)c->x[8] == 0) {
+            // (a course played alone after a co-op one - 3D World, or co-op switched off: the course was set up for
+            // n players and only one came; owner, 2026-10-25: a skip into a 3D World course stayed black)
+            s32(cnt + 0x40, 1), count_raised = false;
+            LOG("[mod] co-op: the set-up's player count back to 1\n");
         }
         coop_course(on);
         return;
