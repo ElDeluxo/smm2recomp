@@ -295,12 +295,11 @@ static bool g_rix_on;
 static void rix_open(const char *dir) {
     char why[256];
     uint64_t t0 = plat_now_ns();
-    char overlay[1100] = "";
-    struct stat os;
-    extern const char *game_romfs_overlay(void);  // a game's own generated files (runtime/game_hooks.c: none)
+    char overlay[16384] = "";
+    extern const char *game_romfs_overlay(void);  // mods' folders, a game's generated files (runtime/game_hooks.c: none)
     if (mods_dir()) snprintf(overlay, sizeof overlay, "%s/romfs", mods_dir());
     else if (game_romfs_overlay()) snprintf(overlay, sizeof overlay, "%s", game_romfs_overlay());
-    bool have_overlay = overlay[0] && !stat(overlay, &os) && S_ISDIR(os.st_mode);
+    bool have_overlay = overlay[0] != 0;  // (folders, one per line; a missing one is skipped)
     if (!romfs_index(dir, have_overlay ? overlay : NULL, &g_rix, why, sizeof why)) FATAL("RomFS %s: %s\n", dir, why);
     g_rix_on = true;
     rom_files = malloc(sizeof(RomFile) * (size_t)g_rix.nfiles);
@@ -309,6 +308,7 @@ static void rix_open(const char *dir) {
         rom_files[i] = (RomFile){f->off, f->size, strdup(f->path), 0};
     }
     rom_nfiles = g_rix.nfiles;
+    for (char *p = overlay; (p = strchr(p, '\n'));) *p = ',';  // (one log line)
     LOG("[fs] romfs index of %s%s%s: %d files, %.1f MB of tables, image %.2f GB (%llums)\n", dir,
         have_overlay ? " + " : "", have_overlay ? overlay : "", g_rix.nfiles, g_rix.tables_size / 1e6, g_rix.size / 1e9,
         (unsigned long long)((plat_now_ns() - t0) / 1000000));

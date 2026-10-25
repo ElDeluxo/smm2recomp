@@ -14,7 +14,8 @@
 #include <unistd.h>
 
 #include "mod.h"
-#include "../../../runtime/platform.h"  // (mkdir with a mode and plat_remove_tree on every host)
+#include "../../../runtime/platform.h"
+#include "../../../runtime/usermods.h"  // (the player's mods: what generators read first, and what's layered below)  // (mkdir with a mode and plat_remove_tree on every host)
 #include "smm1/lyt.h"  // lyt_yaz0
 
 typedef RovBuf Buf;
@@ -97,6 +98,8 @@ done:
 
 static bool romfs_read(const char *path, Buf *out) {
     char p[1200];
+    // the player's mods first (runtime/usermods.h): a generator edits the file the game would otherwise get
+    if (usermods_find(path, p, sizeof p) && read_host(p, out)) return true;
     snprintf(p, sizeof p, "%s/%s", g_romfs_dir ? g_romfs_dir : "", path);
     if (read_host(p, out)) return true;
     snprintf(p, sizeof p, "%s.bin", g_romfs_dir ? g_romfs_dir : "");
@@ -467,6 +470,12 @@ static void generate_all(void) {
         size_t l = strlen(id);
         snprintf(id + l, sizeof id - l, "%s:%d\n", gens[i].name, gens[i].version);
     }
+    {  // (the player's mods: generated files are edits of theirs, so another set of mods is another generation)
+        char um[2048];
+        usermods_identity(um, sizeof um);
+        size_t l = strlen(id);
+        if (*um) snprintf(id + l, sizeof id - l, "player mods:\n%s", um);
+    }
     snprintf(gen_dir, sizeof gen_dir, ROV_ROOT "/romfs");
     if (same_identity(ROV_ROOT "/romfs.id", id)) return;  // (generated before, for the same generators)
     snprintf(gen_dir, sizeof gen_dir, ROV_ROOT "/romfs.new");
@@ -491,11 +500,19 @@ static void generate_all(void) {
     else remove(ROV_ROOT "/romfs.id");
 }
 
-// The game's RomFS overlay (runtime/game_hooks.c, runtime/mods.c, runtime/services/fs.c).
+// The game's RomFS overlay (runtime/game_hooks.c, runtime/mods.c, runtime/services/fs.c): the player's enabled mods'
+// folders (runtime/usermods.h), then the generated files on top (made from the mods' versions), one per line.
+static void overlay_list(void);
+static char g_overlay[16384];
 const char *game_romfs_overlay(void) {
     static pthread_once_t once = PTHREAD_ONCE_INIT;
+    pthread_once(&once, overlay_list);
+    return g_overlay[0] ? g_overlay : NULL;
+}
+static void overlay_list(void) {
     extern bool costumes_on(void), lanky_on(void);
-    if (!mod_hundred() && !costumes_on() && !lanky_on()) return NULL;
-    pthread_once(&once, generate_all);
-    return gen_dir[0] && !generating ? gen_dir : NULL;
+    size_t l = usermods_overlay(g_overlay, sizeof g_overlay);
+    if (!mod_hundred() && !costumes_on() && !lanky_on()) return;
+    generate_all();
+    if (gen_dir[0] && !generating) snprintf(g_overlay + l, sizeof g_overlay - l, "%s\n", gen_dir);
 }

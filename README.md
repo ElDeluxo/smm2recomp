@@ -75,10 +75,25 @@ itself. Android and iOS / iPadOS have no download: they're built yourself from s
 - **Setup stops at the fonts or the Mii data.** Point it at your console's firmware (the folder of its system `.nca`
   files) and the `prod.keys` that go with that firmware.
 - **Where are the mods?** In the overlay menu: F1 or Esc (a controller: the Home / Guide button, or − and + together;
-  a touch screen: the menu button in a corner), then the **Mods** tab
-  ([screenshot](docs/screenshots/mods-tab.jpg)). The SMM1 ones need Super Mario Maker (Wii U) chosen at setup.
+  a touch screen: the menu button in a corner), then the **Mods** tab. Its pages: **Built-in** (this program's own,
+  like the SMM1 ones, which need Super Mario Maker (Wii U) chosen at setup), **Installed** and **GameBanana** (see
+  [Mods](#mods)), and **Online**.
 - **Anything else:** open an [issue](https://github.com/smm2recomp/smm2recomp/issues) with `smm2recomp.log` (and
   `smm2recomp.previous.log` after a crash) from the data folder above.
+
+## Mods
+
+Game-file mods (texture packs, game style skins, themes, music) load the way they do on a modded console or in an
+emulator (LayeredFS): each one is a folder in the data folder's `mods/`, with its files under `romfs/`, for example
+`mods/My Mod/romfs/Model/...`. The Mods tab's **Installed** page turns each one on or off and sets their order (a later
+one wins where two replace the same file; turning on a mod that replaces the same files as another turns that one off).
+Changes load at the next start.
+
+The **GameBanana** page lists the game's mods on [GameBanana](https://gamebanana.com/games/7348), most downloaded
+first, with a search. Installing one downloads it from GameBanana onto your device, unpacks it and turns it on. Each mod
+keeps its author, licence and page, shown with it. Mods are never part of this program or its downloads: they come
+from their authors, under their licences. Code patches (exefs / `.ips`) aren't supported yet; save-file level packs
+aren't mods of this kind.
 
 ## Screenshots
 

@@ -607,36 +607,12 @@ extern "C" bool launcher_has_settings(void);   // runtime/ui/launcher.mm: the Mo
 extern "C" bool launcher_settings_rows(void);
 extern "C" bool online_rows_available(void);   // runtime/ui/online_rows.mm: the Online section (backend, Nextendo account)
 extern "C" void online_rows(void);
+void mods_page(void);          // runtime/ui/mods_page.mm: the tab's pages (built-in, installed, GameBanana, online)
+bool mods_page_used_back(void);  // (B left a mod's page there: the menu stays open)
+void menu_close(void) { set_open(false); }
 static void tab_mods(void) {
-    const GameModToggle *t;
-    int n = game_mod_toggles(&t);
     opt_begin("##mods", ImGui::GetFontSize() / 34);
-    if (online_rows_available()) online_rows();  // (first: the backend decides what the rest talks to)
-    if (n > 0 && t[0].value) opt_section("Mods");
-    bool changed = false;
-    for (int i = 0; i < n; i++) {
-        if (!t[i].value) { opt_section(t[i].label); continue; }
-        changed |= opt_toggle(t[i].label, t[i].value, t[i].def, t[i].desc);
-    }
-    if (changed) game_mod_toggles_changed();
-    // effects to try now (game_mod_triggers): a choice row (e.g. which costume) above its button where it has choices
-    const GameModTrigger *tr;
-    int nt = game_mod_triggers(&tr);
-    static int choice[16];
-    for (int i = 0; i < nt && i < 16; i++) {
-        if (i == 0) opt_section("Try it now");
-        bool on = !tr[i].available || tr[i].available();
-        if (tr[i].nchoices > 0) {
-            if (!on) opt_disable_next();
-            opt_choice(tr[i].choice_label ? tr[i].choice_label : tr[i].label, &choice[i], tr[i].choices,
-                       tr[i].nchoices, 0, tr[i].desc);
-        }
-        const char *why = !on && tr[i].why ? tr[i].why() : NULL;
-        if (!on) opt_disable_next();
-        if (why && *why) opt_action(tr[i].label, why, tr[i].desc, false);  // (greyed: the reason as its value)
-        else if (opt_button(tr[i].label, tr[i].desc) && on && tr[i].trigger) tr[i].trigger(choice[i]);
-    }
-    launcher_settings_rows();  // the app's own: updates, game files
+    mods_page();
     opt_end();
 }
 
@@ -1156,8 +1132,10 @@ void menu_render(void *cmd, uint32_t target_w, uint32_t target_h) {
         // B with nothing focused-deeper closes the menu (not the Esc / B that ends typing: typing is from the frame
         // before, so it's still true the frame a field lets go)
         if (!any_popup && !typing && !ui_text_busy() && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
-            (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)))
+            (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) &&
+            !mods_page_used_back())
             set_open(false);
+        (void)mods_page_used_back();  // (a B the Mods tab used, and the menu didn't look at: not kept for later)
         ImGui::PopFont();
         g_font_big = keep_big;
         ImGui::End();

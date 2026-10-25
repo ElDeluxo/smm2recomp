@@ -13,6 +13,7 @@
 #include <errno.h>
 #include <pthread.h>
 #include <stdarg.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -431,6 +432,93 @@ int http_request(const char *method, const char *url, const char *headers, const
     free(resp.p);
     out->status = status;
     return status;
+}
+
+int http_download(const char *url, const char *path, const char *headers, int timeout_ms,
+                  void (*progress)(unsigned long long done, unsigned long long total, void *user), void *user,
+                  volatile int *cancel, HttpResponse *out) {
+    memset(out, 0, sizeof *out);
+    net_init();
+    char cur[2048];
+    snprintf(cur, sizeof cur, "%s", url);
+    for (int hop = 0; hop < 7; hop++) {
+        char host[256], port[8];
+        const char *upath;
+        int tls;
+        if (!parse_url(cur, &tls, host, sizeof host, port, sizeof port, &upath)) return fail(out, "bad url %s", cur);
+        Conn conn = {0};
+        conn.s = connect_to(host, port, timeout_ms, out);
+        if (conn.s == SOCK_BAD) return 0;
+        if (tls && !tls_open(&conn, host, out)) return 0;
+        Conn *c = &conn;
+        char req[3072], hostport[300];
+        snprintf(hostport, sizeof hostport, strcmp(port, tls ? "443" : "80") ? "%s:%s" : "%s", host, port);
+        snprintf(req, sizeof req, "GET %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\nUser-Agent: smm2recomp\r\n%s\r\n",
+                 upath, hostport, headers ? headers : "");
+        if (!conn_send(c, req, strlen(req))) { conn_close(c); return fail(out, "send failed"); }
+        // the header
+        Buf head = {0};
+        char chunk[65536];
+        long k = 0;
+        char *e = NULL;
+        while (!e && (k = conn_recv(c, chunk, sizeof chunk)) > 0) {
+            if (!buf_add(&head, chunk, (size_t)k)) break;
+            e = strstr(head.p, "\r\n\r\n");
+            if (head.n > 65536 && !e) break;
+        }
+        if (!e) { free(head.p); conn_close(c); return fail(out, k < 0 ? "read timed out" : "no answer"); }
+        size_t head_end = (size_t)(e - head.p) + 4;
+        int major, minor, status;
+        if (sscanf(head.p, "HTTP/%d.%d %d", &major, &minor, &status) != 3) { free(head.p); conn_close(c); return fail(out, "bad answer"); }
+        if (status >= 300 && status < 400) {
+            const char *loc = find_header(head.p, "Location");
+            if (!loc) { free(head.p); conn_close(c); return fail(out, "redirect without a location"); }
+            char next[2048];
+            size_t ll = strcspn(loc, "\r\n");
+            if (loc[0] == '/')  // (same host)
+                snprintf(next, sizeof next, "%s://%s%.*s", tls ? "https" : "http", hostport, (int)ll, loc);
+            else snprintf(next, sizeof next, "%.*s", (int)ll, loc);
+            snprintf(cur, sizeof cur, "%s", next);
+            free(head.p);
+            conn_close(c);
+            continue;
+        }
+        if (status != 200) { free(head.p); conn_close(c); out->status = status; return status; }
+        const char *te = find_header(head.p, "Transfer-Encoding");
+        const char *cl = find_header(head.p, "Content-Length");
+        unsigned long long total = cl ? strtoull(cl, NULL, 10) : 0, done = 0;
+        FILE *f = fopen(path, "wb");
+        if (!f) { free(head.p); conn_close(c); return fail(out, "can't write %s", path); }
+        bool ok = true;
+        if (te && !strncmp(te, "chunked", 7)) {  // (an API page, not a file: kept in memory, then decoded)
+            Buf body = {0};
+            buf_add(&body, head.p + head_end, head.n - head_end);
+            while ((k = conn_recv(c, chunk, sizeof chunk)) > 0 && !(cancel && *cancel)) buf_add(&body, chunk, (size_t)k);
+            long d = body.p ? dechunk(body.p, body.n) : 0;
+            ok = d >= 0 && (!d || fwrite(body.p, 1, (size_t)d, f) == (size_t)d);
+            done = d > 0 ? (unsigned long long)d : 0;
+            free(body.p);
+        } else {
+            size_t first = head.n - head_end;
+            if (first && fwrite(head.p + head_end, 1, first, f) != first) ok = false;
+            done = first;
+            if (progress) progress(done, total, user);
+            while (ok && (!total || done < total) && !(cancel && *cancel) && (k = conn_recv(c, chunk, sizeof chunk)) > 0) {
+                if (fwrite(chunk, 1, (size_t)k, f) != (size_t)k) ok = false;
+                done += (unsigned long long)k;
+                if (progress) progress(done, total, user);
+            }
+            if (total && done < total) ok = false;
+        }
+        free(head.p);
+        conn_close(c);
+        if (fclose(f) != 0) ok = false;
+        if (cancel && *cancel) { remove(path); return fail(out, "cancelled"); }
+        if (!ok) { remove(path); return fail(out, total && done < total ? "the download stopped early" : "write failed (disk full?)"); }
+        out->status = 200;
+        return 200;
+    }
+    return fail(out, "too many redirects");
 }
 
 void http_free(HttpResponse *r) {

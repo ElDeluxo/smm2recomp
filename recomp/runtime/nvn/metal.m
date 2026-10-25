@@ -512,8 +512,10 @@ static void create_backend_texture(NvnTexture *t, TexBackend *b) {
     else if (t->target == 4 || t->target == 6) d.arrayLength = t->depth ? t->depth : 1;
     else if (t->target == 9) d.arrayLength = (t->depth ? t->depth : 6) / (d.textureType == MTLTextureTypeCubeArray ? 6 : 1);
     d.mipmapLevelCount = t->levels ? t->levels : 1;
-    if (b->scalable) {
-        uint32_t m = 1, sz = tw > th ? tw : th;
+    {  // (no more levels than the size has: a scaled target's, or a texture asking for one too many - seen in a mod's
+       // 64x64 with 8 levels, which NVN tolerates and Metal's validation aborts on)
+        uint32_t m = 1, sz = (uint32_t)(d.width > d.height ? d.width : d.height);
+        if (d.depth > sz) sz = (uint32_t)d.depth;
         while (sz > 1) { sz >>= 1; m++; }
         if (d.mipmapLevelCount > m) d.mipmapLevelCount = m;
     }

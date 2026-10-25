@@ -281,3 +281,5 @@ __attribute__((constructor)) static void mods_start(void) {
     extern void bridge_register(void);
     bridge_register();
 }
+
+int game_gamebanana_id(void) { return 7348; }  // (Super Mario Maker 2 on GameBanana: runtime/gamebanana.h)

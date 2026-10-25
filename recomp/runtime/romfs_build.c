@@ -195,9 +195,16 @@ static bool build(const char *dir, const char *overlay, const char *out_path, Ro
     Lists l = {0};
     Dir *root = scan(dir, "", NULL, 0);
     if (!root) FAIL("can't read %s", dir);
-    if (overlay) {
-        Dir *o = scan(overlay, "", NULL, 0);
+    // overlay: folders separated by newlines, merged in order (a later one's file wins: mods, then generated files)
+    for (const char *p = overlay; p && *p;) {
+        const char *e = strchr(p, '\n');
+        size_t n = e ? (size_t)(e - p) : strlen(p);
+        char *one = malloc(n + 1);
+        memcpy(one, p, n), one[n] = 0;
+        Dir *o = n ? scan(one, "", NULL, 0) : NULL;
         if (o) merge(root, o);
+        free(one);
+        p = e ? e + 1 : p + n;
     }
     // table order: root, then each directory's subdirectories as flatten() lists them; files likewise
     if (l.nd == l.cd) l.dirs = realloc(l.dirs, sizeof *l.dirs * (l.cd = 64));

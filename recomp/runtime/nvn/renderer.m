@@ -3477,6 +3477,7 @@ static void copy_buffer_to_texture(uint64_t src, const TexRefRec *dst) {
     if (nlog++ < 20) LOG("[copy] buf %llx -> tex %ux%u f%#x region %d,%d,%d %dx%dx%d row %llu lvl %d\n", src, t->width, t->height, t->format, rg[0], rg[1], rg[2], rg[3], rg[4], rg[5], row, level);
     id<MTLBlitCommandEncoder> b = [cb() blitCommandEncoder];
     id<MTLTexture> tex = renderer_texture(t, b, false);  // make sure prior CPU contents are uploaded first
+    if ((NSUInteger)level >= tex.mipmapLevelCount) return;  // (a level past what the size allows: metal.m clamps)
     renderer_mark_gpu_owned(t);
     bool array = tex.textureType == MTLTextureType2DArray || tex.textureType == MTLTextureTypeCube;
     uint32_t hb = ((uint32_t)rg[4] + fi->bh - 1) / fi->bh, wb = ((uint32_t)rg[3] + fi->bw - 1) / fi->bw;
@@ -3586,6 +3587,7 @@ static void copy_texture_to_buffer(const TexRefRec *src, uint64_t dst) {
         draw_copy(tex, 0, 0, tex.width, tex.height, small, 0, 0, t->width, t->height, true);
         tex = small;
     }
+    if ((NSUInteger)level >= tex.mipmapLevelCount) return;
     id<MTLBlitCommandEncoder> b = [cb() blitCommandEncoder];
     if (renderer_pixel_format_bytes(tex.pixelFormat, fi->bpb, t->format) != fi->bpb) { [b endEncoding]; return; }
     bool array = tex.textureType == MTLTextureType2DArray || tex.textureType == MTLTextureTypeCube;

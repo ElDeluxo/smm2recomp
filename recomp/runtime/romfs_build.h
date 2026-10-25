@@ -33,7 +33,8 @@ typedef struct {
     RomfsIndexFile *files;
     int nfiles;
 } RomfsIndex;
-// overlay (may be NULL): a folder whose files replace or join those of dir (a mod's romfs/).
+// overlay (may be NULL): folders, one per line, whose files replace or join those of dir (mods' romfs/ folders, then
+// a game's generated files): merged in order, a later one's file winning.
 bool romfs_index(const char *dir, const char *overlay, RomfsIndex *ix, char *why, size_t why_size);
 
 // Bytes of file data under dir (the image is about this plus its tables).

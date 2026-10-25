@@ -18,9 +18,18 @@ bool mods_romfs_override(const char *path, char *out, size_t cap) {
     const char *g = d ? NULL : game_romfs_overlay();
     if (!d && !g) return false;
     struct stat st;
-    if ((size_t)(d ? snprintf(out, cap, "%s/romfs/%s", d, path) : snprintf(out, cap, "%s/%s", g, path)) >= cap)
-        return false;
-    return stat(out, &st) == 0 && S_ISREG(st.st_mode);
+    if (d) return (size_t)snprintf(out, cap, "%s/romfs/%s", d, path) < cap && stat(out, &st) == 0 && S_ISREG(st.st_mode);
+    // (the game's overlay: folders, one per line, the last one winning - look from the end)
+    const char *end = g + strlen(g);
+    while (end > g) {
+        const char *start = end;
+        while (start > g && start[-1] != '\n') start--;
+        if (end > start && (size_t)snprintf(out, cap, "%.*s/%s", (int)(end - start), start, path) < cap &&
+            stat(out, &st) == 0 && S_ISREG(st.st_mode))
+            return true;
+        end = start > g ? start - 1 : g;
+    }
+    return false;
 }
 
 void mods_boot(void) {

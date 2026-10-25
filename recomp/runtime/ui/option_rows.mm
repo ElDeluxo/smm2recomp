@@ -100,6 +100,16 @@ static int row(const char *label, const std::string &value, bool changed, const 
         for (char &c : t) c = (char)toupper((unsigned char)c);
     float ty = p.y + (h - fs) * 0.5f;
     ImU32 label_col = off ? IM_COL32(110, 110, 102, 255) : IM_COL32(240, 236, 224, 255);  // (greyed out: clearly dim)
+    {  // a label that would run into the value is cut short with "..." (long names: mods, courses)
+        float vspace = value.empty() ? 0 : ImGui::CalcTextSize(value.c_str()).x + fs * (arrows ? 2.4f : 0.9f);
+        float room = w - 2 * pad - vspace;
+        if (room > fs && ImGui::CalcTextSize(t.c_str()).x > room) {
+            while (!t.empty() && ImGui::CalcTextSize((t + "...").c_str()).x > room) t.pop_back();
+            while (!t.empty() && (t.back() & 0xC0) == 0x80) t.pop_back();  // (never half a UTF-8 character)
+            if (!t.empty() && (unsigned char)t.back() >= 0xC0) t.pop_back();
+            t += "...";
+        }
+    }
     dl->AddText(ImVec2(p.x + pad, ty), label_col, t.c_str());
     float right = p.x + w - pad;  // (the value's right edge)
     if (arrows && !value.empty()) {  // ◀ value ▶, drawn (the fonts have no arrow glyphs); a click on one steps
