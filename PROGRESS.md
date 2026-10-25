@@ -1,6 +1,30 @@
 # Progress
 
-## PAUSED 2026-10-25 after v0.5.4 (owner's call); resume from here
+## PAUSED 2026-10-25 after v0.5.5 (owner's call); resume from here
+- **Released v0.5.5** (https://github.com/smm2recomp/smm2recomp/releases/tag/v0.5.5): Mac 0.5.5 installed; iPad build
+  341 installed over devicectl (not launched: off Tailscale, devicectl launch refused), the owner's mods kept.
+- **v0.5.5 (2026-10-25 evening): 100 Mario "communication error" after a death** (iPad v0.5.4, Super Expert;
+  `research/ipad-v054-2026-10-25/`): the server answered the death on FB1-SQ6-RDF with 400 "that course is not in this
+  run". Cause: v0.5.4's castle rule ran on every `next` request and could replace a queued course the game had already
+  been handed (the game keeps the up-to-10 courses of its list: `search_courses`, `next?count=10`). Fix (server,
+  `endless_next`): castle courses only as the queue is refilled, nothing of the batch handed out yet; every slot from
+  the clear-count's expected last one to the batch end, so skips still end on a castle course (a castle course drawn
+  earlier in the batch moves there when no fresh one is left). Client (`endless.c` post_result): a result refused as
+  not in the run takes the server's run (lives, clears) and goes on instead of a communication error. Tests:
+  `a_course_handed_out_never_changes` (reproduces the case: fails without the fix), `..._with_skips_still_ends_at_the_
+  castle`, `..._ends_at_the_castle`. Mac (in-game): 28 results with deaths and skips, none refused; a run set one
+  clear short (`endless.json` clears 7, queue empty) was dealt only castle courses and won on one (ending, back to the
+  menu). The owner's run (Super Expert, 51 lives) is still active on the iPad's server and carries on.
+- **PR #22 merged (mm2srv): OpenCourse World** as an online backend (`backend=ocw`, Mods > Online: domain, address,
+  token; `ocw-config.json`). Opt-in (ours / TGRCode stay the default); TLS checked against the public roots + host
+  name by default (`tls_trust=any` only explicitly, only for the ocw host); the token is kept out of logs; the Mii
+  database's one entry only under ocw; two relaxed-check switches (no word filter, broken courses), both off. Checked
+  on the Mac without an account (dummy `.invalid` domain: host slot written, nothing reached). **A real sign-in needs
+  an OCW account: the owner tests it.**
+- Test harness note: `RECOMP_MOD_TEST_PIT` doesn't kill the player in some 3D World courses (2D player field), and the
+  run then sits there (autoplay's skip doesn't come either): not a game bug, use it with 2D styles.
+
+## v0.5.4 (2026-10-25)
 - **Released v0.5.4** (https://github.com/smm2recomp/smm2recomp/releases/tag/v0.5.4): mods (LayeredFS + GameBanana +
   the rebuilt Mods tab), co-op in 3D World, 100 Mario's castle finish, the co-op skip fix, mods off after a crash, the
   version in the menu (Quit > About > Version). Mac 0.5.4 installed; iPad build 334 installed (not launched: locked);
