@@ -185,6 +185,7 @@ const char *mod_own_maker_id(void) { return own_maker_id; }
 static bool hundred_rules(void) { return mod_hundred_rules(); }
 // the server keeps a run slot per ruleset: every run request says which (?ruleset=)
 static const char *RULESET(void) { return hundred_rules() ? "hundred" : "smm2"; }
+static Json *post_result(const char *path, const char *body, uint32_t d, const char *code);  // (a refused result: below)
 
 // Name and best per difficulty for the player's own record (online.c GetUsers). Best = the best clears of SMM2's
 // rules, or with SMM1's rules the number of completed 100 Mario runs on that difficulty (the server's hundred_<d>
@@ -923,7 +924,7 @@ WRAPPER(start_course, 0x14ecf30) {
     snprintf(path, sizeof path, "/api/endless/%s/result?ruleset=%s", DIFF[d], RULESET());
     snprintf(body, sizeof body, "{\"code\":\"%s\",\"result\":\"%s\"}", code,
              bridge_take_start_over() ? "start_over" : "death");
-    Json *j = srv_call("POST", path, body, NULL);
+    Json *j = post_result(path, body, d, code);
     if (j) {
         set_play(c, no, d, (uint32_t)json_num(json_get(j, "lives"), 0), (uint32_t)json_num(json_get(j, "clears"), 0));
         bridge_event("miss", d);
@@ -931,6 +932,25 @@ WRAPPER(start_course, 0x14ecf30) {
     }
     json_free(j);
     finish(c, no, j != NULL, 2);
+}
+
+// A course result the server refuses as not part of the run (the game played a course the run no longer has: v0.5.4's
+// castle course could take the place of one already handed out, 2026-10-25): rather than a communication error that
+// stops the run, the run as the server has it (lives, clears) is taken and play goes on; the game's next request gets
+// the server's next course. Any other failure is a failure.
+static Json *post_result(const char *path, const char *body, uint32_t d, const char *code) {
+    int st = 0;
+    Json *j = srv_call("POST", path, body, &st);
+    if (j || st != 400) return j;
+    Json *all = srv_call("GET", "/api/endless", NULL, NULL);
+    Json *run = json_get(json_get(all, strcmp(RULESET(), "hundred") ? "runs" : "hundred_runs"), DIFF[d]);
+    if (!run || !json_bool(json_get(run, "active"), true)) { json_free(all); return NULL; }
+    char again[96];
+    int n = snprintf(again, sizeof again, "{\"lives\":%u,\"clears\":%u}", (uint32_t)json_num(json_get(run, "lives"), 0),
+                     (uint32_t)json_num(json_get(run, "clears"), 0));
+    LOG("[mod] result for %s refused (not in this run): going on with the server's run (%s)\n", code, again);
+    json_free(all);
+    return json_parse(again, (size_t)n);
 }
 
 // Mario's form at the goal (player 0, read when the clear is posted): 0 small, 1 big, -1 unknown. Player actors at
@@ -961,7 +981,7 @@ WRAPPER(clear_course, 0x14ed120) {
     snprintf(body, sizeof body,
              "{\"code\":\"%s\",\"result\":\"clear\",\"pending\":%u,\"coins\":%u,\"score\":%u,\"frames_left\":0}", code,
              pending, dcoins, dscore);
-    Json *j = srv_call("POST", path, body, NULL);
+    Json *j = post_result(path, body, d, code);
     if (j) {
         uint32_t lives = (uint32_t)json_num(json_get(j, "lives"), 0), clears = (uint32_t)json_num(json_get(j, "clears"), 0);
         bool complete = json_bool(json_get(j, "run_complete"), false);
@@ -991,7 +1011,7 @@ WRAPPER(skip_course, 0x14ed5e0) {
     code_of(id, code);
     snprintf(path, sizeof path, "/api/endless/%s/result?ruleset=%s", DIFF[d], RULESET());
     snprintf(body, sizeof body, "{\"code\":\"%s\",\"result\":\"skip\",\"during_miss\":false}", code);
-    Json *j = srv_call("POST", path, body, NULL);
+    Json *j = post_result(path, body, d, code);
     if (j) {
         pthread_mutex_lock(&state_lock);
         runs[d].started = 0;

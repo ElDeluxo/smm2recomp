@@ -220,7 +220,8 @@ impl Store {
         rec.queue.retain(|c| by_code.contains_key(c));
         let mut widened = false;
         let mut dealt: Vec<String> = Vec::new();
-        if rec.queue.is_empty() {
+        let refilled = rec.queue.is_empty();
+        if refilled {
             let banned: HashSet<u32> = accounts
                 .list
                 .iter()
@@ -261,25 +262,33 @@ impl Store {
             dealt = p.indices.iter().map(|&i| cands[i].id.clone()).collect();
             rec.enqueue(dealt.iter().cloned(), p.widened);
         }
-        // 100 Mario ends at the castle, as SMM1's does (owner, 2026-10-25): the run's last course is a castle-theme
-        // one when the pool has one that fits (the queue's first course is the one being played)
-        if rec.status.ruleset == Ruleset::Hundred {
+        // 100 Mario ends at the castle, as SMM1's does (owner, 2026-10-25): the courses that can end the run - from the
+        // one the run's last clear would come on if every course before it were cleared, to the end of the batch, so
+        // skips still end on one - are castle-theme ones where the pool has them (the queue's first course is the
+        // one being played). Only as the queue is refilled, before any of its courses has been handed out: the game
+        // keeps the list it was given (up to 10), so a course already handed out never changes under it (v0.5.4
+        // changed one, and the game's next result came back "that course is not in this run").
+        if refilled && rec.status.ruleset == Ruleset::Hundred {
             const CASTLE: u8 = 2; // (SMM2's theme numbers: 0 ground, 1 underground, 2 castle, ...)
             let last = mmk_modes::hundred::Difficulty::ALL[d.index()].run_length();
-            let pos = last.saturating_sub(1 + rec.status.passed as usize);
+            let from = last.saturating_sub(1 + rec.status.clears as usize);
             let castle = |code: &str| {
                 by_code
                     .get(code)
                     .is_some_and(|&i| courses[i].theme == CASTLE)
             };
-            if pos < rec.queue.len() && !castle(&rec.queue[pos]) {
-                let taken: HashSet<String> = rec.excluded().iter().map(|s| s.to_string()).collect();
-                let banned: HashSet<u32> = accounts
-                    .list
-                    .iter()
-                    .filter(|a| a.banned)
-                    .map(|a| a.id)
-                    .collect();
+            let mut taken: HashSet<String> = rec.excluded().iter().map(|s| s.to_string()).collect();
+            let banned: HashSet<u32> = accounts
+                .list
+                .iter()
+                .filter(|a| a.banned)
+                .map(|a| a.id)
+                .collect();
+            let mut rng = mmk_modes::Rng::new(seed ^ 0xca57);
+            for pos in from..rec.queue.len() {
+                if castle(&rec.queue[pos]) {
+                    continue;
+                }
                 let castles: Vec<Candidate> = courses
                     .iter()
                     .filter(|m| m.theme == CASTLE && !taken.contains(&m.code))
@@ -296,18 +305,13 @@ impl Store {
                         broken: m.owner != 0 && banned.contains(&m.owner),
                     })
                     .collect();
-                let p = pick_hundred(
-                    &castles,
-                    d,
-                    &HashSet::new(),
-                    who,
-                    1,
-                    &mut mmk_modes::Rng::new(seed ^ 0xca57),
-                );
+                let p = pick_hundred(&castles, d, &HashSet::new(), who, 1, &mut rng);
                 if let Some(&i) = p.indices.first() {
+                    taken.insert(castles[i].id.clone());
                     rec.queue[pos] = castles[i].id.clone();
-                } else if let Some(j) = (1..pos).find(|&j| castle(&rec.queue[j])) {
-                    // (no fresh one: a castle course already drawn for earlier in the run moves to the end)
+                } else if let Some(j) = (0..from.min(pos)).rev().find(|&j| castle(&rec.queue[j])) {
+                    // (no fresh one: a castle course drawn for earlier in this batch moves to the end - nothing of
+                    // the batch has been handed out yet)
                     rec.queue.swap(j, pos);
                 }
             }
@@ -1158,6 +1162,126 @@ mod tests {
             castles.contains(&seen[7]),
             "the run's last course is a castle-theme one"
         );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_hundred_mario_run_with_skips_still_ends_at_the_castle() {
+        let dir = tmp("castle_skips");
+        let store = Store::open(&dir).unwrap();
+        let (me, _) = account(&store, "Pia");
+        let (maker, _) = account(&store, "Mo");
+        let all: Vec<String> = (0..16).map(|_| course(&store, &maker, 80, 100)).collect();
+        let castles: Vec<String> = all[..4].to_vec();
+        {
+            let mut g = store.inner.lock().unwrap();
+            for c in &castles {
+                let i = g.by_code[c];
+                g.courses[i].theme = 2;
+            }
+        }
+        let me = Some(me.as_str());
+        call(
+            &store,
+            "POST",
+            "/api/endless/easy/start",
+            me,
+            r#"{"ruleset":"hundred"}"#,
+        );
+        // two skips on the way: the course whose clear completes the run is still a castle one
+        for k in 0..10 {
+            let (_, b) = call(
+                &store,
+                "GET",
+                "/api/endless/easy/next?count=2&ruleset=hundred",
+                me,
+                "",
+            );
+            let c = codes(&b)[0].clone();
+            let result = if k == 2 || k == 5 { "skip" } else { "clear" };
+            let (_, a) = call(
+                &store,
+                "POST",
+                "/api/endless/easy/result?ruleset=hundred",
+                me,
+                &report(&c, result, ""),
+            );
+            if a["run_complete"].as_bool() == Some(true) {
+                assert!(
+                    castles.contains(&c),
+                    "the run's last course is a castle-theme one"
+                );
+                let _ = fs::remove_dir_all(&dir);
+                return;
+            }
+        }
+        panic!("the run didn't complete");
+    }
+
+    #[test]
+    fn a_course_handed_out_never_changes() {
+        // (the client fetches the next course ahead: the one after the current must still be the next one after a
+        // clear, a skip or deaths - v0.5.4's castle swap broke that)
+        let dir = tmp("handed");
+        let store = Store::open(&dir).unwrap();
+        let (me, _) = account(&store, "Pia");
+        let (maker, _) = account(&store, "Mo");
+        let all: Vec<String> = (0..40).map(|_| course(&store, &maker, 80, 100)).collect();
+        let me = Some(me.as_str());
+        call(
+            &store,
+            "POST",
+            "/api/endless/normal/start",
+            me,
+            r#"{"ruleset":"hundred"}"#,
+        );
+        let mut ahead: Option<String> = None;
+        let mut seen: HashSet<String> = HashSet::new();
+        for k in 0..16 {
+            if k == 15 {
+                // (castle courses turn up late - an upstream source brought them - just before the last course is
+                // the one handed out ahead, and so the one about to be played)
+                let mut g = store.inner.lock().unwrap();
+                for c in all.iter().filter(|c| !seen.contains(*c)) {
+                    let i = g.by_code[c];
+                    g.courses[i].theme = 2;
+                }
+            }
+            let (_, b) = call(
+                &store,
+                "GET",
+                "/api/endless/normal/next?count=2&ruleset=hundred",
+                me,
+                "",
+            );
+            let got = codes(&b);
+            if let Some(a) = &ahead {
+                assert_eq!(
+                    &got[0], a,
+                    "course {k}: the one handed out ahead is the next one"
+                );
+            }
+            ahead = got.get(1).cloned();
+            seen.extend(got.iter().cloned());
+            let result = if k % 3 == 1 { "skip" } else { "clear" };
+            if k % 4 == 2 {
+                call(
+                    &store,
+                    "POST",
+                    "/api/endless/normal/result?ruleset=hundred",
+                    me,
+                    &report(&got[0], "death", ""),
+                );
+            }
+            let (st, _) = call(
+                &store,
+                "POST",
+                "/api/endless/normal/result?ruleset=hundred",
+                me,
+                &report(&got[0], result, ""),
+            );
+            assert_eq!(st, 200, "course {k}: its result is taken");
+        }
         let _ = fs::remove_dir_all(&dir);
     }
 
