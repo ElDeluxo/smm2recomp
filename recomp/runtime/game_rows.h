@@ -32,9 +32,11 @@ typedef struct {
 #ifdef __cplusplus
 extern "C" {
 #endif
-void game_mod_rows_hide(void);  // the secret rows are hidden again (runtime/ui/menu.mm, when the menu closes)
 int game_mod_rows(const GameModRow **out);  // how many, and where (runtime/game_hooks.c: none)
 void game_mod_rows_changed(void);           // one of them was changed in the menu
+// The secret rows go back to "set" / "not set" (runtime/ui/menu.mm calls this when the menu closes; drawn and
+// defined by runtime/ui/mods_page.mm, the Mods tab's Online page)
+void game_mod_rows_hide(void);
 #ifdef __cplusplus
 }
 #endif
