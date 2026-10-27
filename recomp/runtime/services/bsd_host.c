@@ -296,7 +296,9 @@ static void do_getsockopt(BsdSock *s, IpcReq *req, IpcResp *resp) {
 static short ev_to_host(int16_t ev) {
     short h = 0;
     if (ev & (0x1 | 0x40 | 0x80)) h |= POLLIN;  // POLLIN, POLLRDNORM, POLLRDBAND
+#ifndef _WIN32
     if (ev & 0x2) h |= POLLPRI;
+#endif  // (WSAPoll fails with WSAEINVAL when POLLPRI is asked for, and poll_fds then reported "nothing ready" forever)
     if (ev & (0x4 | 0x100)) h |= POLLOUT;       // POLLOUT (= POLLWRNORM), POLLWRBAND
     return h;
 }
