@@ -194,9 +194,15 @@ int bsd_sock_recv(BsdSock *s, void *data, size_t len) {
 }
 
 static void log_refused(const char *what, uint32_t ip, uint16_t port) {
-    char a[16];
+    char a[16], host[256];
     ip_to_str(ip, a);
-    LOG("[bsd] %s %s:%u refused: not a local test address (runtime/net/netcfg.h)\n", what, a, port);
+    // (name the backend's own rule: "not a local test address" is only true of local-nex, and sent anyone reading
+    // an ocw log looking in the wrong place)
+    if (net_backend() == NET_BACKEND_OCW && net_ocw_host(host, sizeof host))
+        LOG("[bsd] %s %s:%u refused: not an address %s resolves to (runtime/net/netcfg.h). Looking the name up "
+            "again\n", what, a, port, host);
+    else
+        LOG("[bsd] %s %s:%u refused: not a local test address (runtime/net/netcfg.h)\n", what, a, port);
 }
 
 // ---- socket options: the game's (FreeBSD) level / name -> the host's

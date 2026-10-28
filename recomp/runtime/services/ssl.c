@@ -67,7 +67,7 @@ typedef struct {
     uint32_t verify_opt, io_mode;
     bool opt[4];
     bool alpn_asked;
-    bool ready, done, closed;
+    bool ready, done, closed, ended;  // ended: the far end finished (said once)
     uint32_t verify_result;  // the last handshake's (0: trusted)
     mbedtls_ssl_context ssl;
     mbedtls_ssl_config conf;
@@ -174,6 +174,29 @@ bool ssl_pin_check(const mbedtls_x509_crt *peer, const uint8_t pin[32]) {
     return diff == 0;
 }
 
+// The public roots (tls_trust=roots), parsed once for the process. A parsed chain is only read during a handshake,
+// so every connection can share one - and a reconnect costs nothing, where parsing the system bundle per connection
+// meant several hundred certificates each time. Never freed: it lives as long as the connections that point at it.
+static mbedtls_x509_crt g_roots;
+static bool g_roots_ok;
+static int g_nroots;
+
+static void roots_load(void) {
+    static const char *const bundles[] = {"/etc/ssl/cert.pem", "/etc/ssl/certs/ca-certificates.crt",
+                                          "/etc/pki/tls/certs/ca-bundle.crt"};
+    const char *from = "none";
+    mbedtls_x509_crt_init(&g_roots);
+    for (size_t i = 0; i < sizeof bundles / sizeof *bundles; i++)
+        if (mbedtls_x509_crt_parse_file(&g_roots, bundles[i]) >= 0 && g_roots.version) {  // (a bad entry: skipped)
+            from = bundles[i];
+            break;
+        }
+    const char *pem = net_root_pems();  // (runtime/net/roots.h: always, whatever the system has)
+    g_roots_ok = mbedtls_x509_crt_parse(&g_roots, (const unsigned char *)pem, strlen(pem) + 1) >= 0 || g_roots.version;
+    for (const mbedtls_x509_crt *k = &g_roots; k && k->version; k = k->next) g_nroots++;
+    LOG("[ssl] %d root certificates (%s plus the built-in ones), parsed once\n", g_nroots, from);
+}
+
 static const char *trust_name(NetTrust t) {
     return t == NET_TRUST_ANY     ? "any certificate (local test server)"
            : t == NET_TRUST_PINNED ? "Nextendo's certificate (pinned)"
@@ -222,16 +245,13 @@ static bool conn_setup(SslConn *c) {
                 "your own wants tls_trust=any.\n", pa);
             return false;
         }
-        static const char *const bundles[] = {"/etc/ssl/cert.pem", "/etc/ssl/certs/ca-certificates.crt",
-                                              "/etc/pki/tls/certs/ca-bundle.crt"};
-        for (size_t i = 0; i < sizeof bundles / sizeof *bundles; i++)
-            if (mbedtls_x509_crt_parse_file(&c->ca, bundles[i]) >= 0 && c->ca.version) break;  // (a bad entry: skipped)
-        const char *pem = net_root_pems();
-        if (mbedtls_x509_crt_parse(&c->ca, (const unsigned char *)pem, strlen(pem) + 1) < 0 && !c->ca.version) {
+        static pthread_once_t once = PTHREAD_ONCE_INIT;
+        pthread_once(&once, roots_load);
+        if (!g_roots_ok) {
             LOG("[ssl] %s: no root certificates to check against: refused\n", c->sni);
             return false;
         }
-        mbedtls_ssl_conf_ca_chain(&c->conf, &c->ca, NULL);
+        mbedtls_ssl_conf_ca_chain(&c->conf, &g_roots, NULL);  // (shared: c->ca stays empty, see roots_load)
         mbedtls_ssl_conf_authmode(&c->conf, MBEDTLS_SSL_VERIFY_REQUIRED);
     } else if (trust == NET_TRUST_PINNED) {
         uint8_t pin[32];
@@ -271,7 +291,19 @@ static int run(SslConn *c, SslOp op, void *buf, size_t n, uint32_t *res) {
         int r = c->ready ? op(c, buf, n) : MBEDTLS_ERR_SSL_BAD_INPUT_DATA;
         pthread_mutex_unlock(&c->mu);
         if (r >= 0) return r;
-        if (r == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY || r == MBEDTLS_ERR_SSL_CONN_EOF) return 0;
+        if (r == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY || r == MBEDTLS_ERR_SSL_CONN_EOF) {
+            // The far end finished: a 0-byte read is how that reaches the game, as on the console. Said once per
+            // connection, because "did the server hang up, or did the game stop asking?" is otherwise unanswerable
+            // from a log - the read itself leaves no trace.
+            if (!c->ended) {
+                c->ended = true;
+                NLOG("[ssl] %s: the server closed the connection (%s; %llu bytes out, %llu in)\n",
+                     c->sni[0] ? c->sni : "?",
+                     r == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY ? "close_notify" : "the socket ended",
+                     (unsigned long long)c->sent, (unsigned long long)c->recvd);
+            }
+            return 0;
+        }
         if (r != MBEDTLS_ERR_SSL_WANT_READ && r != MBEDTLS_ERR_SSL_WANT_WRITE) {
             if (r == MBEDTLS_ERR_X509_CERT_VERIFY_FAILED) {
                 char why[256];

@@ -1299,12 +1299,17 @@ backend is the one narrow opening in it:
 - **exactly one name resolves** — the one `domain` names, from `ip` if given, else the host resolver. Every other
   name still fails; the game's names never reach the host resolver.
 - **only its addresses are reachable** — `net_dest_allowed()` allows loopback and the addresses that name has
-  answered with, nothing else. The name is re-resolved every five minutes (OCW's address is in AWS and moves), and
-  addresses are merged rather than replaced so a session already connected to one keeps working.
+  answered with lately, nothing else. The name is re-resolved every five minutes (OCW's address is in AWS and
+  moves), and **the newest answer is what the game is told**; the previous few stay reachable so a session already
+  connected to one keeps working. They are kept in a ring of 8, so a new address always gets in. A destination that
+  is refused marks the name for a fresh lookup instead of waiting out the five minutes, so a dropped connection can
+  be remade at the new address.
 - **its certificate is checked.** OCW serves an ordinary publicly-signed certificate, so `tls_trust` defaults to
   `roots` under this backend: the chain must end in a public root the runtime carries (`runtime/net/roots.c`, which
   already holds Let's Encrypt's **ISRG Root X1 and X2** for the https client) or one the system bundle has, *and*
-  match the host name. Verification needs a name, so a connection made by address alone with no name to check
+  match the host name. The roots are parsed **once** for the process and shared by every connection (a parsed chain
+  is only read during a handshake), so a reconnect costs nothing — the system bundle is several hundred
+  certificates. Verification needs a name, so a connection made by address alone with no name to check
   against is refused rather than quietly weakened.
 
   **A server of your own is the exception.** OpenCourse World is to be open source and self-hostable, and a LAN
