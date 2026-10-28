@@ -236,9 +236,25 @@ static void raise_file_limit(void) {
     }
 }
 
+// How many CPUs this process may run on, of how many online: a launcher or a tuning daemon that pins a game to a few
+// cores leaves the game's own threads (four emulated cores, the renderer, audio) fighting over them - a steady low
+// frame rate with an idle GPU (issue #25). Said once, so a log shows it.
+static void log_cpus(void) {
+#ifndef __ANDROID__
+    cpu_set_t set;
+    long online = sysconf(_SC_NPROCESSORS_ONLN);
+    if (sched_getaffinity(0, sizeof set, &set) == 0) {
+        int n = CPU_COUNT(&set);
+        fprintf(stderr, "[platform] %d of %ld CPUs available to this process%s\n", n, online,
+                n < online && n < 6 ? " (limited: the game wants 6 or more)" : "");
+    }
+#endif
+}
+
 void plat_init(void) {
     raise_file_limit();
     log_to_file_without_terminal();
+    log_cpus();
     require_cpu();
 }
 
