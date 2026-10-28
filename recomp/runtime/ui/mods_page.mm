@@ -85,9 +85,12 @@ static void game_rows(void) {
             snprintf(g_row_was[i], sizeof g_row_was[0], "%s", r[i].text);
             g_row_known[i] = true;
         }
-        changed |= opt_text(r[i].label, r[i].text, (size_t)r[i].cap, r[i].hint, r[i].desc);
+        bool entered = opt_text(r[i].label, r[i].text, (size_t)r[i].cap, r[i].hint, r[i].desc);
+        changed |= entered;
+        if (entered && i < MAX_SHOWN_ROWS)  // (stored now: not again on the next frame)
+            snprintf(g_row_was[i], sizeof g_row_was[0], "%s", r[i].text);
         // the row is no longer being edited and holds something else than when it was last stored
-        if (i < MAX_SHOWN_ROWS && !opt_text_editing(r[i].label) && strcmp(r[i].text, g_row_was[i])) {
+        else if (i < MAX_SHOWN_ROWS && !opt_text_editing(r[i].label) && strcmp(r[i].text, g_row_was[i])) {
             snprintf(g_row_was[i], sizeof g_row_was[0], "%s", r[i].text);
             changed = true;
         }
