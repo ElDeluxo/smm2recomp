@@ -440,6 +440,7 @@ static Step g_steps[3] = {{"Check and lay out your game files", PENDING, ""},
                           {"Recompile the game code", PENDING, ""}};
 static std::atomic<float> g_progress{0};
 static std::atomic<int> g_job{0};  // 0 idle, 1 running, 2 done (play), 3 failed
+static std::atomic<bool> g_built_wait{false};  // the game code was just built on a small Linux machine: Play, not a start
 static std::string g_err_what, g_err_hint, g_err_log;
 static std::vector<std::string> g_found;
 static std::atomic<bool> g_cancel{false};
@@ -623,6 +624,16 @@ static void *job_thread(void *) {
             return NULL;
         }
         set_step(2, DONE, "built");
+#if defined(__linux__) && !defined(__ANDROID__)
+        // A Steam Deck (16 GB) froze starting the game straight after the build in desktop mode (#13): the build and
+        // the first start together are too much for it there. Back to the screen instead: Play (or Gaming Mode)
+        if (ram_gb <= 16) {
+            LOG("[launcher] built on a %d GB machine: the game starts with Play, not straight away\n", ram_gb);
+            g_built_wait = true;
+            g_job = 0;
+            return NULL;
+        }
+#endif
     } else {
         set_step(2, SKIPPED, "already built");
     }
@@ -1172,7 +1183,7 @@ extern "C" void launcher_run(const char *root) {
             ImGui::BeginGroup();
             float bh = 64 * s;
             if (job == 0) {
-                const char *label = files_ready && !fonts_needed ? "Play" : "Set up and play";
+                const char *label = (files_ready || g_built_wait) && !fonts_needed ? "Play" : "Set up and play";
                 bool go = big_button(label, can_start || files_ready, 320 * s, bh);
                 if (autof && frame == 45 && (can_start || files_ready)) go = true;  // (test: as if pressed)
                 if (go) {
@@ -1189,6 +1200,8 @@ extern "C" void launcher_run(const char *root) {
                     ImGui::TextColored(WARN, "%s", g_cfg.game.empty() ? "Choose your game files (1)."
                                                    : !games_ok ? "One of the game files can't be used (1)."
                                                                : "Choose prod.keys and the firmware (2): the fonts come from there.");
+                else if (g_built_wait)
+                    ImGui::TextColored(GOOD, "The game code is ready. Press Play (on a Steam Deck, Gaming Mode is best).");
                 else
                     ImGui::TextColored(GOOD, "%s", files_ready && !fonts_needed ? "Everything is set up."
                                                    : "Ready to set up: the first time takes a while.");
