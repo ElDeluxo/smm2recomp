@@ -38,6 +38,7 @@ static NetBackend backend_set = NET_BACKEND_OURS, backend_eff = NET_BACKEND_OURS
 static char fallback_why[160];  // why this session runs as ours though another backend is set (net_backend_fall_back)
 static NetTrust trust = NET_TRUST_LOCAL_CA;
 static bool log_on, log_data_on;
+static bool test_server_set;  // nex_test_server is configured: the local-nex backend is offered (a developer's set-up)
 static uint32_t test_ip = 0x7f000001;
 static uint16_t test_port = 44300;
 static Rule rules[MAX_RULES];
@@ -141,6 +142,7 @@ static void load(void) {
         backend_eff = NET_BACKEND_OURS;
     }
     if (cfg("RECOMP_NET_TEST_SERVER", "nex_test_server", v, sizeof v)) {
+        test_server_set = true;
         uint32_t ip;
         char *colon = strchr(v, ':');
         if (colon) *colon = 0, test_port = (uint16_t)atoi(colon + 1);
@@ -306,7 +308,7 @@ int net_backend_options(const NetBackendOption **out) {
       "goes online.", true},                                                                                          \
      {NET_BACKEND_LOCAL_NEX, "local-nex", "Local test server",                                       \
       "The game's own online code talks to a NEX test server on this computer or your local network "                \
-      "(tools/nex_test_server). For development; Course World needs our server.", true},                             \
+      "(tools/nex_test_server). For development; Course World needs our server.", false},                             \
      {NET_BACKEND_NEXTENDO, "nextendo", "Nextendo Network",                                                           \
       "Network Play (online co-op and versus) on Nextendo's community servers. Course World, the Endless "          \
       "Challenge and 100 Mario stay on your course source (TGRCode or your server). Needs a Nextendo account "       \
@@ -316,8 +318,12 @@ int net_backend_options(const NetBackendOption **out) {
       "Course World against your own OpenCourse World account: the game's own online code talks to OCW's server. "  \
       "Needs its domain and your personal token (below). The only backend that reaches a public host, and it "       \
       "reaches that one host only, with its certificate checked.", true}}
-    static const NetBackendOption signed_out[] = OPTS(false), signed_in[] = OPTS(true);
+    static NetBackendOption signed_out[] = OPTS(false), signed_in[] = OPTS(true);
 #undef OPTS
+    // The local test server only where one is set up (nex_test_server): a player stepping through the list landed on
+    // it, and the game's own online client then went for a server that isn't there (issue #32)
+    init();
+    signed_out[NET_BACKEND_LOCAL_NEX].available = signed_in[NET_BACKEND_LOCAL_NEX].available = test_server_set;
     *out = nextendo_signed_in() ? signed_in : signed_out;
     return (int)(sizeof signed_in / sizeof *signed_in);
 }
