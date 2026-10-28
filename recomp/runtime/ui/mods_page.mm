@@ -48,6 +48,13 @@ void menu_close(void);  // (menu.mm)
 // a present - opt_text has its own field, with the on-screen keyboard for a controller)
 #define MAX_SHOWN_ROWS 16
 static bool g_row_shown[MAX_SHOWN_ROWS];  // a secret row was activated: its field is drawn until the menu closes
+// What each text row held when the game last stored it. opt_text reports a change only when Enter confirmed one
+// (ImGuiInputTextFlags_EnterReturnsTrue), while ImGui edits the buffer as it is typed: so a field left by clicking
+// away, tabbing on, or closing the keyboard showed the new text and kept it in memory, but the game was never told
+// to store it - and it was gone at the next start (owner's report on 0.5.5: "credentials would not save"). The
+// comparison below notices that the moment the row stops being edited, whichever way it was left.
+static char g_row_was[MAX_SHOWN_ROWS][256];
+static bool g_row_known[MAX_SHOWN_ROWS];
 extern "C" void game_mod_rows_hide(void) {  // (menu.mm, when the menu closes)
     for (int i = 0; i < MAX_SHOWN_ROWS; i++) g_row_shown[i] = false;
 }
@@ -74,7 +81,16 @@ static void game_rows(void) {
                 if (chars++ == r[i].max_len) { *q = 0; break; }
             }
         }
+        if (i < MAX_SHOWN_ROWS && !g_row_known[i]) {  // (first sight: what it already held is not a change)
+            snprintf(g_row_was[i], sizeof g_row_was[0], "%s", r[i].text);
+            g_row_known[i] = true;
+        }
         changed |= opt_text(r[i].label, r[i].text, (size_t)r[i].cap, r[i].hint, r[i].desc);
+        // the row is no longer being edited and holds something else than when it was last stored
+        if (i < MAX_SHOWN_ROWS && !opt_text_editing(r[i].label) && strcmp(r[i].text, g_row_was[i])) {
+            snprintf(g_row_was[i], sizeof g_row_was[0], "%s", r[i].text);
+            changed = true;
+        }
     }
     if (changed) game_mod_rows_changed();
 }
