@@ -1,6 +1,13 @@
 # Progress
 
 ## PAUSED 2026-10-25 after v0.5.5 (owner's call); resume from here
+- **On main, not released yet (2026-10-28, issues + PRs pass):** PRs merged: #41 (Windows: WSAPoll and POLLPRI, the
+  OCW slowness of #33), #35 (open-file limit), #36 (ocw address book, roots parsed once), #38 (OCW fields saved on
+  leaving them; plus a follow-up so Enter doesn't store twice). Fixes: local-nex offered only with nex_test_server
+  set (#32), the overlay follows A/B swapped to south/east (#40), setup's generator error says its last line and the
+  Windows log falls back to %LOCALAPPDATA% (#12), Video > 30 fps mode on Vulkan (#39), no auto-start after a build
+  on Linux with 16 GB or less (#13). Packages build on all platforms. Waiting on reporters: #12, #25, #30, #33, #42
+  (logs). Suggestions, the owner to pick: #43 (word search), #26 (editor mouse / keys), #27 (Flatpak etc.), #19.
 - **Released v0.5.5** (https://github.com/smm2recomp/smm2recomp/releases/tag/v0.5.5): Mac 0.5.5 installed; iPad build
   341 installed over devicectl (not launched: off Tailscale, devicectl launch refused), the owner's mods kept.
 - **v0.5.5 (2026-10-25 evening): 100 Mario "communication error" after a death** (iPad v0.5.4, Super Expert;
