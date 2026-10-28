@@ -119,11 +119,17 @@ static ImGuiKey key_from_scancode(SDL_Scancode sc) {
     }
 }
 
-// Nintendo layout: the right face button (A) confirms, the bottom one (B) goes back.
+// Nintendo layout: the right face button (A) confirms, the bottom one (B) goes back. Bindings don't reach the menus
+// (input_bind.h: none can lock the player out), with one exception: A and B swapped onto the bottom and right buttons
+// (bind_pad_a = south, bind_pad_b = east, the Xbox habit) swaps them here too, as the game does (issue #40).
+static bool menu_ab_swapped(void) {
+    return g_bind_pad[BIND_A] == SDL_GAMEPAD_BUTTON_SOUTH && g_bind_pad[BIND_B] == SDL_GAMEPAD_BUTTON_EAST;
+}
 static ImGuiKey key_from_pad(Uint8 b) {
+    bool sw = menu_ab_swapped();
     switch (b) {
-    case SDL_GAMEPAD_BUTTON_EAST: return ImGuiKey_GamepadFaceDown;   // activate
-    case SDL_GAMEPAD_BUTTON_SOUTH: return ImGuiKey_GamepadFaceRight; // cancel / back
+    case SDL_GAMEPAD_BUTTON_EAST: return sw ? ImGuiKey_GamepadFaceRight : ImGuiKey_GamepadFaceDown;   // activate
+    case SDL_GAMEPAD_BUTTON_SOUTH: return sw ? ImGuiKey_GamepadFaceDown : ImGuiKey_GamepadFaceRight;  // cancel / back
     case SDL_GAMEPAD_BUTTON_NORTH: return ImGuiKey_GamepadFaceUp;
     case SDL_GAMEPAD_BUTTON_WEST: return ImGuiKey_GamepadFaceLeft;
     case SDL_GAMEPAD_BUTTON_DPAD_UP: return ImGuiKey_GamepadDpadUp;
