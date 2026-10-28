@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/mman.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/ucontext.h>
 #include <unistd.h>
@@ -52,7 +53,31 @@ static void require_cpu(void) {
 static void require_cpu(void) {}
 #endif
 
+// The RomFS is served from the player's own extracted files and an open host file is kept per RomFS file read
+// (services/fs.c rix_read: opened once, kept for the next read), so a long session holds hundreds of them, on top of
+// the game's sockets. A terminal process on macOS starts with a soft limit of 256, which SMM2's Course World can
+// pass in a few minutes: every open and every socket then fails with EMFILE, the game is handed nothing where it
+// expects a file or a connection, and it dies on the null ("cannot open ...: Too many open files", then a crash in
+// the game's own code). Raise the soft limit to the hard one, as far as that goes.
+static void raise_file_limit(void) {
+    struct rlimit r;
+    if (getrlimit(RLIMIT_NOFILE, &r)) return;
+    rlim_t want = 8192;
+    if (r.rlim_max != RLIM_INFINITY && want > r.rlim_max) want = r.rlim_max;
+    if (r.rlim_cur != RLIM_INFINITY && r.rlim_cur < want) {
+        rlim_t had = r.rlim_cur;
+        r.rlim_cur = want;
+        if (setrlimit(RLIMIT_NOFILE, &r)) {  // (macOS also caps at kern.maxfilesperproc: try the hard limit alone)
+            fprintf(stderr, "[platform] open files: %llu, could not raise it to %llu\n", (unsigned long long)had,
+                (unsigned long long)want);
+            return;
+        }
+        fprintf(stderr, "[platform] open files: %llu -> %llu\n", (unsigned long long)had, (unsigned long long)want);
+    }
+}
+
 void plat_init(void) {
+    raise_file_limit();
     require_cpu();
 #if TARGET_OS_IPHONE
     {   // iOS: no terminal - the log goes to Documents/smm2recomp.log (Files app / Finder)
