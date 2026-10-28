@@ -141,7 +141,17 @@ static void log_to_file_without_console(void) {
         remove(prev);
         rename(g_log_path, prev);
     }
-    if (!freopen(g_log_path, append ? "ab" : "wb", stderr)) { g_log_path[0] = 0; return; }
+    if (!freopen(g_log_path, append ? "ab" : "wb", stderr)) {
+        // The exe's folder can't be written (a protected folder, or one an antivirus guards): the log goes to
+        // %LOCALAPPDATA% instead, so there is still one to attach to a report (issue #12 had none)
+        const char *la = getenv("LOCALAPPDATA");
+        char dir[MAX_PATH];
+        snprintf(dir, sizeof dir, "%s\\" GAME_EXE, la ? la : ".");
+        CreateDirectoryA(dir, NULL);
+        snprintf(g_log_path, sizeof g_log_path, "%s\\" GAME_EXE ".log", dir);
+        if (!freopen(g_log_path, append ? "ab" : "wb", stderr)) { g_log_path[0] = 0; return; }
+        fprintf(stderr, "[platform] the program's folder can't be written: this log is %s\n", g_log_path);
+    }
     setvbuf(stderr, NULL, _IONBF, 0);
     _dup2(_fileno(stderr), _fileno(stdout));
     _putenv("LASRECOMP_LOG_APPEND=1");
