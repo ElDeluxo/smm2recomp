@@ -121,13 +121,22 @@ void plat_thread_realtime(uint64_t period_ns) {
 }
 
 // ---- process
-// Release builds are GUI-subsystem executables (no console window): stdout / stderr go to lasrecomp.log next to the
-// exe, and a fatal error shows a message box (plat_fatal_notice) instead of vanishing. Processes started by this one
-// (the start screen re-executing itself for the game) append to the same log.
+// Without a terminal, stdout / stderr go to smm2recomp.log next to the exe, and a fatal error shows a message box
+// (plat_fatal_notice) instead of vanishing. Processes started by this one (the start screen re-executing itself for
+// the game) append to the same log. The exe is a console program, so started from Explorer, a shortcut or Steam it is
+// given a console window of its own: that one is closed and the log written to the file as well (no Windows player
+// ever had a log file before: issues #12, #30, #37). Started from a terminal, the output stays in the terminal.
 static char g_log_path[MAX_PATH];
+static bool g_console_freed;  // (plat_exec: the next process gets no console window either)
 
 static void log_to_file_without_console(void) {
-    if (GetStdHandle(STD_ERROR_HANDLE) && GetStdHandle(STD_ERROR_HANDLE) != INVALID_HANDLE_VALUE) return;  // console / pipe
+    HANDLE h = GetStdHandle(STD_ERROR_HANDLE);
+    if (h && h != INVALID_HANDLE_VALUE) {
+        DWORD ids[2];
+        if (GetConsoleProcessList(ids, 2) != 1) return;  // a terminal's console (or a pipe, no console): output there
+        FreeConsole();  // the console is this process's alone: not a terminal anyone is reading
+        g_console_freed = true;
+    }
     char exe[MAX_PATH];
     DWORD n = GetModuleFileNameA(NULL, exe, sizeof exe);
     if (!n || n >= sizeof exe) return;
@@ -273,14 +282,15 @@ void plat_exec(char *const argv[]) {
     fflush(stdout);
     fflush(stderr);
     if (!argv) {
-        ok = CreateProcessW(NULL, GetCommandLineW(), NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi);
+        ok = CreateProcessW(NULL, GetCommandLineW(), NULL, NULL, TRUE, g_console_freed ? CREATE_NO_WINDOW : 0, NULL,
+                            NULL, &si, &pi);
     } else {
         static char cmd[32768];
         cmd[0] = 0;
         for (int i = 0; argv[i]; i++) append_arg(cmd, sizeof cmd, argv[i]);
         static wchar_t wcmd[32768];
         MultiByteToWideChar(CP_UTF8, 0, cmd, -1, wcmd, 32768);
-        ok = CreateProcessW(NULL, wcmd, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi);
+        ok = CreateProcessW(NULL, wcmd, NULL, NULL, TRUE, g_console_freed ? CREATE_NO_WINDOW : 0, NULL, NULL, &si, &pi);
     }
     if (!ok) return;
     CloseHandle(pi.hThread);
