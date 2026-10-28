@@ -1,7 +1,11 @@
 # Progress
 
 ## PAUSED 2026-10-25 after v0.5.5 (owner's call); resume from here
-- **On main, not released yet (2026-10-28, issues + PRs pass):** PRs merged: #41 (Windows: WSAPoll and POLLPRI, the
+- **Released v0.5.6 (2026-10-29)** (https://github.com/smm2recomp/smm2recomp/releases/tag/v0.5.6): the 2026-10-28 pass
+  below, plus the Windows log file (the exe is a console program: its own console is now freed and the log written to
+  smm2recomp.log; it never was before) and the Linux CPU-count log line (#25). Mac 0.5.6; iPad build 361 over
+  Tailscale (local devicectl unavailable), launched to the title; private Windows v0.5.6 zip.
+- **2026-10-28 issues + PRs pass (in v0.5.6):** PRs merged: #41 (Windows: WSAPoll and POLLPRI, the
   OCW slowness of #33), #35 (open-file limit), #36 (ocw address book, roots parsed once), #38 (OCW fields saved on
   leaving them; plus a follow-up so Enter doesn't store twice). Fixes: local-nex offered only with nex_test_server
   set (#32), the overlay follows A/B swapped to south/east (#40), setup's generator error says its last line and the
