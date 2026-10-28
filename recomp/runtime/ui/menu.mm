@@ -519,6 +519,11 @@ static void tab_display(void) {
         g_want_fullscreen_apply.store(true);
     }
     opt_toggle("Show FPS", &g_settings.show_fps, false, "Shows the frame rate in the top right corner.");
+#if !defined(__APPLE__)
+    opt_toggle("30 fps mode", &g_settings.fps30, false,
+               "The game's own 30 fps mode all the time: half the frames drawn, the game still at full speed. For a "
+               "PC that can't hold 60. Off: it switches to it by itself only while frames don't fit 60.");
+#endif
     opt_toggle("Show memory use", &g_settings.show_memory, false,
                "Shows how much memory the app uses in the top right corner, once a second (on iPad and iPhone also how "
                "much iOS still allows before it closes the app).");

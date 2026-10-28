@@ -168,6 +168,11 @@ void vk_pace_frame(void) {
     over[idx] = (uint8_t)o;
     idx = (idx + 1) % 60;
     if (!on) return;  // (measured and counted all the same: LARECOMP_LOG_PACE, the stats)
+    if (g_settings.fps30) {  // (Video > 30 fps mode: the game's 30 fps mode all the time, issue #39)
+        if (!pace_slow) LOG("[pace] 30 fps mode (the Video setting)\n");
+        pace_slow = true, calm = 0;
+        return;
+    }
     if (!pace_slow && nover >= 12) {
         pace_slow = true, calm = 0;
         LOG("[pace] frames don't fit 60 fps (%d of the last 60 over 16.2 ms busy): the game's 30 fps mode\n", nover);

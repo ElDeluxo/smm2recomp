@@ -33,6 +33,7 @@ typedef struct {
     bool reverb;         // room reverb effect
     bool movie_audio;
     bool show_fps;
+    bool fps30;          // the game's own 30 fps mode always (Vulkan: nvn/vulkan/exec.c vk_pace_frame), for a slow PC
     bool show_memory;  // the app's memory use in the corner (menu.mm, platform.h plat_memory_used)
     bool dpad_move;      // the d-pad (and arrow keys) move Link like the stick
     bool pads_from_p2;   // every controller is player 2, 3, 4 (the keyboard / on-screen controls stay player 1):
