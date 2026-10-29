@@ -5,6 +5,12 @@
   below, plus the Windows log file (the exe is a console program: its own console is now freed and the log written to
   smm2recomp.log; it never was before) and the Linux CPU-count log line (#25). Mac 0.5.6; iPad build 361 over
   Tailscale (local devicectl unavailable), launched to the title; private Windows v0.5.6 zip.
+- **2026-10-29 issue round (on main, not released):** a device-lost crash no longer says "install Vulkan 1.3" (#37).
+  RTX 50-series device lost in 3D World courses (#30, #37: driver 621.01, VK_EXT_device_fault "ip invalid" = an
+  invalid shader instruction): asked them to try LARECOMP_VK_NO_BDA=1, then LARECOMP_VK_DEVLOST_TRACE=2 +
+  LARECOMP_SYNC_SUBMIT=1. #25: one Bazzite RX 7800 XT player is at 18 fps from the first screen with an idle GPU and
+  12/12 CPUs (Gamescope frame limit?); asked for that, their CPU and LARECOMP_LOG_PACE=1. The other (RX 9060 XT) is
+  fine (first-time shader compiles).
 - **2026-10-28 issues + PRs pass (in v0.5.6):** PRs merged: #41 (Windows: WSAPoll and POLLPRI, the
   OCW slowness of #33), #35 (open-file limit), #36 (ocw address book, roots parsed once), #38 (OCW fields saved on
   leaving them; plus a follow-up so Enter doesn't store twice). Fixes: local-nex offered only with nex_test_server
