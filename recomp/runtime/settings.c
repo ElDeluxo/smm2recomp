@@ -33,6 +33,8 @@ Settings g_settings = {
     .frame_gen = FRAMEGEN_OFF,
 };
 
+const char *const g_theme_names[N_THEMES] = {"Default", "NES"};
+
 // The game's own text languages: its RomFS carries these per region (regionUS/USen|USes|USfr, regionEU/EUen|EUes|...,
 // regionJP/JPja, regionKR/KRkr, regionTW/TWch, regionCN/CNch), and the game picks one from the system language it
 // reads back (runtime/services/am.c), exactly as it does on the console. Codes as the Switch reports them.
@@ -100,6 +102,11 @@ void settings_load(void) {
         else if (!strcmp(key, "show_fps")) g_settings.show_fps = atoi(val) != 0;
         else if (!strcmp(key, "fps30")) g_settings.fps30 = atoi(val) != 0;
         else if (!strcmp(key, "show_memory")) g_settings.show_memory = atoi(val) != 0;
+        else if (!strcmp(key, "theme")) {  // (a name from g_theme_names; anything else: the default)
+            g_settings.theme = THEME_DEFAULT;
+            for (int i = 0; i < N_THEMES; i++)
+                if (!strcmp(val, g_theme_names[i])) g_settings.theme = i;
+        }
         else if (!strcmp(key, "resolution")) {
             int n = atoi(val);
             g_settings.res_mode = !strcmp(val, "dynamic") ? RES_DYNAMIC : (!strcmp(val, "75%") || !strcmp(val, "67%")) ? RES_Q75 :
@@ -160,6 +167,7 @@ void settings_save(void) {
     fprintf(f, "show_fps = %d\n", g_settings.show_fps);
     fprintf(f, "fps30 = %d\n", g_settings.fps30);
     fprintf(f, "show_memory = %d\n", g_settings.show_memory);
+    fprintf(f, "theme = %s\n", g_theme_names[g_settings.theme >= 0 && g_settings.theme < N_THEMES ? g_settings.theme : THEME_DEFAULT]);
     fprintf(f, "upscaler = %s\n", g_settings.upscaler == UPSCALE_METALFX ? "metalfx" : g_settings.upscaler == UPSCALE_FSR1 ? "fsr1" : "bilinear");
     fprintf(f, "frame_gen = %s\n", g_settings.frame_gen == FRAMEGEN_120 ? "120" : "off");
     fprintf(f, "antialias = %s\n", g_settings.antialias == AA_SMAA ? "smaa" : "off");

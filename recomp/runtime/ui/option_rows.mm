@@ -10,12 +10,19 @@
 
 #include "option_rows.h"
 #include "osk.h"
+#include "theme_draw.h"
 
 static float g_scale = 1;
 static std::string g_desc_hover, g_desc_focus, g_desc_shown;  // this frame's hovered / selected row, and the last shown
 static std::string g_desc_first;  // the page's first row (shown until a row is selected or hovered)
 
-static const ImU32 kGold = IM_COL32(236, 194, 84, 255);
+// the menu theme's accent / caption colours (runtime/ui/menu.mm)
+extern "C" uint32_t menu_accent(int a);
+extern "C" uint32_t menu_muted(void);
+extern "C" float menu_row_round(void);   // the theme's row corner radius / outline width (px at 1080 p)
+extern "C" float menu_row_border(void);
+extern "C" float menu_row_notch(void);   // > 0: the NES theme (stepped pixel corners, pointer, pixel arrows) instead of rounded rows
+#define kGold menu_accent(255)
 static bool g_next_disabled;
 void opt_disable_next(void) { g_next_disabled = true; }
 static int g_indent;
@@ -46,7 +53,9 @@ void opt_section(const char *title) {
     std::string t = title;
     for (char &c : t) c = (char)toupper((unsigned char)c);
     if (ImGui::GetCursorPosY() > ImGui::GetStyle().WindowPadding.y + 1) ImGui::Dummy(ImVec2(0, 10 * g_scale));
-    ImGui::TextColored(ImVec4(0.55f, 0.58f, 0.52f, 1), "%s", t.c_str());
+    ImGui::PushStyleColor(ImGuiCol_Text, menu_muted());
+    ImGui::TextUnformatted(t.c_str());
+    ImGui::PopStyleColor();
 }
 
 // One row: draws it, handles A / click and left / right while selected. Returns 2 (A / click), -1 / +1 (left / right) or 0.
@@ -56,7 +65,8 @@ static int row(const char *label, const std::string &value, bool changed, const 
     ImGui::PushID(label);
     if (g_indent) ImGui::SetCursorPosX(ImGui::GetCursorPosX() + g_indent * 28 * g_scale);  // (an option of the row above)
     ImVec2 p = ImGui::GetCursorScreenPos();
-    float w = ImGui::GetContentRegionAvail().x, h = ImGui::GetFontSize() * (g_touch ? 2.5f : 1.9f);
+    const bool nes = menu_row_notch() > 0;  // (the NES theme: pixel-art buttons, pointer and arrows)
+    float w = ImGui::GetContentRegionAvail().x, h = ImGui::GetFontSize() * (g_touch || nes ? 2.5f : 1.9f);
     ImGui::PushStyleColor(ImGuiCol_NavCursor, ImVec4(0, 0, 0, 0));  // (the row's own border shows the selection)
     bool clicked = ImGui::InvisibleButton("##row", ImVec2(w, h), ImGuiButtonFlags_EnableNav);
     ImGui::PopStyleColor();
@@ -90,20 +100,35 @@ static int row(const char *label, const std::string &value, bool changed, const 
     if (g_desc_first.empty() && desc) g_desc_first = desc;
 
     ImDrawList *dl = ImGui::GetWindowDrawList();
-    float r = 9 * g_scale, pad = 16 * g_scale, fs = ImGui::GetFontSize();
-    dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), hov || foc ? IM_COL32(255, 255, 255, 22) : IM_COL32(0, 0, 0, 40), r);
-    dl->AddRect(p, ImVec2(p.x + w, p.y + h), hov || foc ? (off ? IM_COL32(236, 194, 84, 120) : kGold)
-                                                        : IM_COL32(255, 255, 255, off ? 18 : 38), r, 0,
-                hov || foc ? 2.0f : 1.0f);
+    float r = menu_row_round() * g_scale, pad = 16 * g_scale, fs = ImGui::GetFontSize();
+    ImU32 fill = hov || foc ? IM_COL32(255, 255, 255, 22) : IM_COL32(0, 0, 0, 40);
+    ImU32 edge = hov || foc ? (off ? menu_accent(120) : kGold) : IM_COL32(255, 255, 255, off ? 18 : 38);
+    float bw = (hov || foc ? 2.0f * menu_row_border() : menu_row_border()) * (menu_row_border() > 1 ? g_scale : 1);
+    const bool lit = (hov || foc) && !off;
+    const float ap = fmaxf(2.0f, floorf(fs * 0.15f));  // (a pixel of the pointer / arrows)
+    if (nes) {  // NES.css's buttons: stepped corners, an inset shadow along the bottom and right, blue when pointed at
+        ImU32 nfill = off ? NES_RGB(27, 30, 34) : lit ? NES_BLUE : NES_RGB(47, 52, 58);
+        ImU32 nshadow = off ? NES_RGB(20, 22, 25) : lit ? NES_BLUE_D : NES_RGB(26, 29, 32);
+        ImU32 nedge = off ? NES_RGB(58, 63, 70) : lit ? NES_WHITE : NES_RGB(92, 97, 107);
+        nes_box(dl, p, ImVec2(p.x + w, p.y + h), nfill, nedge, 3 * g_scale, nshadow);
+    } else {
+        dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), fill, r);
+        dl->AddRect(p, ImVec2(p.x + w, p.y + h), edge, r, 0, bw);
+    }
     std::string t = label;
     if (upper)
         for (char &c : t) c = (char)toupper((unsigned char)c);
     float ty = p.y + (h - fs) * 0.5f;
-    ImU32 label_col = off ? IM_COL32(110, 110, 102, 255) : IM_COL32(240, 236, 224, 255);  // (greyed out: clearly dim)
+    ImU32 label_col = off ? IM_COL32(110, 110, 102, 255) : nes ? NES_WHITE : IM_COL32(240, 236, 224, 255);  // (greyed out: clearly dim)
+    float lead = nes ? 8 * ap : 0;  // (the NES pointer's room before the label)
+    if (nes && lit) {  // the pointer: NES.css's selection arrow
+        const ImU32 pc[] = {NES_WHITE};
+        nes_icon(dl, ImVec2(p.x + pad, p.y + (h - 9 * ap) * 0.5f), kNesArrow, ap, pc);
+    }
     {  // a label that would run into the value is cut short with "..." (long names: mods, courses)
         float vw0 = value.empty() ? 0 : ImGui::CalcTextSize(value.c_str()).x;
         float vspace = value.empty() ? 0 : (vw0 < w * 0.6f ? vw0 : w * 0.6f) + fs * (arrows ? 2.4f : 0.9f);
-        float room = w - 2 * pad - vspace;
+        float room = w - 2 * pad - vspace - lead;
         if (room > fs && ImGui::CalcTextSize(t.c_str()).x > room) {
             while (!t.empty() && ImGui::CalcTextSize((t + "...").c_str()).x > room) t.pop_back();
             while (!t.empty() && (t.back() & 0xC0) == 0x80) t.pop_back();  // (never half a UTF-8 character)
@@ -111,14 +136,20 @@ static int row(const char *label, const std::string &value, bool changed, const 
             t += "...";
         }
     }
-    dl->AddText(ImVec2(p.x + pad, ty), label_col, t.c_str());
+    dl->AddText(ImVec2(p.x + pad + lead, ty), label_col, t.c_str());
     float right = p.x + w - pad;  // (the value's right edge)
     if (arrows && !value.empty()) {  // ◀ value ▶, drawn (the fonts have no arrow glyphs); a click on one steps
-        float aw = fs * 0.42f, gap = fs * 0.55f, cy = ty + fs * 0.52f;
+        float aw = nes ? 5 * ap : fs * 0.42f, gap = fs * 0.55f, cy = ty + fs * 0.52f;
         float rx = right - aw, lx = rx - gap - ImGui::CalcTextSize(value.c_str()).x - gap - aw;
-        ImU32 ac = off ? IM_COL32(110, 110, 100, 255) : hov || foc ? kGold : IM_COL32(170, 170, 160, 255);
-        dl->AddTriangleFilled(ImVec2(lx, cy), ImVec2(lx + aw, cy - aw * 0.75f), ImVec2(lx + aw, cy + aw * 0.75f), ac);
-        dl->AddTriangleFilled(ImVec2(rx + aw, cy), ImVec2(rx, cy - aw * 0.75f), ImVec2(rx, cy + aw * 0.75f), ac);
+        ImU32 ac = off ? IM_COL32(110, 110, 100, 255) : nes ? (lit ? NES_WHITE : NES_GREY) : hov || foc ? kGold : IM_COL32(170, 170, 160, 255);
+        if (nes) {  // stepped pixel arrows
+            const ImU32 pc[] = {ac};
+            nes_icon(dl, ImVec2(lx, p.y + (h - 9 * ap) * 0.5f), kNesArrow, ap, pc, true);
+            nes_icon(dl, ImVec2(rx, p.y + (h - 9 * ap) * 0.5f), kNesArrow, ap, pc);
+        } else {
+            dl->AddTriangleFilled(ImVec2(lx, cy), ImVec2(lx + aw, cy - aw * 0.75f), ImVec2(lx + aw, cy + aw * 0.75f), ac);
+            dl->AddTriangleFilled(ImVec2(rx + aw, cy), ImVec2(rx, cy - aw * 0.75f), ImVec2(rx, cy + aw * 0.75f), ac);
+        }
         if (clicked && !off) {
             float mx = ImGui::GetIO().MousePos.x, hit = g_touch ? gap * 2.2f : gap;  // (a fingertip: wider)
             if (mx >= lx - hit && mx <= lx + aw + hit) step = -1;
@@ -136,8 +167,8 @@ static int row(const char *label, const std::string &value, bool changed, const 
     if (!shown.empty()) {
         const std::string &value = shown;
         float vw = ImGui::CalcTextSize(value.c_str()).x, vx = right - vw;
-        dl->AddText(ImVec2(vx, ty), off ? IM_COL32(110, 110, 102, 255) : changed ? IM_COL32(255, 255, 255, 255)
-                                                                                 : IM_COL32(205, 205, 195, 255), value.c_str());
+        dl->AddText(ImVec2(vx, ty), off ? IM_COL32(110, 110, 102, 255) : nes ? (lit || changed ? NES_WHITE : NES_GREY)
+                                    : changed ? IM_COL32(255, 255, 255, 255) : IM_COL32(205, 205, 195, 255), value.c_str());
     }
     ImGui::PopID();
     return step;
@@ -196,6 +227,17 @@ bool opt_radio(const char *label, bool selected, const char *desc) {
     float r = ImGui::GetFontSize() * 0.32f, cx = b.x - 16 * g_scale - r, cy = (a.y + b.y) * 0.5f;
     ImDrawList *dl = ImGui::GetWindowDrawList();
     ImU32 col = off ? IM_COL32(150, 150, 140, 255) : selected ? kGold : IM_COL32(205, 205, 195, 255);
+    if (menu_row_notch() > 0) {  // NES.css's radio: a stepped box, with a pixel star in it when chosen
+        float u = 2 * g_scale, sz = r * 2.6f;
+        nes_box(dl, ImVec2(cx - sz * 0.5f, cy - sz * 0.5f), ImVec2(cx + sz * 0.5f, cy + sz * 0.5f), NES_RGB(21, 24, 27),
+                off ? NES_RGB(110, 110, 102) : NES_WHITE, u);
+        if (selected) {  // a filled square inside
+            float m = floorf(sz * 0.28f);
+            dl->AddRectFilled(ImVec2(floorf(cx - sz * 0.5f + m), floorf(cy - sz * 0.5f + m)),
+                              ImVec2(floorf(cx + sz * 0.5f - m), floorf(cy + sz * 0.5f - m)), off ? NES_RGB(110, 110, 102) : NES_GREEN);
+        }
+        return chosen && !selected;
+    }
     dl->AddCircle(ImVec2(cx, cy), r, col, 0, 2.0f);
     if (selected) dl->AddCircleFilled(ImVec2(cx, cy), r * 0.55f, col);
     return chosen && !selected;
@@ -237,13 +279,21 @@ void opt_end(void) {
     ImGui::SameLine(0, 0);
     ImVec2 p = ImGui::GetCursorScreenPos(), avail = ImGui::GetContentRegionAvail();
     float gap = 24 * g_scale;
-    ImGui::GetWindowDrawList()->AddLine(ImVec2(p.x + gap * 0.5f, p.y), ImVec2(p.x + gap * 0.5f, p.y + avail.y),
-                                        IM_COL32(236, 194, 84, 110), 1.0f);
+    const bool nes = menu_row_notch() > 0;
+    if (nes) {  // the description in its own NES.css container (the child's own background is left clear)
+        nes_box(ImGui::GetWindowDrawList(), ImVec2(p.x + gap, p.y), ImVec2(p.x + avail.x, p.y + avail.y),
+                ImGui::GetColorU32(ImGuiCol_ChildBg), NES_GREY, 3 * g_scale);
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
+    } else {
+        ImGui::GetWindowDrawList()->AddLine(ImVec2(p.x + gap * 0.5f, p.y), ImVec2(p.x + gap * 0.5f, p.y + avail.y),
+                                            menu_accent(110), 1.0f);
+    }
     ImGui::SetCursorScreenPos(ImVec2(p.x + gap, p.y));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14 * g_scale, 6 * g_scale));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, nes ? ImVec2(26 * g_scale, 20 * g_scale) : ImVec2(14 * g_scale, 6 * g_scale));
     ImGui::BeginChild("##desc", ImVec2(0, avail.y), ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_NoNav);
     ImGui::PopStyleVar();
-    ImGui::SetWindowFontScale(1.3f);  // (the description reads at a glance)
+    if (nes) ImGui::PopStyleColor();
+    ImGui::SetWindowFontScale(nes ? 1.0f : 1.3f);  // (the description reads at a glance)
     ImGui::PushTextWrapPos(0);
     ImGui::TextUnformatted(g_desc_shown.c_str());
     ImGui::PopTextWrapPos();

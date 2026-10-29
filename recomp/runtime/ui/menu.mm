@@ -17,6 +17,7 @@
 
 #include "imgui.h"
 #include "option_rows.h"
+#include "theme_draw.h"
 #include "imgui_internal.h"  // (NavCursorVisible)
 #include "osk.h"
 #ifdef __APPLE__
@@ -314,6 +315,9 @@ static bool g_inited;
 static ImGuiContext *g_ctx;  // ours: the start screen (back to it after a reboot) has its own context
 static ImFont *g_font, *g_font_big;
 static ImFont *g_menu_font, *g_menu_font_big;  // the menu window (Baloo 2); everything else keeps g_font
+static ImFont *g_nes_font, *g_nes_font_big;    // the NES theme's menu window: Press Start 2P (runtime/nes_font.c)
+extern "C" const unsigned char g_nes_font_ttf[];
+extern "C" const unsigned int g_nes_font_ttf_len;
 static int g_tab, g_tab_request = -2;  // (-2: no request; -1 is the Prelaunch tab)
 static int g_focus_tab = -99;  // put the nav cursor on this tab next frame (-100: the selected one; -99: none)
 static int g_focus_frames;
@@ -326,38 +330,108 @@ static float g_atlas_scale = 1;
 void menu_tabs_focus(bool first_tab) { g_focus_tab = first_tab ? -1 : -100, g_focus_frames = 0; }
 int g_tab_request_ext = -1;
 
+// ---- themes (Video tab > Theme; g_settings.theme). One palette per THEME_* in settings.h; to make another theme, add a
+// row here and a name in settings.c g_theme_names (and bump N_THEMES).
+typedef struct {
+    ImVec4 window, child, popup;      // backgrounds: the menu window, its panes, drop-downs
+    ImVec4 text, text_dim;            // text, and descriptions / disabled text
+    ImVec4 frame, button, tab;        // resting fills of fields, buttons, tabs
+    ImVec4 hover, active, pressed;    // hovered / selected-in-list / pressed
+    ImVec4 tab_selected, tab_alt;     // the open tab; the tab under the controller's cursor
+    ImVec4 line, muted;               // separators; the small section captions
+    ImVec4 accent, accent_dim;        // titles, check marks, the cursor border; slider grab
+    // shape (px at 1080 p, scaled with the window)
+    float window_round, child_round, frame_round, tab_round;  // corner radii
+    float window_border, frame_border;                        // outline widths of the menu window / fields (0: none)
+    float row_round, row_border;                              // the option rows' corners; their outline width
+    float row_notch;                                          // > 0: the rows' corners are steps of this size (NES.css)
+    bool border_text;                                         // the window / field outline in the text colour, not the accent
+} ThemePalette;
+
+static const ThemePalette kThemes[N_THEMES] = {
+    {   // Default: forest green with gold (the original look)
+        /*window*/ {0.06f, 0.09f, 0.08f, 0.94f}, /*child*/ {0.09f, 0.13f, 0.11f, 0.85f}, /*popup*/ {0.07f, 0.10f, 0.09f, 0.98f},
+        /*text*/ {0.96f, 0.94f, 0.88f, 1}, /*text_dim*/ {0.62f, 0.64f, 0.58f, 1},
+        /*frame*/ {0.13f, 0.19f, 0.16f, 1}, /*button*/ {0.14f, 0.22f, 0.18f, 1}, /*tab*/ {0.12f, 0.18f, 0.15f, 1},
+        /*hover*/ {0.15f, 0.36f, 0.25f, 1}, /*active*/ {0.19f, 0.45f, 0.31f, 1}, /*pressed*/ {0.21f, 0.50f, 0.34f, 1},
+        /*tab_selected*/ {0.21f, 0.44f, 0.31f, 1}, /*tab_alt*/ {0.19f, 0.27f, 0.22f, 1},
+        /*line*/ {0.30f, 0.36f, 0.30f, 1}, /*muted*/ {0.55f, 0.58f, 0.52f, 1},
+        /*accent*/ {0.93f, 0.76f, 0.33f, 1}, /*accent_dim*/ {0.62f, 0.49f, 0.20f, 1},
+        /*window_round*/ 14, /*child_round*/ 10, /*frame_round*/ 8, /*tab_round*/ 8,
+        /*window_border*/ 0, /*frame_border*/ 0, /*row_round*/ 9, /*row_border*/ 1, /*row_notch*/ 0, /*border_text*/ false,
+    },
+    {   // NES: NES.css's dark container - #212529 panels with thick white 4 px borders, square edges, stepped corners on
+        // the rows, and its palette: primary #209cee, success #4aa52e, warning #f7d51d / #e59400, disabled #adafbc
+        /*window*/ {0.129f, 0.145f, 0.161f, 1}, /*child*/ {0.078f, 0.090f, 0.102f, 1}, /*popup*/ {0.129f, 0.145f, 0.161f, 1},
+        /*text*/ {1, 1, 1, 1}, /*text_dim*/ {0.678f, 0.686f, 0.737f, 1},
+        /*frame*/ {0.078f, 0.090f, 0.102f, 1}, /*button*/ {0.231f, 0.251f, 0.271f, 1}, /*tab*/ {0.231f, 0.251f, 0.271f, 1},
+        /*hover*/ {0.125f, 0.612f, 0.933f, 1}, /*active*/ {0.063f, 0.553f, 0.878f, 1}, /*pressed*/ {0, 0.420f, 0.702f, 1},
+        /*tab_selected*/ {0.290f, 0.647f, 0.180f, 1}, /*tab_alt*/ {0.125f, 0.612f, 0.933f, 1},
+        /*line*/ {0.678f, 0.686f, 0.737f, 1}, /*muted*/ {0.678f, 0.686f, 0.737f, 1},
+        /*accent*/ {1, 1, 1, 1}, /*accent_dim*/ {0.678f, 0.686f, 0.737f, 1},  // (white: no gold in this theme)
+        /*window_round*/ 0, /*child_round*/ 0, /*frame_round*/ 0, /*tab_round*/ 0,
+        /*window_border*/ 4, /*frame_border*/ 4, /*row_round*/ 0, /*row_border*/ 3, /*row_notch*/ 4, /*border_text*/ true,
+    },
+};
+
+static const ThemePalette &theme_palette(void) {
+    int t = g_settings.theme;
+    return kThemes[t >= 0 && t < N_THEMES ? t : THEME_DEFAULT];
+}
+
+// The current theme's accent as packed colour (a = 0..255), for the option rows and the other files' hand-drawn bits
+extern "C" uint32_t menu_accent(int a) { return ImGui::ColorConvertFloat4ToU32(ImVec4(theme_palette().accent.x, theme_palette().accent.y, theme_palette().accent.z, a / 255.0f)); }
+extern "C" uint32_t menu_muted(void) { return ImGui::ColorConvertFloat4ToU32(theme_palette().muted); }
+extern "C" float menu_row_round(void) { return theme_palette().row_round; }
+extern "C" float menu_row_border(void) { return theme_palette().row_border; }
+extern "C" float menu_row_notch(void) { return theme_palette().row_notch; }
+static bool nes_theme(void) { return theme_palette().row_notch > 0; }   // (the pixel-art look: its own font, frame, icons)
+static ImFont *menu_font(void) { return nes_theme() && g_nes_font ? g_nes_font : g_menu_font; }
+static ImFont *menu_font_big(void) { return nes_theme() && g_nes_font_big ? g_nes_font_big : g_menu_font_big; }
+extern "C" bool menu_theme_nes(void) { return nes_theme(); }
+static ImVec4 accent_vec(void) { return theme_palette().accent; }
+
+// The current theme (colours and shape, unscaled) into a style
+static void theme_apply(ImGuiStyle &s) {
+    const ThemePalette &p = theme_palette();
+    s.WindowRounding = p.window_round; s.ChildRounding = p.child_round; s.FrameRounding = p.frame_round;
+    s.GrabRounding = p.frame_round; s.TabRounding = p.tab_round; s.PopupRounding = p.frame_round;
+    s.ScrollbarRounding = p.frame_round;
+    s.WindowBorderSize = p.window_border; s.FrameBorderSize = p.frame_border; s.TabBarBorderSize = p.frame_border;
+    ImVec4 *c = s.Colors;
+    c[ImGuiCol_Border] = p.border_text ? p.text : p.accent;
+    c[ImGuiCol_WindowBg] = p.window;
+    c[ImGuiCol_ChildBg] = p.child;
+    c[ImGuiCol_PopupBg] = p.popup;
+    c[ImGuiCol_Text] = p.text;
+    c[ImGuiCol_TextDisabled] = p.text_dim;
+    c[ImGuiCol_FrameBg] = p.frame;
+    c[ImGuiCol_FrameBgHovered] = p.hover;
+    c[ImGuiCol_FrameBgActive] = p.active;
+    c[ImGuiCol_Button] = p.button;
+    c[ImGuiCol_ButtonHovered] = p.hover;
+    c[ImGuiCol_ButtonActive] = p.pressed;
+    c[ImGuiCol_Header] = p.hover;
+    c[ImGuiCol_HeaderHovered] = p.active;
+    c[ImGuiCol_HeaderActive] = p.pressed;
+    c[ImGuiCol_Tab] = p.tab;
+    c[ImGuiCol_TabHovered] = p.hover;
+    c[ImGuiCol_TabSelected] = p.tab_selected;
+    c[ImGuiCol_TabSelectedOverline] = p.accent;
+    c[ImGuiCol_CheckMark] = p.accent;
+    c[ImGuiCol_SliderGrab] = p.accent_dim;
+    c[ImGuiCol_SliderGrabActive] = p.accent;
+    c[ImGuiCol_NavCursor] = p.accent;
+    c[ImGuiCol_Separator] = p.line;
+    c[ImGuiCol_TitleBg] = c[ImGuiCol_TitleBgActive] = c[ImGuiCol_WindowBg];
+}
+
 static void style_init(void) {
     ImGuiStyle &s = ImGui::GetStyle();
     ImGui::StyleColorsDark();
-    s.WindowRounding = 14; s.FrameRounding = 8; s.GrabRounding = 8; s.TabRounding = 8; s.ChildRounding = 10;
     s.WindowPadding = ImVec2(28, 24); s.FramePadding = ImVec2(14, 8); s.ItemSpacing = ImVec2(14, 12);
-    s.WindowBorderSize = 0; s.ScrollbarSize = 18;
-    ImVec4 *c = s.Colors;
-    ImVec4 gold(0.93f, 0.76f, 0.33f, 1), gold_dim(0.62f, 0.49f, 0.20f, 1), green(0.15f, 0.36f, 0.25f, 1);
-    c[ImGuiCol_WindowBg] = ImVec4(0.06f, 0.09f, 0.08f, 0.94f);
-    c[ImGuiCol_ChildBg] = ImVec4(0.09f, 0.13f, 0.11f, 0.85f);
-    c[ImGuiCol_PopupBg] = ImVec4(0.07f, 0.10f, 0.09f, 0.98f);
-    c[ImGuiCol_Text] = ImVec4(0.96f, 0.94f, 0.88f, 1);
-    c[ImGuiCol_TextDisabled] = ImVec4(0.62f, 0.64f, 0.58f, 1);
-    c[ImGuiCol_FrameBg] = ImVec4(0.13f, 0.19f, 0.16f, 1);
-    c[ImGuiCol_FrameBgHovered] = green;
-    c[ImGuiCol_FrameBgActive] = ImVec4(0.19f, 0.45f, 0.31f, 1);
-    c[ImGuiCol_Button] = ImVec4(0.14f, 0.22f, 0.18f, 1);
-    c[ImGuiCol_ButtonHovered] = green;
-    c[ImGuiCol_ButtonActive] = ImVec4(0.21f, 0.50f, 0.34f, 1);
-    c[ImGuiCol_Header] = green;
-    c[ImGuiCol_HeaderHovered] = ImVec4(0.19f, 0.45f, 0.31f, 1);
-    c[ImGuiCol_HeaderActive] = ImVec4(0.21f, 0.50f, 0.34f, 1);
-    c[ImGuiCol_Tab] = ImVec4(0.12f, 0.18f, 0.15f, 1);
-    c[ImGuiCol_TabHovered] = green;
-    c[ImGuiCol_TabSelected] = ImVec4(0.21f, 0.44f, 0.31f, 1);
-    c[ImGuiCol_TabSelectedOverline] = gold;
-    c[ImGuiCol_CheckMark] = gold;
-    c[ImGuiCol_SliderGrab] = gold_dim;
-    c[ImGuiCol_SliderGrabActive] = gold;
-    c[ImGuiCol_NavCursor] = gold;
-    c[ImGuiCol_Separator] = ImVec4(0.30f, 0.36f, 0.30f, 1);
-    c[ImGuiCol_TitleBg] = c[ImGuiCol_TitleBgActive] = c[ImGuiCol_WindowBg];
+    s.ScrollbarSize = 18;
+    theme_apply(s);
 }
 
 
@@ -390,6 +464,14 @@ static void init(void) {
     if (getenv("LARECOMP_MENU_FONT") || rt_resource("Baloo2-SemiBold.ttf", "third_party/fonts/Baloo2/Baloo2-SemiBold.ttf", baloo, sizeof baloo)) {
         g_menu_font = io.Fonts->AddFontFromFileTTF(baloo, 39 * g_atlas_scale, &cfg);
         g_menu_font_big = io.Fonts->AddFontFromFileTTF(baloo, 72 * g_atlas_scale, &cfg);
+    }
+    {   // the NES theme's pixel font (compiled in; crisp: no oversampling, pixel-snapped)
+        ImFontConfig nc;
+        nc.FontDataOwnedByAtlas = false;
+        nc.OversampleH = nc.OversampleV = 1;
+        nc.PixelSnapH = true;
+        g_nes_font = io.Fonts->AddFontFromMemoryTTF((void *)g_nes_font_ttf, (int)g_nes_font_ttf_len, 20 * g_atlas_scale, &nc);
+        g_nes_font_big = io.Fonts->AddFontFromMemoryTTF((void *)g_nes_font_ttf, (int)g_nes_font_ttf_len, 32 * g_atlas_scale, &nc);
     }
     if (!g_font) {  // (no font file: ImGui's own, at the menu's size rather than its 13 px)
         LOG("[menu] no system font: the built-in one\n");
@@ -451,7 +533,7 @@ static void drain_events(ImGuiIO &io) {
 // Section header in the big font.
 static void header(const char *t) {
     ImGui::PushFont(g_font_big);
-    ImGui::TextColored(ImVec4(0.93f, 0.76f, 0.33f, 1), "%s", t);
+    ImGui::TextColored(accent_vec(), "%s", t);
     ImGui::PopFont();
     ImGui::Separator();
     ImGui::Spacing();
@@ -509,6 +591,9 @@ static void tab_display(void) {
     float scale = ImGui::GetFontSize() / 34;
     opt_begin("##video", scale);
     opt_section("Display");
+    opt_choice("Theme", &g_settings.theme, g_theme_names, N_THEMES, THEME_DEFAULT,
+               "The colours of this menu. Default: forest green and gold. NES: the 8-bit look of NES.css - dark panels, thick white borders, square edges and stepped corners.\n\n"
+               "Styled after https://nostalgic-css.github.io/NES.css/");
     const char *aspects[] = {"Unlocked", "Original 16:9"};
     opt_choice("Aspect ratio", &g_settings.aspect, aspects, 2, ASPECT_UNLOCKED,
                "Unlocked: the view fills the window, so wider (or taller) windows show more of the island - up to "
@@ -740,7 +825,7 @@ static void keyboard_draw(ImGuiIO &io, float scale) {
     ImGui::Begin("##kbd", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
                                     ImGuiWindowFlags_AlwaysAutoResize);
     ImGui::PushFont(g_font_big);
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.93f, 0.76f, 0.33f, 1));
+    ImGui::PushStyleColor(ImGuiCol_Text, accent_vec());
     // (no text from the game: a name entry - Link's, a course's - or a longer text, a Course World comment)
     ImGui::TextWrapped("%s", g_kbd_title[0] ? g_kbd_title : g_kbd_max <= 32 ? "Enter your name" : "Enter text");
     ImGui::PopStyleColor();
@@ -866,8 +951,8 @@ static void tabs_body(float scale, bool in_game, void (*prelaunch)(float)) {
             bool lit = focused_tab == t.id && ImGui::GetCurrentContext()->NavCursorVisible;
             ImGui::PushStyleColor(ImGuiCol_NavCursor, ImVec4(0, 0, 0, 0));
             if (lit) {
-                ImGui::PushStyleColor(ImGuiCol_Tab, ImVec4(0.19f, 0.27f, 0.22f, 1));
-                ImGui::PushStyleColor(ImGuiCol_TabHovered, ImVec4(0.19f, 0.27f, 0.22f, 1));
+                ImGui::PushStyleColor(ImGuiCol_Tab, theme_palette().tab_alt);
+                ImGui::PushStyleColor(ImGuiCol_TabHovered, theme_palette().tab_alt);
             }
             if (g_focus_tab == -1 && !prelaunch) g_focus_tab = 8;  // (no Prelaunch in game: Controls, the first tab)
             bool focus_here = g_focus_tab == t.id || (g_focus_tab == -100 && t.id == g_tab);
@@ -884,7 +969,7 @@ static void tabs_body(float scale, bool in_game, void (*prelaunch)(float)) {
                 ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
                 float h = 4 * scale > 2 ? 4 * scale : 2;
                 ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(a.x + 2, b.y - h), ImVec2(b.x - 2, b.y),
-                                                          IM_COL32(236, 194, 84, 255));  // (the menu's gold)
+                                                          menu_accent(255));  // (the theme's accent)
             }
             if (ImGui::IsItemFocused()) focused_tab = t.id;
             else if (focused_tab == t.id) focused_tab = -99;
@@ -1066,8 +1151,11 @@ void menu_render(void *cmd, uint32_t target_w, uint32_t target_h) {
     // spacing/rounding follow the output size too (style tuned for 1080 p)
     static ImGuiStyle base;
     static float style_scale = -1;
+    static int theme_seen = -1;
     if (style_scale < 0) base = ImGui::GetStyle();
-    if (fabsf(style_scale - scale) > 0.01f) {
+    bool recolour = theme_seen != g_settings.theme;  // (Video tab > Theme: the colours of the unscaled style, then rescale)
+    if (recolour) theme_apply(base), theme_seen = g_settings.theme;
+    if (recolour || fabsf(style_scale - scale) > 0.01f) {
         ImGui::GetStyle() = base;
         ImGui::GetStyle().ScaleAllSizes(scale);
         style_scale = scale;
@@ -1133,14 +1221,26 @@ void menu_render(void *cmd, uint32_t target_w, uint32_t target_h) {
         ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
         ImGui::SetNextWindowSize(ImVec2(w, h), ImGuiCond_Always);
         if (g_touch_ui) ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize, 34 * scale);  // (a thumb's width)
+        bool nes = nes_theme();
+        if (nes) {  // (the frame is drawn below, with stepped corners: ImGui's own background and border can't have them)
+            ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0);
+        }
         ImGui::Begin("##menu", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
+        if (nes) {
+            ImGui::PopStyleVar();
+            ImGui::PopStyleColor();
+            nes_box(ImGui::GetWindowDrawList(), ImGui::GetWindowPos(),
+                    ImVec2(ImGui::GetWindowPos().x + ImGui::GetWindowWidth(), ImGui::GetWindowPos().y + ImGui::GetWindowHeight()),
+                    ImGui::GetColorU32(theme_palette().window), NES_WHITE, 4 * scale);
+        }
         ImFont *keep_big = g_font_big;  // (the window in the menu's font; header() uses g_font_big)
-        g_font_big = g_menu_font_big;
-        ImGui::PushFont(g_menu_font);
+        g_font_big = menu_font_big();
+        ImGui::PushFont(menu_font());
         // header as on the start screen's Settings: the title, and a close X in the corner (B / Esc too). ("Title
         // screen" - rt_request_reboot(RT_REBOOT_TITLE) - is to find a new home; user 2026-10-11.)
         ImGui::PushFont(g_font_big);
-        ImGui::TextColored(ImVec4(0.93f, 0.76f, 0.33f, 1), "Settings");
+        ImGui::TextColored(accent_vec(), "Settings");
         ImGui::PopFont();
         {
             float bx = (g_touch_ui ? 64 : 44) * scale;
@@ -1150,12 +1250,20 @@ void menu_render(void *cmd, uint32_t target_w, uint32_t target_h) {
             bool close = ImGui::InvisibleButton("##close", ImVec2(bx, bx), ImGuiButtonFlags_EnableNav);
             ImGui::PopStyleColor();
             bool hot = ImGui::IsItemHovered() || ImGui::IsItemFocused();
-            ImU32 col = hot ? IM_COL32(236, 194, 84, 255) : IM_COL32(220, 216, 205, 255);
-            float m = bx * 0.3f, t = (hot ? 3.0f : 2.4f) * scale * 1.5f;
             ImDrawList *dl = ImGui::GetWindowDrawList();
-            if (hot) dl->AddRectFilled(p, ImVec2(p.x + bx, p.y + bx), IM_COL32(255, 255, 255, 20), 8 * scale);
-            dl->AddLine(ImVec2(p.x + m, p.y + m), ImVec2(p.x + bx - m, p.y + bx - m), col, t);
-            dl->AddLine(ImVec2(p.x + bx - m, p.y + m), ImVec2(p.x + m, p.y + bx - m), col, t);
+            if (nes) {  // a pixel X on a notched button (red when pointed at)
+                nes_box(dl, p, ImVec2(p.x + bx, p.y + bx), hot ? NES_RED : NES_BLACK, hot ? NES_WHITE : NES_GREY, 3 * scale,
+                        hot ? NES_RED_D : NES_RGB(21, 24, 27));
+                float px = floorf(bx / 12);
+                const ImU32 x[] = {NES_WHITE};
+                nes_icon(dl, ImVec2(p.x + (bx - 7 * px) * 0.5f, p.y + (bx - 7 * px) * 0.5f), kNesCross, px, x);
+            } else {
+                ImU32 col = hot ? menu_accent(255) : IM_COL32(220, 216, 205, 255);
+                float m = bx * 0.3f, t = (hot ? 3.0f : 2.4f) * scale * 1.5f;
+                if (hot) dl->AddRectFilled(p, ImVec2(p.x + bx, p.y + bx), IM_COL32(255, 255, 255, 20), 8 * scale);
+                dl->AddLine(ImVec2(p.x + m, p.y + m), ImVec2(p.x + bx - m, p.y + bx - m), col, t);
+                dl->AddLine(ImVec2(p.x + bx - m, p.y + m), ImVec2(p.x + m, p.y + bx - m), col, t);
+            }
             if (close) set_open(false);
         }
 
