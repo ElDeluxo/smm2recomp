@@ -307,9 +307,9 @@ static VkQueryPool gp_qp;
 static int gp_n;
 static char gp_label[512][112];
 static uint32_t gp_draws[512];
-// LARECOMP_VK_DEVLOST_TRACE=1: the last 64 GPU operations, dumped on device loss (with LARECOMP_SYNC_SUBMIT=1 the
+// LARECOMP_VK_DEVLOST_TRACE=1: the last 256 GPU operations (passes, submits, draws' shaders), dumped on device loss (with LARECOMP_SYNC_SUBMIT=1 the
 // dump ends with the command list that faulted).
-static char dl_ring[64][128];
+static char dl_ring[256][128];
 static unsigned dl_n;
 static int dl_on = -1;
 static void dl_note(const char *fmt, ...) {
@@ -317,14 +317,14 @@ static void dl_note(const char *fmt, ...) {
     if (!dl_on) return;
     va_list ap;
     va_start(ap, fmt);
-    vsnprintf(dl_ring[dl_n++ & 63], sizeof dl_ring[0], fmt, ap);
+    vsnprintf(dl_ring[dl_n++ & 255], sizeof dl_ring[0], fmt, ap);
     va_end(ap);
 }
 void vk_dl_note_upload(void *img, uint32_t w, uint32_t h, uint32_t lv) { dl_note("  upload %p %ux%u lv%u", img, w, h, lv); }
 void vk_devlost_dump(void) {
     if (!dl_on) return;
     LOG("[vk] last GPU operations before the device loss (oldest first):\n");
-    for (unsigned i = dl_n > 64 ? dl_n - 64 : 0; i < dl_n; i++) LOG("[vk]   %s\n", dl_ring[i & 63]);
+    for (unsigned i = dl_n > 256 ? dl_n - 256 : 0; i < dl_n; i++) LOG("[vk]   %s\n", dl_ring[i & 255]);
 }
 static void gp_mark(VkCommandBuffer cb, const char *fmt, ...) {
     if (!g_gpuprof_frame || gp_n >= 511) return;
@@ -3438,6 +3438,9 @@ static void draw_(CmdRec *r, bool indexed) {
         }
     }
     if (!nruns) { run_at[0] = 0; run_n[0] = inst; nruns = 1; run_gold[0] = false; }
+    if (dl_on > 0)  // (LARECOMP_VK_DEVLOST_TRACE: which shaders the faulting pass ran - NVN stages 0 vertex, 1 fragment, 2 geometry)
+        dl_note("  draw vs %llx fs %llx gs %llx", (unsigned long long)st.program->stages[0].code_addr,
+                (unsigned long long)st.program->stages[1].code_addr, (unsigned long long)st.program->stages[2].code_addr);
     for (int ri = 0; ri < nruns; ri++) {
         if (nruns > 1 || run_gold[0]) {  // this run's tint: a fragment set of its own
             float rtint[8] = {0};

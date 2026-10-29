@@ -29,7 +29,9 @@ static shaderc_shader_kind kind_of(int stage) {
 // SPIR-V disk cache: cache/spirv/<hash of stage + source>.spv, so a known shader costs a file read instead of a
 // GLSL compile (the driver's pipeline cache only covers the step after this one).
 static uint64_t src_hash(const char *src, int stage) {
-    uint64_t h = (0xcbf29ce484222325ull ^ (uint64_t)stage) + 3;  // + version of the post-processing (no_contraction)
+    static int opt = -1;  // (LARECOMP_VK_OPT: optimized SPIR-V is cached apart from the plain one)
+    if (opt < 0) opt = getenv("LARECOMP_VK_OPT") != NULL;
+    uint64_t h = (0xcbf29ce484222325ull ^ (uint64_t)stage) + 3 + (opt ? 0x100 : 0);  // + version of the post-processing
     for (const char *p = src; *p; p++) { h ^= (uint8_t)*p; h *= 0x100000001B3ull; }
     return h;
 }
