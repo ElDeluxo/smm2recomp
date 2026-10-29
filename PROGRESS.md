@@ -5,7 +5,8 @@
   below, plus the Windows log file (the exe is a console program: its own console is now freed and the log written to
   smm2recomp.log; it never was before) and the Linux CPU-count log line (#25). Mac 0.5.6; iPad build 361 over
   Tailscale (local devicectl unavailable), launched to the title; private Windows v0.5.6 zip.
-- **2026-10-30 round (on main, not released):** #37 traces on v0.5.8 (both RTX 50 players) end on the same draws at the
+- **Released v0.5.9 (2026-10-30), GitHub only:** the LARECOMP_VK_SKIP_FS test for #37.
+- **2026-10-30 round (in v0.5.9):** #37 traces on v0.5.8 (both RTX 50 players) end on the same draws at the
   same addresses: fs 72711e4500 (vs 72711e4200) or fs 7284734e00 (vs 7284734b00). Added LARECOMP_VK_SKIP_FS=<addr> for
   them to find which (needs a release). PR #52 (ElDeluxo): changes requested - keep the OCW play-history sync; drop
   the background memory cleaner (vk_collect_dead off the render thread, on by default) and clean-on-exit (deletes
