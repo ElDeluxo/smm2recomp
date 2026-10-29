@@ -3058,6 +3058,19 @@ static void draw_(CmdRec *r, bool indexed) {
             }
         }
         for (int i = 0; i < nskip; i++) if (last_hash == skip[i]) SKIP_DRAW();
+        // LARECOMP_VK_SKIP_FS=<code address>,...: draws with that fragment shader left out - for a player to find which
+        // shader a GPU crash comes from, with the addresses LARECOMP_VK_DEVLOST_TRACE names (#37)
+        static uint64_t skip_fs[16];
+        static int nskip_fs = -1;
+        if (nskip_fs < 0) {
+            nskip_fs = 0;
+            for (const char *p = getenv("LARECOMP_VK_SKIP_FS"); p && *p && nskip_fs < 16;) {
+                skip_fs[nskip_fs++] = strtoull(p, (char **)&p, 16);
+                while (*p == ',' || *p == ' ') p++;
+            }
+            if (nskip_fs) LOG("[vk] LARECOMP_VK_SKIP_FS: %d fragment shader(s) left out\n", nskip_fs);
+        }
+        for (int i = 0; i < nskip_fs; i++) if (fs == skip_fs[i]) SKIP_DRAW();
         extern bool pot_level_active(void);
         if (last_hash == 0xa2177dbb72197bd9ull && pot_level_active()) SKIP_DRAW();
         if (g_debug_frame && getenv("LARECOMP_LOG_FSHASH")) LOG("[fshash] fs=%llx hash %016llx\n", (unsigned long long)fs, (unsigned long long)last_hash);
