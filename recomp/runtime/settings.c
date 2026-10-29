@@ -23,7 +23,6 @@ Settings g_settings = {
     .reverb = true,
     .movie_audio = true,
     .show_fps = false,
-    .fps30 = false,
     .show_memory = false,
     .inv_keys = true,
     .tracker = true,
@@ -100,7 +99,6 @@ void settings_load(void) {
         else if (!strcmp(key, "reverb")) g_settings.reverb = atoi(val) != 0;
         else if (!strcmp(key, "movie_audio")) g_settings.movie_audio = atoi(val) != 0;
         else if (!strcmp(key, "show_fps")) g_settings.show_fps = atoi(val) != 0;
-        else if (!strcmp(key, "fps30")) g_settings.fps30 = atoi(val) != 0;
         else if (!strcmp(key, "show_memory")) g_settings.show_memory = atoi(val) != 0;
         else if (!strcmp(key, "theme")) {  // (a name from g_theme_names; anything else: the default)
             g_settings.theme = THEME_DEFAULT;
@@ -165,7 +163,6 @@ void settings_save(void) {
     fprintf(f, "reverb = %d\n", g_settings.reverb);
     fprintf(f, "movie_audio = %d\n", g_settings.movie_audio);
     fprintf(f, "show_fps = %d\n", g_settings.show_fps);
-    fprintf(f, "fps30 = %d\n", g_settings.fps30);
     fprintf(f, "show_memory = %d\n", g_settings.show_memory);
     fprintf(f, "theme = %s\n", g_theme_names[g_settings.theme >= 0 && g_settings.theme < N_THEMES ? g_settings.theme : THEME_DEFAULT]);
     fprintf(f, "upscaler = %s\n", g_settings.upscaler == UPSCALE_METALFX ? "metalfx" : g_settings.upscaler == UPSCALE_FSR1 ? "fsr1" : "bilinear");
