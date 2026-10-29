@@ -219,7 +219,11 @@ void plat_fatal_notice(void) {
             char *end = strchr(line, '\n');
             if (end) *end = 0;
             snprintf(text, sizeof text, GAME_TITLE " stopped because of an error:\n\n%.600s", line);
-            if (strstr(line, "Vulkan") || strstr(line, "VK_") || strstr(line, "vk")) {
+            if (strstr(line, "device lost")) {  // (the GPU stopped mid-game: not a missing driver, issue #37)
+                size_t l = strlen(text);
+                snprintf(text + l, sizeof text - l, "\n\nThe graphics driver stopped the game. Please report it on GitHub "
+                         "with the log below and what you were doing.");
+            } else if (strstr(line, "Vulkan") || strstr(line, "VK_") || strstr(line, "vk")) {
                 size_t l = strlen(text);
                 snprintf(text + l, sizeof text - l, "\n\n" GAME_TITLE " needs a graphics driver with Vulkan 1.3: install the "
                          "latest driver for your GPU (NVIDIA, AMD or Intel).");
