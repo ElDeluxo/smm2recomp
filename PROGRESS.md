@@ -5,7 +5,10 @@
   below, plus the Windows log file (the exe is a console program: its own console is now freed and the log written to
   smm2recomp.log; it never was before) and the Linux CPU-count log line (#25). Mac 0.5.6; iPad build 361 over
   Tailscale (local devicectl unavailable), launched to the title; private Windows v0.5.6 zip.
-- **2026-10-29 second round (on main, not released):** PR #45 merged (steve-spiteri: Video > Theme, NES.css look;
+- **Released v0.5.7 (2026-10-29)** (https://github.com/smm2recomp/smm2recomp/releases/tag/v0.5.7): the NES theme (#45),
+  the device-lost message, LARECOMP_VK_ROBUST=1 for #37 to test. Mac 0.5.7; iPad build 368 over Tailscale; private
+  Windows v0.5.7 zip.
+- **2026-10-29 second round (in v0.5.7):** PR #45 merged (steve-spiteri: Video > Theme, NES.css look;
   checked on Metal). #37's tests: LARECOMP_VK_NO_BDA=1 didn't help; LARECOMP_VK_DEVLOST_TRACE=2 shows "read invalid"
   in a 1600x900 3D World pass. Added LARECOMP_VK_ROBUST=1 (robustImageAccess + VK_EXT_robustness2, opt-in) for them to
   try; if it fixes it, make it the default on NVIDIA.
