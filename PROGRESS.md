@@ -5,6 +5,10 @@
   below, plus the Windows log file (the exe is a console program: its own console is now freed and the log written to
   smm2recomp.log; it never was before) and the Linux CPU-count log line (#25). Mac 0.5.6; iPad build 361 over
   Tailscale (local devicectl unavailable), launched to the title; private Windows v0.5.6 zip.
+- **2026-10-29 second round (on main, not released):** PR #45 merged (steve-spiteri: Video > Theme, NES.css look;
+  checked on Metal). #37's tests: LARECOMP_VK_NO_BDA=1 didn't help; LARECOMP_VK_DEVLOST_TRACE=2 shows "read invalid"
+  in a 1600x900 3D World pass. Added LARECOMP_VK_ROBUST=1 (robustImageAccess + VK_EXT_robustness2, opt-in) for them to
+  try; if it fixes it, make it the default on NVIDIA.
 - **2026-10-29 issue round (on main, not released):** a device-lost crash no longer says "install Vulkan 1.3" (#37).
   RTX 50-series device lost in 3D World courses (#30, #37: driver 621.01, VK_EXT_device_fault "ip invalid" = an
   invalid shader instruction): asked them to try LARECOMP_VK_NO_BDA=1, then LARECOMP_VK_DEVLOST_TRACE=2 +
