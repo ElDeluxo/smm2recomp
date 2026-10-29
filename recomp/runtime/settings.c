@@ -22,6 +22,10 @@ Settings g_settings = {
     .volume = 1.0f,
     .reverb = true,
     .movie_audio = true,
+    .skip_intro = true,
+    .mem_cleanup = true,
+    .mem_cleanup_interval = 30,
+    .clean_on_exit = false,
     .show_fps = false,
     .show_memory = false,
     .inv_keys = true,
@@ -98,6 +102,7 @@ void settings_load(void) {
         else if (!strcmp(key, "volume")) g_settings.volume = (float)atof(val);
         else if (!strcmp(key, "reverb")) g_settings.reverb = atoi(val) != 0;
         else if (!strcmp(key, "movie_audio")) g_settings.movie_audio = atoi(val) != 0;
+        else if (!strcmp(key, "skip_intro")) g_settings.skip_intro = atoi(val) != 0;
         else if (!strcmp(key, "show_fps")) g_settings.show_fps = atoi(val) != 0;
         else if (!strcmp(key, "show_memory")) g_settings.show_memory = atoi(val) != 0;
         else if (!strcmp(key, "theme")) {  // (a name from g_theme_names; anything else: the default)
@@ -118,6 +123,12 @@ void settings_load(void) {
         else if (!strcmp(key, "dpad_move")) g_settings.dpad_move = atoi(val) != 0;
         else if (!strcmp(key, "pads_from_p2")) g_settings.pads_from_p2 = atoi(val) != 0;
         else if (!strcmp(key, "move_360")) g_settings.move_360 = atoi(val) != 0;
+        else if (!strcmp(key, "mem_cleanup")) g_settings.mem_cleanup = atoi(val) != 0;
+        else if (!strcmp(key, "clean_on_exit")) g_settings.clean_on_exit = atoi(val) != 0;
+        else if (!strcmp(key, "mem_cleanup_interval")) {
+            int v = atoi(val);
+            if (v >= 5 && v <= 3600) g_settings.mem_cleanup_interval = v;
+        }
         else if (!strcmp(key, "blur_removal")) g_settings.blur_removal = atoi(val) != 0;
         else if (!strcmp(key, "hide_hero_icon")) g_settings.hide_hero_icon = atoi(val) != 0;
         else if (!strcmp(key, "mirror_mode")) g_settings.mirror_mode = atoi(val) != 0;
@@ -150,6 +161,17 @@ void settings_load(void) {
     if (!aspect_key) g_settings.aspect_asked = true;  // (likewise: the aspect ratio was chosen already)
     if (g_settings.volume < 0) g_settings.volume = 0;
     if (g_settings.volume > 2) g_settings.volume = 2;
+    const char *si = getenv("RECOMP_SKIP_INTRO");
+    if (si) g_settings.skip_intro = atoi(si) != 0;
+    const char *emc = getenv("RECOMP_MEM_CLEAN");
+    if (emc) g_settings.mem_cleanup = atoi(emc) != 0;
+    const char *eci = getenv("RECOMP_MEM_CLEAN_INTERVAL");
+    if (eci) {
+        int v = atoi(eci);
+        if (v >= 5 && v <= 3600) g_settings.mem_cleanup_interval = v;
+    }
+    const char *ece = getenv("RECOMP_CLEAN_ON_EXIT");
+    if (ece) g_settings.clean_on_exit = atoi(ece) != 0;
     LOG("[settings] loaded %s\n", SETTINGS_FILE);
 }
 
@@ -162,6 +184,10 @@ void settings_save(void) {
     fprintf(f, "volume = %.2f\n", g_settings.volume);
     fprintf(f, "reverb = %d\n", g_settings.reverb);
     fprintf(f, "movie_audio = %d\n", g_settings.movie_audio);
+    fprintf(f, "skip_intro = %d\n", g_settings.skip_intro);
+    fprintf(f, "mem_cleanup = %d\n", g_settings.mem_cleanup);
+    fprintf(f, "mem_cleanup_interval = %d\n", g_settings.mem_cleanup_interval);
+    fprintf(f, "clean_on_exit = %d\n", g_settings.clean_on_exit);
     fprintf(f, "show_fps = %d\n", g_settings.show_fps);
     fprintf(f, "show_memory = %d\n", g_settings.show_memory);
     fprintf(f, "theme = %s\n", g_theme_names[g_settings.theme >= 0 && g_settings.theme < N_THEMES ? g_settings.theme : THEME_DEFAULT]);

@@ -1104,6 +1104,8 @@ int ui_run(void) {
         while (SDL_WaitEventTimeout(&e, 16)) {
             if (e.type == SDL_EVENT_QUIT) {
                 LOG("window closed\n");
+                extern void clean_courses_and_thumbnails(void);
+                if (g_settings.clean_on_exit) clean_courses_and_thumbnails();
                 exit(0);
             }
             extern bool input_user_blocked(const SDL_Event *e);

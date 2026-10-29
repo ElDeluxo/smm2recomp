@@ -65,6 +65,10 @@ typedef struct {
     int tunic;           // index into g_tunic_colours (0 = Default: the game's / the seed's own)
     int hearts;          // index into g_heart_colours (0 = Default red)
     char rando_seed[128];  // active randomizer seed (rando/<name>/), empty = vanilla
+    bool skip_intro;     // skip the boot logo presentation animations
+    bool mem_cleanup;    // dynamic periodic memory trimming
+    int mem_cleanup_interval; // interval in seconds (default 30)
+    bool clean_on_exit;  // clean downloaded courses and thumbnail cache on exit
     int theme;           // THEME_*: the look of the menu (Video tab > Theme)
 } Settings;
 

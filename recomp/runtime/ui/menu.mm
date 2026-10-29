@@ -31,6 +31,7 @@ extern "C" {
 #include "../game_rows.h"
 #include "../hle.h"
 #include "../settings.h"
+#include "../mem_clean.h"
 #include "menu.h"
 void input_reset(void);
 void controls_bindings_draw(float scale);  // controls_ui.mm
@@ -660,6 +661,32 @@ static void tab_display(void) {
                "small artifacts. Does nothing on a 60 Hz display.");
 
     opt_section("Game");
+    if (opt_toggle("Skip intro", &g_settings.skip_intro, true,
+                   "Skips the boot logo presentation animations and goes directly to the title screen.")) {
+        settings_save();
+    }
+    if (opt_toggle("Clean memory dynamically", &g_settings.mem_cleanup, true,
+                   "Periodically trims unused heap pages and compacts memory to prevent memory bloat during gameplay.")) {
+        mem_clean_update();
+        settings_save();
+    }
+    if (g_settings.mem_cleanup) {
+        if (opt_int("Cleanup interval", &g_settings.mem_cleanup_interval, 10, 300, 10, 30, "%d s",
+                    "How often to trim memory in seconds (default: 30s).")) {
+            mem_clean_update();
+            settings_save();
+        }
+    }
+    if (opt_action("Clean memory now", "", "Immediately compacts and trims process heap memory.")) {
+        mem_clean_now();
+    }
+    if (opt_toggle("Clean courses and thumbnails on exit", &g_settings.clean_on_exit, false,
+                   "When closing the game, deletes cached downloaded courses, play-later lists, and thumbnails to save disk space and prevent memory buildup. Your own courses and save progress are never touched.")) {
+        settings_save();
+    }
+    if (opt_action("Clean courses and thumbnails now", "", "Immediately clears downloaded course and thumbnail cache.")) {
+        clean_courses_and_thumbnails();
+    }
     opt_toggle("Remove blur", &g_settings.blur_removal, false,
                "Turns off the tilt-shift blur at the top and bottom of the screen.");
     opt_toggle("Hide Hero Mode icon", &g_settings.hide_hero_icon, false,

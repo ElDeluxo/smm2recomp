@@ -14,6 +14,7 @@
 #include "gamelib.h"
 #include "paths.h"
 #include "settings.h"
+#include "mem_clean.h"
 #include "hle.h"
 #include "kernel.h"
 #include "mods.h"
@@ -112,10 +113,16 @@ void backend_clear_window(void);      // a black frame while the game is down
 static void reboot_idle(void) {  // (main thread, while guest threads stop) keep the window alive
     SDL_Event e;
     while (SDL_PollEvent(&e))
-        if (e.type == SDL_EVENT_QUIT) { LOG("window closed\n"); exit(0); }
+        if (e.type == SDL_EVENT_QUIT) {
+            LOG("window closed\n");
+            if (g_settings.clean_on_exit) clean_courses_and_thumbnails();
+            exit(0);
+        }
 }
 
 static void teardown(void) {
+    if (g_settings.clean_on_exit) clean_courses_and_thumbnails();
+    mem_clean_shutdown();
     uint64_t t0 = plat_now_ns();
     kernel_stop_threads(reboot_idle);
     backend_clear_window();
@@ -188,6 +195,7 @@ static void boot(const char *root) {
     { extern void online_sign_in_at_start(void); online_sign_in_at_start(); }  // (runtime/ui/online_rows.mm)
     kernel_init();
     dispatch_init();
+    mem_clean_init();
 
     uint32_t stack_size = 0x100000;
     int prio = 44;
