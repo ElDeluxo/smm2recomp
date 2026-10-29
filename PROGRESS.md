@@ -5,7 +5,8 @@
   below, plus the Windows log file (the exe is a console program: its own console is now freed and the log written to
   smm2recomp.log; it never was before) and the Linux CPU-count log line (#25). Mac 0.5.6; iPad build 361 over
   Tailscale (local devicectl unavailable), launched to the title; private Windows v0.5.6 zip.
-- **2026-10-29 evening round (on main, not released):** the 30 fps mode (v0.5.6) removed: SMM2 has no 30 fps mode
+- **Released v0.5.8 (2026-10-29), GitHub only** (owner: no Mac / iPad / Windows installs this time): https://github.com/smm2recomp/smm2recomp/releases/tag/v0.5.8
+- **2026-10-29 evening round (in v0.5.8):** the 30 fps mode (v0.5.6) removed: SMM2 has no 30 fps mode
   for the pacing trick (from the Link's Awakening runtime) to switch to; a log with it on shows 60 fps throughout
   (#47; #39 reopened; #48 may be it). RTX 50 crash (#30, #37): LARECOMP_VK_ROBUST=1 didn't help either; asked for
   LARECOMP_VK_OPT=1 + LARECOMP_VK_NO_SPIRV_CACHE=1; the device-lost trace now names each draw's shaders (256
