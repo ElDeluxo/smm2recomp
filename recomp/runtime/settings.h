@@ -65,6 +65,7 @@ typedef struct {
     int tunic;           // index into g_tunic_colours (0 = Default: the game's / the seed's own)
     int hearts;          // index into g_heart_colours (0 = Default red)
     char rando_seed[128];  // active randomizer seed (rando/<name>/), empty = vanilla
+    bool skip_intro;     // skip the boot logo presentation animations
     int theme;           // THEME_*: the look of the menu (Video tab > Theme)
 } Settings;
 
