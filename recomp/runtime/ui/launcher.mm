@@ -652,6 +652,7 @@ static long long tag_rank(const std::string &t) {  // v<major>.<minor>.<patch> (
         return ((long long)a << 24) + ((long long)b << 12) + c;
     return -1;  // (dev builds: any release is newer)
 }
+extern "C" void menu_notice(const char *text, double seconds);  // (menu.mm: a notice over the game)
 static void *update_thread(void *) {
     std::string body;
     if (const char *t = getenv("RECOMP_UPDATE_TAGS")) {
@@ -683,6 +684,12 @@ static void *update_thread(void *) {
         pthread_mutex_lock(&g_update_lock);
         g_update_tag = tag;
         pthread_mutex_unlock(&g_update_lock);
+        // said over the game too, once it's past its start logos: the Mods tab's row alone went unseen (issue #25)
+        while (SDL_GetTicks() < 25000) SDL_Delay(500);
+        char note[200];
+        snprintf(note, sizeof note, "Version %s is out (this is %s). Menu (F1) > Mods > Online: New version.",
+                 tag.c_str(), RECOMP_VERSION);
+        menu_notice(note, 12);
     }
     return NULL;
 }
