@@ -1050,7 +1050,7 @@ Nintendo's servers: only the redirect table's names resolve, every other name is
 | `ocw` | the mod's online overrides switch **off**, and the game's own online code talks to **OpenCourse World** with the player's own account ([below](#opencourse-world-backendocw)). The only backend that reaches a public host, and it reaches that one host only |
 | `nextendo` | with a signed-in Nextendo account (`runtime/net/nextendo.h`): **hybrid** (below): the game's own NEX client logs in to Nextendo's SMM2 server, Network Play is theirs, and the mod keeps answering Course World, the Endless Challenge and 100 Mario (courses from TGRCode unless `courses=` says otherwise; `hundred=` doesn't matter). `course_world=backend`: all of Course World from Nextendo, the mod's online overrides off. Not signed in: logged ("not signed in; using our server") and the backend is `ours` |
 
-In the Mods tab's Online section: the "Online backend" choice (the next start) and the Nextendo account (Sign in / Sign out). For the app-level settings page,
+In the Online tab: the "Online backend" choice (the next start, or Restart the game now) and the Nextendo account (Sign in / Sign out). For the app-level settings page,
 `net_backend_options()` / `net_backend_select()` (`runtime/net/netcfg.h`) list them all; Nextendo can be chosen
 while an account is signed in. OpenCourse World's own domain and token are the rows just under that section
 (`games/smm2/mods/ocw.c`, through `runtime/game_rows.h`).
@@ -1256,7 +1256,7 @@ account and hands out a local ID token whenever the game's own sockets are on.
 Sign in at opencourse.world, accept its terms, and take the **domain** and your **personal token** from the package
 it gives you (on a console those go on the SD card as `ocw-config.json`).
 
-**In the game:** the overlay menu (F1) → **Mods**. Pick **OpenCourse World** under "Online backend" in the Online
+**In the game:** the overlay menu (F1) → **Online**. Pick **OpenCourse World** under "Online backend" in the Online
 section, and fill in the **OpenCourse World** rows just below it: `Domain`, `Address` and `Token`. Each opens a
 field when activated — typed directly with a keyboard, or through the on-screen keyboard with a controller. The
 rows are always shown, even with every mod off, because they have to be set *before* anything can work. Changing

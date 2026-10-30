@@ -104,7 +104,7 @@ static bool back_pressed(void) {
     return ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) || ImGui::IsKeyPressed(ImGuiKey_Escape, false);
 }
 
-static int g_page;             // 0 built-in, 1 installed, 2 GameBanana, 3 online
+static int g_page;             // 0 built-in, 1 installed, 2 GameBanana
 static int g_mod = -1;         // the installed mod whose page is open
 static int g_gb = 0;           // the GameBanana mod whose page is open (its id)
 static int g_gb_file;
@@ -402,24 +402,26 @@ void mods_page(void) {
     mods_page_test();
     char installed[40];
     snprintf(installed, sizeof installed, "Installed (%d)", usermods_count());
-    const char *pages[] = {"Built-in", installed, "GameBanana", "Online"};
-    int np = gb_available() ? 4 : 3;
-    if (np == 3) pages[2] = "Online";
-    int page = np == 3 && g_page == 3 ? 2 : g_page;
+    const char *pages[] = {"Built-in", installed, "GameBanana"};
+    int np = gb_available() ? 3 : 2;
+    if (g_page >= np) g_page = 0;
     opt_section("Mods");
-    int before = page;
+    int page = g_page;
     opt_choice("Show", &page, pages, np, 0, "Built-in: this program's own mods. Installed: mods you added (they "
-               "load at the next start). GameBanana: get more. Online: the online backend and app settings.");
-    if (page != before) g_mod = -1, g_gb = 0;  // (another page: no mod's page open)
-    g_page = np == 3 && page == 2 ? 3 : page;
+               "load at the next start). GameBanana: get more.");
+    if (page != g_page) g_mod = -1, g_gb = 0;  // (another page: no mod's page open)
+    g_page = page;
     switch (g_page) {
     case 0: page_builtin(); break;
     case 1: page_installed(); break;
-    case 2: page_gb(); break;
-    default:
-        if (online_rows_available()) online_rows();
-        game_rows();  // the game's own settings for the backend above (OCW's domain and token)
-        launcher_settings_rows();
-        break;
+    default: page_gb(); break;
     }
+}
+
+// The Online tab (owner, 2026-10-30: the Mods tab's Online page was hard to find): the backend and its accounts, the
+// game's own rows for it (OpenCourse World's domain, address and token), then the app's (updates, game files).
+void online_page(void) {
+    if (online_rows_available()) online_rows();
+    game_rows();
+    launcher_settings_rows();
 }

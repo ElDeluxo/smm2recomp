@@ -9,6 +9,8 @@
 #include "imgui_internal.h"  // (SetKeyOwner, NavCursorVisible)
 
 #include "option_rows.h"
+#include <string.h>
+extern "C" const char *menu_clipboard(void);  // (menu.mm: the system clipboard's text)
 #include "osk.h"
 #include "theme_draw.h"
 
@@ -259,11 +261,29 @@ bool opt_text(const char *label, char *buf, size_t cap, const char *hint, const 
         return false;
     }
     ImGui::PushID(label);
-    ImGui::SetNextItemWidth(-1);
+    // a Paste button beside the field: the clipboard's text in place of the field's (touch screens have no Cmd+V;
+    // owner, 2026-10-30: an OpenCourse World token couldn't be pasted)
+    const char *paste_label = "Paste";
+    float pw = ImGui::CalcTextSize(paste_label).x + ImGui::GetStyle().FramePadding.x * 2;
+    ImGui::SetNextItemWidth(-(pw + ImGui::GetStyle().ItemSpacing.x));
     if (focus > 0) ImGui::SetKeyboardFocusHere(), focus--;
     bool done = ui_input_text("##text", buf, cap, ImGuiInputTextFlags_EnterReturnsTrue, hint, label);
+    bool active = ImGui::IsItemActive();
     if (ImGui::IsItemFocused()) g_desc_focus = desc ? desc : "";
-    if (done || ui_input_text_cancelled() || (focus == 0 && !ImGui::IsItemActive() && !osk_is_open())) editing = 0;
+    ImGui::SameLine();
+    bool paste = ImGui::Button(paste_label);
+    bool paste_hot = ImGui::IsItemHovered() || ImGui::IsItemActive();  // (pressing it takes the focus off the field)
+    if (paste) {
+        const char *t = menu_clipboard();
+        while (*t == ' ' || *t == '\t' || *t == '\n' || *t == '\r') t++;
+        size_t n = strlen(t);
+        while (n && (t[n - 1] == ' ' || t[n - 1] == '\t' || t[n - 1] == '\n' || t[n - 1] == '\r')) n--;
+        if (n >= cap) n = cap - 1;
+        memcpy(buf, t, n);
+        buf[n] = 0;
+        done = true;
+    }
+    if (done || ui_input_text_cancelled() || (focus == 0 && !active && !paste_hot && !osk_is_open())) editing = 0;
     ImGui::PopID();
     return done;
 }

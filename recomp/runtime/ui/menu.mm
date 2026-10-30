@@ -35,6 +35,7 @@ extern "C" {
 void input_reset(void);
 void controls_bindings_draw(float scale);  // controls_ui.mm
 #include "../input_bind.h"
+extern "C" const char *menu_clipboard(void);  // (below: the system clipboard's text)
 #include "../paths.h"
 #include "../platform.h"
 #include "../nvn/framegen.h"
@@ -214,6 +215,13 @@ bool menu_handle_event(const SDL_Event *e) {
             q.kind = QEvent::KEY; q.key = ImGuiKey_Escape; q.down = true; push(q);
             q.down = false; push(q);
             return true;
+        }
+        {   // the modifiers as ImGui wants them (its shortcuts: Ctrl / Cmd+V paste, +C copy, +A select all, +Z undo)
+            const SDL_Keymod m = e->key.mod;
+            const struct { ImGuiKey k; bool on; } mods[] = {{ImGuiMod_Ctrl, (m & SDL_KMOD_CTRL) != 0},
+                {ImGuiMod_Shift, (m & SDL_KMOD_SHIFT) != 0}, {ImGuiMod_Alt, (m & SDL_KMOD_ALT) != 0},
+                {ImGuiMod_Super, (m & SDL_KMOD_GUI) != 0}};
+            for (auto &md : mods) { QEvent q = {}; q.kind = QEvent::KEY; q.key = md.k; q.down = md.on; push(q); }
         }
         ImGuiKey k = key_from_scancode(e->key.scancode);
         if (k != ImGuiKey_None) { QEvent q = {}; q.kind = QEvent::KEY; q.key = k; q.down = down; push(q); }
@@ -447,6 +455,9 @@ static void init(void) {
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
     io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
     io.IniFilename = NULL;
+    // the system clipboard for the text fields (Ctrl / Cmd+V, and their Paste button: option_rows.mm)
+    ImGui::GetPlatformIO().Platform_GetClipboardTextFn = [](ImGuiContext *) -> const char * { return menu_clipboard(); };
+    ImGui::GetPlatformIO().Platform_SetClipboardTextFn = [](ImGuiContext *, const char *t) { SDL_SetClipboardText(t); };
     ImFontConfig cfg;
     cfg.OversampleH = 2;
     char sys[1024];
@@ -498,6 +509,14 @@ static bool g_touch_ui =
 #else
     false;
 #endif
+
+// The clipboard's text (kept until the next call: SDL's copy is freed), "" when there is none
+extern "C" const char *menu_clipboard(void) {
+    static char *last;
+    SDL_free(last);
+    last = SDL_HasClipboardText() ? SDL_GetClipboardText() : NULL;
+    return last ? last : "";
+}
 
 static void drain_events(ImGuiIO &io) {
     pthread_mutex_lock(&q_lock);
@@ -713,6 +732,13 @@ static void tab_mods(void) {
     opt_end();
 }
 
+void online_page(void);  // runtime/ui/mods_page.mm: the backend, its accounts, the game's rows for it, the app's
+static void tab_online(void) {
+    opt_begin("##online", ImGui::GetFontSize() / 34);
+    online_page();
+    opt_end();
+}
+
 // Quit: back to the start screen (in game: the game reboots to it) or out to the desktop. Each asks first (progress
 // since the last save is lost); B / Esc or Cancel backs out.
 extern "C" void rt_request_reboot(int kind);  // runtime/main.c (RT_REBOOT_TITLE = 2: the start screen)
@@ -900,15 +926,16 @@ static void tabs_body(float scale, bool in_game, void (*prelaunch)(float)) {
     if (prelaunch) tabs[ntabs++] = {"Prelaunch", -1, true};
     // (LAS Recomp's game tabs - Save Editor, Randomizer, Warp, Cheats, Gameplay, Cosmetics - are not part of the
     // shared runtime; their ids stay unused so the test hooks keep their numbers)
-    static const char *names[] = {"Video", "Audio", "Mods", "", "", "", "", "", "Controls", "Quit"};
-    static const int order[] = {8, 0, 1, 2, 9};  // Controls, Video, Audio, Mods, Quit
+    static const char *names[] = {"Video", "Audio", "Mods", "Online", "", "", "", "", "Controls", "Quit"};
+    static const int order[] = {8, 0, 1, 2, 3, 9};  // Controls, Video, Audio, Mods, Online, Quit
     const GameModToggle *mods;
     const GameModTrigger *triggers;
     const GameModRow *mrows;
     bool have_mods = game_mod_toggles(&mods) > 0 || game_mod_rows(&mrows) > 0 ||
                      game_mod_triggers(&triggers) > 0 || launcher_has_settings() || online_rows_available();
     for (int i : order)  // (Quit: in game only; Mods: when the game has some)
-        if ((i != 9 || !prelaunch) && (i != 2 || have_mods)) tabs[ntabs++] = {names[i], i, true};
+        if ((i != 9 || !prelaunch) && (i != 2 || have_mods) && (i != 3 || online_rows_available() || launcher_has_settings()))
+            tabs[ntabs++] = {names[i], i, true};
     int cur = 0;  // g_tab / g_tab_request hold ids
     for (int i = 0; i < ntabs; i++) if (tabs[i].id == g_tab) cur = i;
     if (!tabs[cur].on) cur = 0;
@@ -997,6 +1024,7 @@ static void tabs_body(float scale, bool in_game, void (*prelaunch)(float)) {
                 case 0: tab_display(); break;
                 case 1: tab_audio(); break;
                 case 2: tab_mods(); break;
+                case 3: tab_online(); break;
                 case 8: tab_about(); break;
                 case 9: tab_quit(scale, in_game); break;
                 }

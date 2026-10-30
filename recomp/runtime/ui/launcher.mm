@@ -687,7 +687,7 @@ static void *update_thread(void *) {
         // said over the game too, once it's past its start logos: the Mods tab's row alone went unseen (issue #25)
         while (SDL_GetTicks() < 25000) SDL_Delay(500);
         char note[200];
-        snprintf(note, sizeof note, "Version %s is out (this is %s). Menu (F1) > Mods > Online: New version.",
+        snprintf(note, sizeof note, "Version %s is out (this is %s). Menu (F1) > Online: New version.",
                  tag.c_str(), RECOMP_VERSION);
         menu_notice(note, 12);
     }
