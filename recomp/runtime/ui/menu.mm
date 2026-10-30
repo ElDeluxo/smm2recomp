@@ -683,13 +683,15 @@ static void tab_display(void) {
 
     opt_section("Game");
     if (opt_toggle("Skip intro", &g_settings.skip_intro, false,
-                   "Skips the boot logo presentation animations and goes directly to the title screen.")) {
+                   "Skips the opening logos and goes straight to the title screen when the game starts.")) {
         settings_save();
     }
+#ifdef GAME_LA_SETTINGS  // (Link's Awakening's, from the runtime this one shares: nothing in other games)
     opt_toggle("Remove blur", &g_settings.blur_removal, false,
                "Turns off the tilt-shift blur at the top and bottom of the screen.");
     opt_toggle("Hide Hero Mode icon", &g_settings.hide_hero_icon, false,
                "Hides the Hero Mode emblem in the corner of the screen while playing a Hero Mode file.");
+#endif
     {   // the shader compile-ahead (GitHub #37): how far it is, and the switch to let it run at full speed
         opt_section("Shaders");
         AheadStatus a = shader_ahead_status();
