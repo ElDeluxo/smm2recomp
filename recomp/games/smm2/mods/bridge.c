@@ -14,8 +14,9 @@
 //   - what happens in the course comes back through the requests the game makes (course start, miss, clear, skip,
 //     suspend) and goes to the flow as hundred_flow_course_started() / hundred_course_result().
 //
-// RECOMP_MOD_AUTOPLAY=1 (=jump) stands in for the player in unattended test runs: it plays the courses (right + run
-// [+ jump], skip after RECOMP_MOD_AUTOPLAY_SKIP s) and presses the result screen's Next; RECOMP_MOD_FLOW_TEST=
+// RECOMP_MOD_AUTOPLAY=1 (=jump; =pound: jumps with Down alone at their top) stands in for the player in unattended
+// test runs: it plays the courses (right + run [+ jump], skip after RECOMP_MOD_AUTOPLAY_SKIP s) and presses the result
+// screen's Next (RECOMP_MOD_RESULT_SHOT=<png>: a window shot of the screen at 20 s first); RECOMP_MOD_FLOW_TEST=
 // <difficulty> makes the stand-in flow below start a run and play it to its end (the evidence runs).
 #include <stdlib.h>
 #include <string.h>
@@ -229,7 +230,8 @@ static void miss_mash(uint64_t now) {
 static void *driver(void *arg) {
     (void)arg;
     const char *ap = getenv("RECOMP_MOD_AUTOPLAY");
-    bool jump = ap && !strcmp(ap, "jump");
+    bool pound = ap && !strcmp(ap, "pound");  // (=pound: jump, and at the jump's top Down alone: ground pounds)
+    bool jump = ap && (!strcmp(ap, "jump") || pound);
     uint64_t skip_after =
         (getenv("RECOMP_MOD_AUTOPLAY_SKIP") ? strtoull(getenv("RECOMP_MOD_AUTOPLAY_SKIP"), NULL, 0) : 20) * 60;
     uint64_t sw_prev_b = 0;
@@ -314,6 +316,7 @@ static void *driver(void *arg) {
             } else if (t > 120) {
                 b = BTN_RIGHT | BTN_Y;
                 if (jump && t % 90 < 20) b |= BTN_A;
+                if (pound && t % 90 >= 26 && t % 90 < 34) b = BTN_DOWN;
             }
             break;
         case DRV_BROKEN: {  // "The course data is corrupt." on the map: its OK leaves for Course World's menu, the
@@ -343,6 +346,13 @@ static void *driver(void *arg) {
             uint64_t nk = 0, k0 = 0;
             if (result_keys(t, now, &b, &nk, &k0)) break;
             if (nk) t = t - (k0 + 50 * nk + 60) + 480;
+            static uint64_t shot_for;  // (tests: RECOMP_MOD_RESULT_SHOT=<png>, the screen at 20 s, Next pressed after it)
+            if (getenv("RECOMP_MOD_RESULT_SHOT")) t = t >= 780 ? t - 780 : 0;
+            if (getenv("RECOMP_MOD_RESULT_SHOT") && awaiting_next && now - drv_since >= 1200 && shot_for != drv_since) {
+                extern char g_window_shot_request[256];
+                snprintf(g_window_shot_request, sizeof g_window_shot_request, "%s", getenv("RECOMP_MOD_RESULT_SHOT"));
+                shot_for = drv_since;
+            }
             // A (Next has the focus [obs]) every 2 s from 8 s on until the game leaves the result screen (cNextScene),
             // up to a minute (the screen may come late when the machine is busy)
             if (awaiting_next && t >= 480 && t < 4080) {
@@ -1066,8 +1076,51 @@ __attribute__((weak)) void hundred_flow_describe(char *out, size_t n) { snprintf
 #define END_CHECK_CAN_EXEC MAIN_ADDR(0x1bef440)
 // After the run's last clear, Next is turned into Quit (SMM2's Endless would go on to its map and another course):
 // SMM2 goes back to its Endless menu underneath while the flow plays the ending, which Next starts (HUNDRED_NEXT).
+// The result screen's buttons (Play_CourseClear_00): its N_Btn_00 holds L_Btn_00 (Next) and L_Btn_01 (Quit) [obs:
+// the pane tree at run time]; that N_Btn_00 is screen +0xa0 -> +0x2d8 -> +0x278 -> +0x168. ui2d panes (edit.c): +0x18
+// parent, +0x20 the child list (each child's link at its +0x08 {prev, next}), +0x58 flags (bit 0 visible), +0xb0 name.
+#include "../../../runtime/rt.h"
+extern uint64_t kernel_heap_size(void);
+static bool in_heap(uint64_t a) { return a >= HEAP_BASE && a < HEAP_BASE + kernel_heap_size() - 0x300 && !(a & 7); }
+static bool pane_is(uint64_t p, const char *name) {
+    return in_heap(p) && !strncmp((const char *)(uintptr_t)(p + 0xb0), name, 24);
+}
+static uint64_t pane_child(uint64_t p, const char *name) {
+    uint64_t head = p + 0x20;
+    for (uint64_t link = g64(head + 8), k = 0; in_heap(link - 8) && link != head && k < 32; link = g64(link + 8), k++)
+        if (pane_is(link - 8, name)) return link - 8;
+    return 0;
+}
+static uint64_t result_quit_pane(uint64_t screen) {
+    static const uint32_t path[] = {0xa0, 0x2d8, 0x278, 0x168};
+    uint64_t p = screen;
+    for (size_t i = 0; i < sizeof path / sizeof *path; i++) {
+        p = g64(p + path[i]);
+        if (!in_heap(p)) return 0;
+    }
+    return pane_is(p, "N_Btn_00") ? pane_child(p, "L_Btn_01") : 0;
+}
+
+// (the run is won: Next only - owner, 2026-10-30; Quit's button is hidden, and does what Next does anyway). Each frame
+// of cRating (the screen waiting for a choice) and at the choice.
+static void hide_quit(uint64_t screen) {
+    uint64_t quit = awaiting_next && run_won && run_d >= 0 && screen ? result_quit_pane(screen) : 0;
+    if (quit && (g8(quit + 0x58) & 1)) {
+        s8(quit + 0x58, (uint8_t)(g8(quit + 0x58) & ~1u));
+        static uint64_t said;
+        if (said != screen) said = screen, LOG("[mod] bridge: the won run's result screen: Quit hidden\n");
+    }
+}
+#define END_RATING_EXEC MAIN_ADDR(0x1bef3c0)  // the course-end machine's cRating exec (state 3): the result screen up
+static void end_rating(Cpu *c) {
+    uint64_t screen = g64(c->x[0] + 0x288);
+    guest_call_orig(c, END_RATING_EXEC);
+    hide_quit(screen);
+}
+
 static void end_check_can(Cpu *c) {
     uint64_t screen = g64(c->x[0] + 0x288);
+    hide_quit(screen);
     // (Quit on that last screen does the same as Next: the run is won, there is nothing to keep - owner, 2026-10-30)
     uint32_t choice = screen ? g32(screen + 0x2a0) : 0;
     if (awaiting_next && run_won && run_d >= 0 && screen && g8(screen + 0x2a4) && (choice == 5 || choice == 8)) {
@@ -1211,6 +1264,7 @@ void bridge_register(void) {
     hle_override(END_NEXT_SCENE_ENTER, end_next_scene, "mod: course end cNextScene (bridge)");
     hle_override(END_ENDLESS_STATUS_ENTER, end_endless_status, "mod: course end cEndlessMode_GetStatus (bridge)");
     hle_override(END_CHECK_CAN_EXEC, end_check_can, "mod: course end cPostRatingCheckCan (bridge)");
+    hle_override(END_RATING_EXEC, end_rating, "mod: course end cRating (bridge: the won run's Quit hidden)");
     hle_override(MENU_COURSEIN_EXEC, menu_course_in, "mod: Endless menu CourseIn (bridge)");
     hle_override(PLAY_LIST_DOWNLOAD_ENTER, play_list_download, "mod: Endless play cCourseListDownLoad (bridge)");
     hle_override(PLAY_DATA_DOWNLOAD_ENTER, play_data_download, "mod: Endless play cCourseDataDownLoad (bridge)");
