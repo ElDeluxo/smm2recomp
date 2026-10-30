@@ -693,6 +693,7 @@ menu's Mods tab (always shown), kept in `smm2mods.ini`; an environment variable 
 | SMM1 course card (100 Mario) | `hundred_smm1_card=1` | `RECOMP_HUNDRED_SMM1_CARD=1` | from the next course |
 | Ground pound hop (SMM1) | `smm1_pound_hop=1` | `RECOMP_SMM1_POUND_HOP=1` | immediately |
 | Catch while spin jumping (SMM1) | `smm1_spin_catch=1` | `RECOMP_SMM1_SPIN_CATCH=1` | immediately |
+| Full death fanfare in pits (SMM1) | `smm1_long_down=1` | `RECOMP_SMM1_LONG_DOWN=1` | immediately |
 
 `RECOMP_SMM1_LOG=1` logs every decision the hooks see (`[smm1] ...`), on or off.
 
@@ -724,6 +725,14 @@ SMM1 a Super Mario World style spin jump lets the player grab, so a thrown-up it
 the spin goes on bouncing off enemies with it [obs v208: the spin's begin sets the state's grab flag with SMW's spin
 action]. SMM2's spin begin (main+0x15df8a0) sets only the other flag (+0x494 bit 23). With the setting on, in SMW
 style courses it also sets the grab flag (+0x494 bit 22); the bounces already stay spins with an item in SMM2.
+
+**Full death fanfare in pits.** After a pit fall SMM2 takes the course down to start it again about 1.6 s into the
+death fanfare, which stops it before its last notes (NSMBU's sounds for 2.2 s) [obs: the game's audio recorded with
+`LARECOMP_AUDIO_WAV` through pit misses, `RECOMP_MOD_TEST_PIT`]; an enemy's hit leaves time for all of it. SMM1 played
+it out. With the setting on, the course music's state 7 (main+0x17a4bc0, `costume.c`) gets state 0 instead, as a
+costume's death sound does, and the style's own `<style>_Fanfare_PlayerDown.bwav` plays through the host mixer (level
+matched to the game's in a recording), which the restart doesn't stop. The special characters' fanfares (SMB2
+Mushroom, Superball, Link) stay the game's, and with Quick level return the setting does nothing.
 
 **Mid-air shell jumps.** SMM1's shell code is SMM2's (the kicks, the speeds, and the mid-air kick off a wall: the
 "wall assist", below) except two rules [obs, Block.rpx v208 against SMM2]; on a shell the setting applies SMM1's:

@@ -263,7 +263,7 @@ static const struct { const char *name; const char *labels[8]; } GROUPS[] = {
     {"SMM1 power-ups", {"Mystery Mushroom", "Lanky Mario"}},
     {"SMM1 moves and hit boxes", {"Mid-air shell jumps", "Ground pound hop", "Catch while spin jumping", "Muncher hit box"}},
     {"SMM1 Course Maker", {"Overlapping pipes"}},
-    {"Look and sound", {"SMW goal wipe"}},
+    {"Look and sound", {"SMW goal wipe", "Full death fanfare"}},
     {"Courses", {"Courses:", "No word filter", "Play courses the game calls broken"}},
 };
 static int group_of(const char *label) {

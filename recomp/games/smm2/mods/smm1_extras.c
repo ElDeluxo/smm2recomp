@@ -8,6 +8,7 @@
 //                                                      own course-in card, as after a miss; mods/smm1/flow.c)
 //   RECOMP_SMM1_POUND_HOP=1     smm1_pound_hop=1       a ground pound rises a little first (SMW, NSMBU), as in SMM1
 //   RECOMP_SMM1_SPIN_CATCH=1    smm1_spin_catch=1      SMW's spin jump may grab / catch an item, as in SMM1
+//   RECOMP_SMM1_LONG_DOWN=1     smm1_long_down=1       the death fanfare plays to its end after a pit fall, as in SMM1
 //
 // The behaviour comes from the game's own code: host hooks after single instructions (games/smm2/mods/smm1_extras.py
 // lists them) change a register or the flags while a setting is on, and do nothing otherwise. What SMM1 does was
@@ -18,10 +19,12 @@
 #include <string.h>
 
 #include "mod.h"
+#include "romfs_overlay.h"
+#include "smm1/smm1_audio.h"
 
 typedef struct { const char *label, *desc; bool *value; bool def; } GameModToggle;  // (runtime/game_hooks.c)
 
-static bool shell_jumps, overlap_pipes, smm1_card, pound_hop, spin_catch;
+static bool shell_jumps, overlap_pipes, smm1_card, pound_hop, spin_catch, long_down;
 
 static const struct Setting {
     const char *key, *env;
@@ -32,6 +35,7 @@ static const struct Setting {
     {"hundred_smm1_card", "RECOMP_HUNDRED_SMM1_CARD", &smm1_card},
     {"smm1_pound_hop", "RECOMP_SMM1_POUND_HOP", &pound_hop},
     {"smm1_spin_catch", "RECOMP_SMM1_SPIN_CATCH", &spin_catch},
+    {"smm1_long_down", "RECOMP_SMM1_LONG_DOWN", &long_down},
 };
 #define NSETTINGS (sizeof settings / sizeof *settings)
 
@@ -94,6 +98,10 @@ int smm1_extras_toggles(GameModToggle *out, int room) {
          "jump, catch it while spinning and keep spin-bouncing off enemies with it (SMM2: a spin jump can't "
          "grab). Immediately.",
          &shown[4], false},
+        {"Full death fanfare in pits (SMM1)",
+         "The death fanfare always plays to its end, as in SMM1: SMM2 cuts it short after about a second and a half "
+         "when Mario falls into a pit, as the course starts again. Not with Quick level return. Immediately.",
+         &shown[5], false},
     };
     load();
     int n = 0;
@@ -249,4 +257,39 @@ __attribute__((constructor)) static void smm1_moves_register(void) {
     hle_override(HIP_ENTER, hip_enter, "SMM1 extras: ground pound begin (hop)");
     hle_override(HIP_EXEC, hip_exec, "SMM1 extras: ground pound exec (hop ends)");
     hle_override(SPIN_ENTER, spin_enter, "SMM1 extras: spin jump begin (catch)");
+}
+
+// ---- the full death fanfare (mods/costume.c down_fanfare, at the course music's state 7). SMM2 plays the style's
+// FanfareDown stream (Sound/Resource/Stream/<style>_Fanfare_PlayerDown.bwav) and, after a pit fall, cuts it at about
+// 1.6 s when the course is taken down to start again [obs: the game's audio recorded through pit misses in an NSMBU
+// course, whose fanfare sounds for 2.2 s]: its last notes are lost. SMM1 let it play out. With the setting on the game's own is left out (state 0, as
+// a costume's death sound does) and the same stream plays through the host mixer, which the course's restart doesn't
+// stop. Not for the special characters' own fanfares (SMB2 Mushroom, Superball, Link: the game's) nor with quick level
+// return (its restart comes before the end).
+#define LONG_DOWN_VOL 0.24f  // matched to the game's own in a recording (RMS of the first 1.5 s; SLink's 0.38 was
+                             // 1.6 times louder through the host mixer)
+bool quick_retry_on(void);
+bool smm1_long_down_fanfare(void) {  // (mods/costume.c: true: played here, the game's to be left out)
+    load();
+    if (!long_down || quick_retry_on()) return false;
+    uint64_t pm = g64(MAIN_ADDR(0x2c19290)), pl = pm ? g64(pm + 0x28) : 0;
+    uint32_t kind = pl ? g32(pl + 0x4ac) : 0;  // (the fanfare's own choice: 9 / 10 / 15 their own)
+    if (kind == 9 || kind == 10 || kind == 15) return false;
+    static const char *const names[5] = {"M1", "M3", "MW", "WU", "3W"};
+    static SPcm *pcm[5];
+    static bool tried[5];
+    int st = course_style();
+    if (st < 0 || st > 4) return false;
+    if (!tried[st]) {
+        tried[st] = true;
+        char rel[96];
+        snprintf(rel, sizeof rel, "Sound/Resource/Stream/%s_Fanfare_PlayerDown.bwav", names[st]);
+        RovBuf b;
+        if (rov_read_game(rel, &b)) pcm[st] = smm1_bwav_decode(b.d, b.n), rov_free(&b);
+        if (!pcm[st]) LOG("[mod] SMM1 extras: %s not readable: the game's own death fanfare\n", rel);
+    }
+    if (!pcm[st]) return false;
+    smm1_play_vol(pcm[st], LONG_DOWN_VOL);
+    if (getenv("RECOMP_SMM1_LOG")) LOG("[smm1] death fanfare (%s) played in full by the host\n", names[st]);
+    return true;
 }

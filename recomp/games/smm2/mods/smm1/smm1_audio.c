@@ -405,13 +405,14 @@ bool smm1_se(const char *name) {
         }
     return false;
 }
-void smm1_play(SPcm *p) {
+void smm1_play_vol(SPcm *p, float vol) {
     if (!p) return;
     pthread_mutex_lock(&g_mx);
     for (int k = 0; k < 8; k++)
-        if (!g_se[k].on) { g_se[k] = (Voice){p, 0, 1, 0, false, true, 0, 1}; break; }
+        if (!g_se[k].on) { g_se[k] = (Voice){p, 0, 1, 0, false, true, 0, vol}; break; }
     pthread_mutex_unlock(&g_mx);
 }
+void smm1_play(SPcm *p) { smm1_play_vol(p, 1); }
 
 static void mix_voice(Voice *v, float *out, int n, int rate) {
     if (!v->on || !v->p) return;

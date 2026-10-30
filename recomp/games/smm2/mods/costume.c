@@ -676,11 +676,14 @@ static void goal_fanfare(Cpu *c) {
 static void down_fanfare(Cpu *c) {
     extern void quick_retry_miss(void);  // (mods/quick_retry.c: the miss is fast-forwarded when it's on)
     extern void endless_miss_demo(void);  // (mods/endless.c: a skip from now on costs the life)
+    if (getenv("RECOMP_MUSIC_LOG"))  // (tests: every course music state change, with the presented frame)
+        LOG("[music] state %u at frame %llu\n", (uint32_t)c->x[2], (unsigned long long)renderer_present_count());
     if ((uint32_t)c->x[2] == 7) quick_retry_miss(), endless_miss_demo();
     char res[48];
     snprintf(res, sizeof res, "%s", g_p[0].wear);
     bool worn = costumes_on() && res[0] && (uint32_t)c->x[2] == 7, mine = worn && has_sound(res, "down");
-    if (mine) c->x[2] = 0;
+    extern bool smm1_long_down_fanfare(void);  // (smm1_extras.c: the whole fanfare through the host)
+    if (mine || ((uint32_t)c->x[2] == 7 && smm1_long_down_fanfare())) c->x[2] = 0;
     guest_call_orig(c, DOWN_FANFARE);
     if (mine) sound(res, "down");
     if (worn)

@@ -26,4 +26,5 @@ void smm1_se_bank(const char *bank);          // load a sound bank ("NetWorldMap
 bool smm1_se(const char *name);              // a sound effect of a loaded bank, by name (false: none)
 bool smm1_se_has(const char *name);          // ... whether a loaded bank has it (nothing played)
 void smm1_play(SPcm *p);                     // a decoded sound, once, as a sound effect (kept by the caller)
+void smm1_play_vol(SPcm *p, float vol);      // ... at this volume (1: as decoded)
 void smm1_game_sound(bool on);               // the game's own sound under the screens (faded)

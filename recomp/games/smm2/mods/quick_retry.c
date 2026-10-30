@@ -81,6 +81,7 @@ static void stop(const char *why) {
     LOG("[quick-retry] %s after %llu frames\n", why, (unsigned long long)(renderer_present_count() - g_ff_from));
 }
 
+bool quick_retry_on(void) { return retry_on(); }  // (smm1_extras.c: the full death fanfare is left out with it)
 void quick_retry_miss(void) {  // mods/costume.c: the death fanfare starts
     if (!retry_on()) return;
     uint64_t now = renderer_present_count();
