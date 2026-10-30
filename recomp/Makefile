@@ -260,7 +260,7 @@ GAMELIB_ID := $(shell (cat $(GAMELIB_SRCS); echo '$(GENFLAGS)') | (shasum -a 256
 # 2026-10-18: no OpenCourse World handshake, no relaxed checks), so a stale tree stops the build instead.
 ifneq ($(GEN_SRC),)
 ifeq ($(wildcard $(GEN)/.gen-$(GAMELIB_ID)),)
-ifeq ($(filter gen clean-gen venv embed-server,$(MAKECMDGOALS)),)
+ifneq ($(filter all app,$(if $(MAKECMDGOALS),$(MAKECMDGOALS),all)),)  # (the goals that compile the game code)
 $(error the generated game code in $(GEN) is older than the generator and patches (GAMELIB_ID $(GAMELIB_ID)): run `make GAME=$(GAME) gen` first)
 endif
 endif
