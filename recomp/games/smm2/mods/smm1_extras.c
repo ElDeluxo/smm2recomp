@@ -9,10 +9,12 @@
 //   RECOMP_SMM1_POUND_HOP=1     smm1_pound_hop=1       a ground pound rises a little first (SMW, NSMBU), as in SMM1
 //   RECOMP_SMM1_SPIN_CATCH=1    smm1_spin_catch=1      SMW's spin jump may grab / catch an item, as in SMM1
 //   RECOMP_SMM1_LONG_DOWN=1     smm1_long_down=1       the death fanfare plays to its end after a pit fall, as in SMM1
+//   RECOMP_SMM1_ONEWAY_LEDGE=1  smm1_oneway_ledge=1    a sideways one-way wall has SMM1's ledge on its blocked side
 //
 // The behaviour comes from the game's own code: host hooks after single instructions (games/smm2/mods/smm1_extras.py
 // lists them) change a register or the flags while a setting is on, and do nothing otherwise. What SMM1 does was
 // read from SMM1's own code (Block.rpx v208); both are described in docs/mods.md ("SMM1 extras").
+#include <math.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,7 +26,7 @@
 
 typedef struct { const char *label, *desc; bool *value; bool def; } GameModToggle;  // (runtime/game_hooks.c)
 
-static bool shell_jumps, overlap_pipes, smm1_card, pound_hop, spin_catch, long_down;
+static bool shell_jumps, overlap_pipes, smm1_card, pound_hop, spin_catch, long_down, oneway_ledge;
 
 static const struct Setting {
     const char *key, *env;
@@ -36,6 +38,7 @@ static const struct Setting {
     {"smm1_pound_hop", "RECOMP_SMM1_POUND_HOP", &pound_hop},
     {"smm1_spin_catch", "RECOMP_SMM1_SPIN_CATCH", &spin_catch},
     {"smm1_long_down", "RECOMP_SMM1_LONG_DOWN", &long_down},
+    {"smm1_oneway_ledge", "RECOMP_SMM1_ONEWAY_LEDGE", &oneway_ledge},
 };
 #define NSETTINGS (sizeof settings / sizeof *settings)
 
@@ -102,6 +105,11 @@ int smm1_extras_toggles(GameModToggle *out, int room) {
          "The death fanfare always plays to its end, as in SMM1: SMM2 cuts it short after about a second and a half "
          "when Mario falls into a pit, as the course starts again. Not with Quick level return. Immediately.",
          &shown[5], false},
+        {"One-way wall ledge (SMM1)",
+         "A sideways one-way wall has SMM1's ledge: once Mario is past it, on the side it blocks, the wall is an 8-px "
+         "solid pillar there that he can stand on and wall-kick off (SMM2: only the one-way line). From the next "
+         "course start.",
+         &shown[6], false},
     };
     load();
     int n = 0;
@@ -292,4 +300,168 @@ bool smm1_long_down_fanfare(void) {  // (mods/costume.c: true: played here, the 
     smm1_play_vol(pcm[st], LONG_DOWN_VOL);
     if (getenv("RECOMP_SMM1_LOG")) LOG("[smm1] death fanfare (%s) played in full by the host\n", names[st]);
     return true;
+}
+
+// ---- the one-way wall ledge (research/specs/smm1-mods-moves.md §2, §7). SMM1's HalfHitWall (object 67) builds, for the
+// sideways walls (d = 0, 2), a second collider: a solid box 8 px thick and 32 tall against the one-way line on its far
+// side, in the course only while player 1 is wholly on the side the wall blocks (added when his near edge is 16 px
+// past the wall, removed when his far edge is back within 8) [obs v208 0x025fd2c4, 0x025fd1a0]. SMM2's has only the
+// line. With the setting on, the same box is built at the wall's create the way SMM2's own boxes are (MapObjDashBlock,
+// inlined there: the base collider, the box vtable, its vertex / edge arrays, the init with a descriptor), as a
+// HardBlock (type 9: plain solid; SMM1's was solid to players only, through a sensor mask SMM2 lacks: here it is solid
+// to everything, while player 1 is on that side), added to and taken out of the BG grid each frame by player 1's
+// side, and destroyed before the wall is. Its memory comes from the game's own operator new.
+#define HHW_CREATE MAIN_ADDR(0x13b1b50)     // MapObjHalfHitWall create (vtable slot 6)
+#define HHW_EXEC MAIN_ADDR(0x13b1ea0)       // ... per frame (slot 9)
+#define HHW_DTOR MAIN_ADDR(0x13b1ad0)       // ... complete destructor (slot 3)
+#define HHW_DTOR_DEL MAIN_ADDR(0x13b1b10)   // ... deleting destructor (slot 4)
+#define COL_BASE_CTOR MAIN_ADDR(0xe24160)   // collider base constructor (c)
+#define COL_INIT MAIN_ADDR(0xe310d0)        // collider init (c, init, descriptor)
+#define COL_ADD MAIN_ADDR(0xe265e0)         // into the BG grid (c)
+#define COL_REMOVE MAIN_ADDR(0xe26430)      // out of it (c)
+#define VT_POLY4 MAIN_ADDR(0x28b96f8)       // 4-vertex polygon collider vtable
+#define VT_BOX MAIN_ADDR(0x28695f8)         // box collider vtable (slot 0: its complete destructor)
+#define EDGE_INIT MAIN_ADDR(0x233a3ec)      // 16 bytes each edge record takes ({0, 0, 1.0, 0})
+#define COL_TYPES MAIN_ADDR(0x2a651d0)      // {u32 attr, char *name} by collider type
+#define OP_NEW MAIN_ADDR(0x262790)          // operator new (size)
+#define OP_DELETE MAIN_ADDR(0x262c20)       // operator delete (p)
+#define BOX_SIZE 0x4c0
+#define TYPE_HARD 9
+static struct { uint64_t wall, box; int d; bool added; } ledges[512];
+static pthread_mutex_t ledge_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static int ledge_find(uint64_t wall) {
+    for (int i = 0; i < (int)(sizeof ledges / sizeof *ledges); i++)
+        if (ledges[i].wall == wall) return i;
+    return -1;
+}
+static void gcall(Cpu *c, uint64_t fn) {
+    uint64_t lr = c->x[30];
+    guest_call(c, fn);
+    c->x[30] = lr;
+}
+static void sf32(uint64_t a, float f) { uint32_t w; memcpy(&w, &f, 4); s32(a, w); }
+
+static void hhw_create(Cpu *c) {
+    uint64_t wall = c->x[0];
+    guest_call_orig(c, HHW_CREATE);
+    uint64_t ret = c->x[0];
+    load();
+    int d = (int)g32(wall + 0x840);
+    if (!oneway_ledge || (d != 0 && d != 2)) return;
+    uint64_t bg = g64(g64(wall + 0x48) + 0x140);
+    if (!bg) return;
+    pthread_mutex_lock(&ledge_lock);
+    int slot = ledge_find(0);
+    pthread_mutex_unlock(&ledge_lock);
+    if (slot < 0) return;
+    uint64_t x[8];
+    memcpy(x, c->x, sizeof x);
+    c->x[0] = BOX_SIZE, gcall(c, OP_NEW);
+    uint64_t box = c->x[0];
+    if (!box) { memcpy(c->x, x, sizeof x); c->x[0] = ret; return; }
+    c->x[0] = box, gcall(c, COL_BASE_CTOR);
+    for (uint64_t o = 0x3b0; o < BOX_SIZE; o += 4) s32(box + o, 0);
+    s64(box, VT_POLY4), s64(box, VT_BOX);
+    s32(box + 0x3b0, 4), s64(box + 0x3b8, box + 0x3e0);  // 4 vertices
+    s32(box + 0x3c0, 4), s64(box + 0x3c8, box + 0x400);  // 4 edge records
+    s32(box + 0x3d0, 4), s64(box + 0x3d8, box + 0x460);  // 4 more
+    for (int k = 0; k < 8; k++) {
+        uint64_t r = box + (k < 4 ? 0x400 : 0x460) + 0x18ull * (uint64_t)(k & 3);
+        s16(r, 8);
+        s64(r + 4, g64(EDGE_INIT)), s64(r + 0xc, g64(EDGE_INIT + 8));
+        s32(r + 0x14, 0);
+    }
+    uint64_t sp = c->sp;
+    c->sp -= 0x80;
+    uint64_t init = c->sp, desc = c->sp + 0x30;
+    s64(init, wall + 0x230), s64(init + 8, wall + 0x304), s64(init + 0x10, wall + 0x288), s64(init + 0x18, bg);
+    s64(init + 0x20, 1);
+    // the box against the line on the blocked side: d = 0 x +8 ... +16, d = 2 x -16 ... -8; y 0 ... 32 (SMM1's)
+    float l = d == 0 ? 8.0f : -16.0f, r = d == 0 ? 16.0f : -8.0f;
+    const float dv[8] = {0, 0, 0, 16, l, 32, r, 0};
+    for (int k = 0; k < 8; k++) sf32(desc + 4ull * (uint64_t)k, dv[k]);
+    s32(desc + 0x20, 0);
+    c->x[0] = box, c->x[1] = init, c->x[2] = desc, gcall(c, COL_INIT);
+    c->sp = sp;
+    s32(box + 0x2e4, 5), s64(box + 0x278, wall);
+    s32(box + 0x360, TYPE_HARD), s32(box + 0x364, g32(COL_TYPES + 16ull * TYPE_HARD));
+    pthread_mutex_lock(&ledge_lock);
+    ledges[slot].wall = wall, ledges[slot].box = box, ledges[slot].d = d, ledges[slot].added = false;
+    pthread_mutex_unlock(&ledge_lock);
+    if (getenv("RECOMP_SMM1_LOG"))
+        LOG("[smm1] one-way wall %#llx (d %d, x %.1f y %.1f): ledge box %#llx built\n", (unsigned long long)wall, d,
+            g32f(wall + 0x230), g32f(wall + 0x234), (unsigned long long)box);
+    memcpy(c->x, x, sizeof x);
+    c->x[0] = ret;
+}
+
+static void hhw_exec(Cpu *c) {
+    uint64_t wall = c->x[0];
+    guest_call_orig(c, HHW_EXEC);
+    if (!oneway_ledge) return;
+    int i = ledge_find(wall);
+    if (i < 0) return;
+    uint64_t pm = g64(MAIN_ADDR(0x2c19290)), pl = pm ? g64(pm + 0x28) : 0;
+    if (!pl) return;
+    float px = g32f(pl + 0x230), wx = g32f(wall + 0x230), half = 7.9f;
+    static uint64_t n;
+    static int after_drop;  // (the drop test: every frame for a while after it)
+    if (getenv("RECOMP_SMM1_LOG") && fabsf(px - wx) < 48 && (n++ % 3 == 0 || (after_drop > 0 && after_drop--)))
+        LOG("[smm1]   near the one-way wall: player x %.1f y %.1f vy %.2f, wall x %.1f y %.1f, ledge %s\n", px,
+            g32f(pl + 0x234), g32f(pl + 0x240), wx, g32f(wall + 0x234), ledges[i].added ? "in" : "out");
+    static int drop = -1, dropped_at;  // (tests: RECOMP_SMM1_LEDGE_DROP=1 - with the ledge in for 90 frames, player 1
+                                       // is put just above it, still: on a solid ledge he stands at its top)
+    if (drop < 0) drop = getenv("RECOMP_SMM1_LEDGE_DROP") != NULL;
+    if (drop && ledges[i].added && ++dropped_at == 90) {
+        static float dx = -1;  // (RECOMP_SMM1_LEDGE_DROP=<x offset from the wall>, default 17: feet 1 px onto the ledge)
+        if (dx < 0) dx = (float)atof(getenv("RECOMP_SMM1_LEDGE_DROP")), dx = dx > 1 ? dx : 17;
+        sf32(pl + 0x230, ledges[i].d == 0 ? wx + 16 + dx - 16 + 6.9f - 1 : wx - 16 - dx + 16 - 6.9f + 1);
+        sf32(pl + 0x234, g32f(wall + 0x234) + 36);
+        sf32(pl + 0x240, 0), sf32(pl + 0x26c, 0);
+        LOG("[smm1] (test) player 1 put above the ledge\n");
+        after_drop = 24;
+    }
+    bool add = ledges[i].added;
+    if (ledges[i].d == 0) {
+        if (px - half >= wx + 16) add = true;
+        else if (px + half <= wx + 8) add = false;
+    } else {
+        if (px + half <= wx - 16) add = true;
+        else if (px - half >= wx - 8) add = false;
+    }
+    if (add == ledges[i].added) return;
+    uint64_t x0 = c->x[0];
+    c->x[0] = ledges[i].box, gcall(c, add ? COL_ADD : COL_REMOVE);
+    c->x[0] = x0;
+    ledges[i].added = add;
+    if (getenv("RECOMP_SMM1_LOG")) {
+        uint64_t ln = wall + 0x3f0, bx = ledges[i].box;  // (the colliders' bounding boxes, c+0x258: left top right bottom?)
+        LOG("[smm1] one-way wall %#llx: ledge %s (player x %.1f y %.1f, wall x %.1f); line box %.1f %.1f %.1f %.1f, "
+            "ledge box %.1f %.1f %.1f %.1f\n", (unsigned long long)wall, add ? "in" : "out", px, g32f(pl + 0x234), wx,
+            g32f(ln + 0x258), g32f(ln + 0x25c), g32f(ln + 0x260), g32f(ln + 0x264), g32f(bx + 0x258), g32f(bx + 0x25c),
+            g32f(bx + 0x260), g32f(bx + 0x264));
+    }
+}
+
+static void ledge_destroy(Cpu *c, uint64_t wall) {
+    pthread_mutex_lock(&ledge_lock);
+    int i = ledge_find(wall);
+    uint64_t box = i >= 0 ? ledges[i].box : 0;
+    if (i >= 0) ledges[i].wall = 0, ledges[i].box = 0;
+    pthread_mutex_unlock(&ledge_lock);
+    if (!box) return;
+    uint64_t x[3] = {c->x[0], c->x[1], c->x[2]};
+    c->x[0] = box, gcall(c, g64(g64(box)));  // its complete destructor (vtable slot 0: out of the grid too)
+    c->x[0] = box, gcall(c, OP_DELETE);
+    c->x[0] = x[0], c->x[1] = x[1], c->x[2] = x[2];
+}
+static void hhw_dtor(Cpu *c) { ledge_destroy(c, c->x[0]); guest_call_orig(c, HHW_DTOR); }
+static void hhw_dtor_del(Cpu *c) { ledge_destroy(c, c->x[0]); guest_call_orig(c, HHW_DTOR_DEL); }
+
+__attribute__((constructor)) static void oneway_ledge_register(void) {
+    hle_override(HHW_CREATE, hhw_create, "SMM1 extras: one-way wall create (ledge box)");
+    hle_override(HHW_EXEC, hhw_exec, "SMM1 extras: one-way wall frame (ledge by player 1's side)");
+    hle_override(HHW_DTOR, hhw_dtor, "SMM1 extras: one-way wall destructor (ledge box)");
+    hle_override(HHW_DTOR_DEL, hhw_dtor_del, "SMM1 extras: one-way wall deleting destructor (ledge box)");
 }

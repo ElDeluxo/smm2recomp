@@ -694,6 +694,7 @@ menu's Mods tab (always shown), kept in `smm2mods.ini`; an environment variable 
 | Ground pound hop (SMM1) | `smm1_pound_hop=1` | `RECOMP_SMM1_POUND_HOP=1` | immediately |
 | Catch while spin jumping (SMM1) | `smm1_spin_catch=1` | `RECOMP_SMM1_SPIN_CATCH=1` | immediately |
 | Full death fanfare in pits (SMM1) | `smm1_long_down=1` | `RECOMP_SMM1_LONG_DOWN=1` | immediately |
+| One-way wall ledge (SMM1) | `smm1_oneway_ledge=1` | `RECOMP_SMM1_ONEWAY_LEDGE=1` | from the next course start |
 
 `RECOMP_SMM1_LOG=1` logs every decision the hooks see (`[smm1] ...`), on or off.
 
@@ -733,6 +734,19 @@ it out. With the setting on, the course music's state 7 (main+0x17a4bc0, `costum
 costume's death sound does, and the style's own `<style>_Fanfare_PlayerDown.bwav` plays through the host mixer (level
 matched to the game's in a recording), which the restart doesn't stop. The special characters' fanfares (SMB2
 Mushroom, Superball, Link) stay the game's, and with Quick level return the setting does nothing.
+
+**One-way wall ledge.** SMM1's one-way wall (object 67) builds, when it faces sideways, a second collider: a solid box
+8 px thick against the one-way line on its open side, the wall's height, in the course only while player 1 is wholly
+past the wall on the side it blocks (in once his near edge is 16 px past it, out once his far edge is back within 8)
+[obs, Block.rpx v208]. From that side the wall then has a top to stand on. SMM2's wall is only the line. With the
+setting on, each sideways wall's create (main+0x13b1b50) builds the same box as SMM2 builds its own (the Dash Block's
+inlined set-up: the base collider, the box vtable, its vertex and edge arrays, the init with a descriptor) in memory
+from the game's operator new, as a HardBlock (plain solid); its per-frame update (main+0x13b1ea0) adds it to or takes it
+out of the BG grid by player 1's side, and its destructors destroy it first. SMM1's box was solid to players only
+(through a sensor mask SMM2 doesn't have): this one is solid to everything while it is in. Checked with
+`tools/oneway_ledge_course.py` (a flat course with a sideways wall, as the title course): the box lies against the line
+(x 248-256 by the line's 250-256, y 88-120, both colliders' bounds logged), Mario walking back stops at it, and dropped
+just above it (`RECOMP_SMM1_LEDGE_DROP=<x offset>`) he lands at its top and stands there.
 
 **Mid-air shell jumps.** SMM1's shell code is SMM2's (the kicks, the speeds, and the mid-air kick off a wall: the
 "wall assist", below) except two rules [obs, Block.rpx v208 against SMM2]; on a shell the setting applies SMM1's:
