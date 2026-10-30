@@ -261,8 +261,9 @@ static int own_shown;  // (the tab showed the switches above: apply them on a ch
 static const struct { const char *name; const char *labels[8]; } GROUPS[] = {
     {"100 Mario Challenge", {"100 Mario Challenge", "SMM1 course card", "Co-op", "Quick level return"}},
     {"SMM1 power-ups", {"Mystery Mushroom", "Lanky Mario"}},
-    {"SMM1 moves and hit boxes", {"Mid-air shell jumps", "Ground pound hop", "Catch while spin jumping", "Muncher hit box",
-                                  "One-way wall ledge"}},
+    {"SMM1 moves and hit boxes",
+     {"Mid-air shell jumps", "Ground pound hop", "Catch while spin jumping", "Muncher hit box", "One-way wall ledge",
+      "Fire Flower wall climb"}},
     {"SMM1 Course Maker", {"Overlapping pipes"}},
     {"Look and sound", {"SMW goal wipe", "Full death fanfare"}},
     {"Courses", {"Courses:", "No word filter", "Play courses the game calls broken"}},

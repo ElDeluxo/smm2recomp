@@ -695,6 +695,7 @@ menu's Mods tab (always shown), kept in `smm2mods.ini`; an environment variable 
 | Catch while spin jumping (SMM1) | `smm1_spin_catch=1` | `RECOMP_SMM1_SPIN_CATCH=1` | immediately |
 | Full death fanfare in pits (SMM1) | `smm1_long_down=1` | `RECOMP_SMM1_LONG_DOWN=1` | immediately |
 | One-way wall ledge (SMM1) | `smm1_oneway_ledge=1` | `RECOMP_SMM1_ONEWAY_LEDGE=1` | from the next course start |
+| Fire Flower wall climb (SMM1) | `smm1_fire_climb=1` | `RECOMP_SMM1_FIRE_CLIMB=1` | immediately |
 
 `RECOMP_SMM1_LOG=1` logs every decision the hooks see (`[smm1] ...`), on or off.
 
@@ -747,6 +748,16 @@ out of the BG grid by player 1's side, and its destructors destroy it first. SMM
 `tools/oneway_ledge_course.py` (a flat course with a sideways wall, as the title course): the box lies against the line
 (x 248-256 by the line's 250-256, y 88-120, both colliders' bounds logged), Mario walking back stops at it, and dropped
 just above it (`RECOMP_SMM1_LEDGE_DROP=<x offset>`) he lands at its top and stands there.
+
+**Fire Flower wall climb.** The kaizo technique of that name (also "one-sided wall jump", NSMBU style; patched in SMM2):
+wall jump, throw a fireball at once, twirl twice at the top of the jump and grab the same wall again, higher. The
+twirls are the same in both games (a 22-frame cooldown, about 13 frames of zero gravity each, no boost) and a throw
+refills nothing [obs, both binaries]. What differs is the throw's end: SMM1's Fire state goes to Fall at its
+animation's frame 10 whatever else is going on (Fall has the wall action), while SMM2's stays in Fire as long as a
+twirl runs (player +0x488 bit 2, +0x283c) and Fire has no wall action, so the wall can't be grabbed mid-twirl
+[obs v208 0x026bd608, v3.0.3 main+0x15c1940]. With the setting on, in NSMBU style, the hooks after main+0x15c1da8 and
+main+0x15c1db0 (`smm1_extras.py`) make those two tests read "no twirl", so the throw ends in Fall as in SMM1. Not yet
+tried in play (the technique needs a wall, Fire Mario and exact timing).
 
 **Mid-air shell jumps.** SMM1's shell code is SMM2's (the kicks, the speeds, and the mid-air kick off a wall: the
 "wall assist", below) except two rules [obs, Block.rpx v208 against SMM2]; on a shell the setting applies SMM1's:

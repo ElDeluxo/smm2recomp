@@ -26,6 +26,12 @@ HOOK_POINTS = {
     # course loader rejects a course whose pipes overlap and plays a blank one instead): bl to the "is the other part
     # solid" test, which counts pipes. For a pipe against a pipe the host answers "no".
     0xfe827c: (0x94000085, 'pipes: overlap rule, other part solid?'),
+    # Fire Flower wall climb (SMM1): the Fire state's exec, past the throw (animation frame 10), stays in Fire while an
+    # air twirl runs (player +0x488 bit 2, or +0x283c twirl frames): no wall action there, so no regrab mid-twirl. SMM1
+    # goes to Fall regardless. The host makes both tests read "no twirl" (ldrb w8, [x19, #0x488] / ldr w8, [x19,
+    # #0x283c]), so cbz goes on to Fall (main+0x15c1c40).
+    0x15c1da8: (0x39522268, 'fire climb: twirl flag'),
+    0x15c1db0: (0xB9683E68, 'fire climb: twirl frames'),
 }
 
 

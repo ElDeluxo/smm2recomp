@@ -10,6 +10,7 @@
 //   RECOMP_SMM1_SPIN_CATCH=1    smm1_spin_catch=1      SMW's spin jump may grab / catch an item, as in SMM1
 //   RECOMP_SMM1_LONG_DOWN=1     smm1_long_down=1       the death fanfare plays to its end after a pit fall, as in SMM1
 //   RECOMP_SMM1_ONEWAY_LEDGE=1  smm1_oneway_ledge=1    a sideways one-way wall has SMM1's ledge on its blocked side
+//   RECOMP_SMM1_FIRE_CLIMB=1    smm1_fire_climb=1      NSMBU: a throw ends in Fall even mid-twirl (the wall climb)
 //
 // The behaviour comes from the game's own code: host hooks after single instructions (games/smm2/mods/smm1_extras.py
 // lists them) change a register or the flags while a setting is on, and do nothing otherwise. What SMM1 does was
@@ -26,7 +27,7 @@
 
 typedef struct { const char *label, *desc; bool *value; bool def; } GameModToggle;  // (runtime/game_hooks.c)
 
-static bool shell_jumps, overlap_pipes, smm1_card, pound_hop, spin_catch, long_down, oneway_ledge;
+static bool shell_jumps, overlap_pipes, smm1_card, pound_hop, spin_catch, long_down, oneway_ledge, fire_climb;
 
 static const struct Setting {
     const char *key, *env;
@@ -39,6 +40,7 @@ static const struct Setting {
     {"smm1_spin_catch", "RECOMP_SMM1_SPIN_CATCH", &spin_catch},
     {"smm1_long_down", "RECOMP_SMM1_LONG_DOWN", &long_down},
     {"smm1_oneway_ledge", "RECOMP_SMM1_ONEWAY_LEDGE", &oneway_ledge},
+    {"smm1_fire_climb", "RECOMP_SMM1_FIRE_CLIMB", &fire_climb},
 };
 #define NSETTINGS (sizeof settings / sizeof *settings)
 
@@ -110,6 +112,12 @@ int smm1_extras_toggles(GameModToggle *out, int room) {
          "solid pillar there that he can stand on and wall-kick off (SMM2: only the one-way line). From the next "
          "course start.",
          &shown[6], false},
+        {"Fire Flower wall climb (SMM1)",
+         "In New Super Mario Bros. U style courses, SMM1's Fire Flower wall climb works again: wall jump, throw a "
+         "fireball at once, twirl twice at the top and grab the same wall higher up. A throw now ends as SMM1's does "
+         "even during a twirl, so the wall can be grabbed mid-twirl (SMM2 kept Mario in the throw until the twirl "
+         "was over). Immediately.",
+         &shown[7], false},
     };
     load();
     int n = 0;
@@ -187,6 +195,16 @@ void smm1_extras_after(Cpu *c, uint64_t addr) {
             LOG("[smm1] overlap rule: part %u against part %u: %s%s\n", self, other, (c->x[0] & 1) ? "checked" : "free",
                 smm1 ? " -> free (SMM1)" : "");
         if (smm1) c->x[0] = 0;
+        break;
+    }
+    case 0x15c1da8:  // Fire exec: ldrb w8, [x19, #0x488] (bit 2: a twirl) - SMM1 goes on to Fall regardless
+    case 0x15c1db0: {  // ... ldr w8, [x19, #0x283c] (the twirl's frames)
+        if (!fire_climb) break;
+        uint64_t h = g64(MAIN_ADDR(0x2c57d58)), info = h ? g64(h + 0x30) : 0;
+        if (!info || g32(info + 0x1c) != 3) break;  // (NSMBU style)
+        if (dbg && (addr - MAIN_ADDR(0) == 0x15c1db0 ? (uint32_t)c->x[8] : (c->x[8] & 4)))
+            LOG("[smm1] fire climb: the throw ends in Fall mid-twirl (SMM1)\n");
+        c->x[8] = addr - MAIN_ADDR(0) == 0x15c1db0 ? 0 : c->x[8] & ~4ull;
         break;
     }
     case 0x1202c88:  // enemy contact, kick accepted with no window written: mov w9, #16
@@ -270,10 +288,10 @@ __attribute__((constructor)) static void smm1_moves_register(void) {
 // ---- the full death fanfare (mods/costume.c down_fanfare, at the course music's state 7). SMM2 plays the style's
 // FanfareDown stream (Sound/Resource/Stream/<style>_Fanfare_PlayerDown.bwav) and, after a pit fall, cuts it at about
 // 1.6 s when the course is taken down to start again [obs: the game's audio recorded through pit misses in an NSMBU
-// course, whose fanfare sounds for 2.2 s]: its last notes are lost. SMM1 let it play out. With the setting on the game's own is left out (state 0, as
-// a costume's death sound does) and the same stream plays through the host mixer, which the course's restart doesn't
-// stop. Not for the special characters' own fanfares (SMB2 Mushroom, Superball, Link: the game's) nor with quick level
-// return (its restart comes before the end).
+// course, whose fanfare sounds for 2.2 s]: its last notes are lost. SMM1 let it play out. With the setting on the
+// game's own is left out (state 0, as a costume's death sound does) and the same stream plays through the host mixer,
+// which the course's restart doesn't stop. Not for the special characters' own fanfares (SMB2 Mushroom, Superball,
+// Link: the game's) nor with quick level return (its restart comes before the end).
 #define LONG_DOWN_VOL 0.24f  // matched to the game's own in a recording (RMS of the first 1.5 s; SLink's 0.38 was
                              // 1.6 times louder through the host mixer)
 bool quick_retry_on(void);
@@ -414,7 +432,7 @@ static void hhw_exec(Cpu *c) {
                                        // is put just above it, still: on a solid ledge he stands at its top)
     if (drop < 0) drop = getenv("RECOMP_SMM1_LEDGE_DROP") != NULL;
     if (drop && ledges[i].added && ++dropped_at == 90) {
-        static float dx = -1;  // (RECOMP_SMM1_LEDGE_DROP=<x offset from the wall>, default 17: feet 1 px onto the ledge)
+        static float dx = -1;  // (RECOMP_SMM1_LEDGE_DROP=<x offset>; 12.6: his feet onto the ledge)
         if (dx < 0) dx = (float)atof(getenv("RECOMP_SMM1_LEDGE_DROP")), dx = dx > 1 ? dx : 17;
         sf32(pl + 0x230, ledges[i].d == 0 ? wx + 16 + dx - 16 + 6.9f - 1 : wx - 16 - dx + 16 - 6.9f + 1);
         sf32(pl + 0x234, g32f(wall + 0x234) + 36);
@@ -436,7 +454,7 @@ static void hhw_exec(Cpu *c) {
     c->x[0] = x0;
     ledges[i].added = add;
     if (getenv("RECOMP_SMM1_LOG")) {
-        uint64_t ln = wall + 0x3f0, bx = ledges[i].box;  // (the colliders' bounding boxes, c+0x258: left top right bottom?)
+        uint64_t ln = wall + 0x3f0, bx = ledges[i].box;  // (the colliders' bounding boxes, c+0x258: l, b, r, t)
         LOG("[smm1] one-way wall %#llx: ledge %s (player x %.1f y %.1f, wall x %.1f); line box %.1f %.1f %.1f %.1f, "
             "ledge box %.1f %.1f %.1f %.1f\n", (unsigned long long)wall, add ? "in" : "out", px, g32f(pl + 0x234), wx,
             g32f(ln + 0x258), g32f(ln + 0x25c), g32f(ln + 0x260), g32f(ln + 0x264), g32f(bx + 0x258), g32f(bx + 0x25c),
