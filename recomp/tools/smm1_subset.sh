@@ -25,7 +25,7 @@ for T in "$@"; do
     for f in "$T"/content/Layout/*.szs; do [ -f "$f" ] && copy "Layout/$(basename "$f")"; done
     for p in Layout Nwk NormalPlay Lcl StaticSkin Sound Static; do copy "Pack/$p.pack"; done
     for r in US EU; do copy "Font/BmpFont_$r.szs"; copy "Message/LayoutMsg_${r}en.szs"; copy "Message/CommonMsg_${r}en.szs"; done
-    for s in M1 M3 MW WU; do copy "Model/${s}_DV_sky.szs"; done
+    for f in "$T"/content/Model/*_DV_*.szs; do [ -f "$f" ] && copy "Model/$(basename "$f")"; done  # (the ending's backdrops)
     for f in "$T"/content/Model/M1_Player_Chara_*.szs; do [ -f "$f" ] && copy "Model/$(basename "$f")"; done
     for f in "$T"/content/Sound/CharaMario/CharaMario_*.bars; do [ -f "$f" ] && copy "Sound/CharaMario/$(basename "$f")"; done
     for s in $STREAMS; do copy "Sound/Resource/Stream/$s.bfstm"; done

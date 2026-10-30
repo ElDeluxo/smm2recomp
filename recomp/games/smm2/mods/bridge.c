@@ -63,6 +63,7 @@ static volatile bool over_save;        // New Game over a saved run (the menu sh
 static pthread_once_t once = PTHREAD_ONCE_INIT;
 
 static void set_drv(int d) { drv = d, drv_since = renderer_present_count(); }
+static volatile bool hint_up;  // SMM2's skip hint window is up (explain_enter / _exec): autoplay answers it with A
 static int test_difficulty(void);
 static void mod_shot(const char *what, uint64_t after_frames);
 static void result(int outcome);
@@ -311,7 +312,9 @@ static void *driver(void *arg) {
             break;
         case DRV_COURSE:
             if (!ap) break;
-            if (now - course_since > skip_after) {
+            if (hint_up) {  // SMM2's skip hint window: its OK
+                if (t % 60 < 8) b = BTN_A;
+            } else if (now - course_since > skip_after) {
                 if ((now - course_since - skip_after) % 240 < 200) b = BTN_MINUS;  // (pulsed: see the retry card)
             } else if (t > 120) {
                 b = BTN_RIGHT | BTN_Y;
@@ -838,6 +841,7 @@ static void precheck_exec(Cpu *c) {
 }
 static void explain_enter(Cpu *c) {
     LOG("[mod] bridge: SMM2's skip hint window (4th attempt)\n");
+    hint_up = true;
     mod_shot("hint", 30), mod_shot("hint", 120);
     guest_call_orig(c, EXPLAIN_ENTER);
 }
@@ -846,6 +850,7 @@ static void explain_exec(Cpu *c) {
     guest_call_orig(c, EXPLAIN_EXEC);
     static uint64_t logged_for;
     if (g32(s + 0x280) == 4 && logged_for != started_since) logged_for = started_since, LOG("[mod] bridge: the skip hint answered\n");
+    if (g32(s + 0x280) != 0x10) hint_up = false;
 }
 
 bool bridge_take_start_over(void) {  // endless.c: the life being posted is a Start Over

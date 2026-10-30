@@ -94,13 +94,22 @@ Rescue *rescue_new(int style, bool peach, const struct hundred_look *look) {
     char name[64];
     snprintf(name, sizeof name, "%s_Object_peach", STYLE[r->style]);
     r->obj = load(name);
+    // SMM1's distant views by style (Model/<Style>_DV_<view>): a theme a style has none of is a black backdrop (SMB1's
+    // underground and castle, SMB3's castle and ghost house: SMM1 shows black there too); one it has but the dump
+    // copy lacks (an older tools/smm1_subset.sh copied the skies only) is SMM1's own sky instead
+    static const char *const views[4] = {"plain sky water", "plain sky underground water",
+                                         "castle hauntedhouse plain sky underground water",
+                                         "castle hauntedhouse plain sky underground water"};
     r->own_sky = !strcmp(theme_view(r->theme), "sky");
-    if (r->style >= 1 || !r->own_sky) {  // (SMB1's sky is part of its ground model)
-        snprintf(name, sizeof name, "%s_DV_%s", STYLE[r->style], theme_view(r->theme));
+    for (int pass = 0; pass < 2 && (r->style >= 1 || !r->own_sky); pass++) {  // (SMB1's sky is part of its ground)
+        snprintf(name, sizeof name, "%s_DV_%s", STYLE[r->style], theme_view(r->own_sky ? 0 : r->theme));
         size_t n;
-        uint8_t *d = smm1_model(name, &n);  // (not every style has every theme's: none is a black backdrop)
+        uint8_t *d = smm1_model(name, &n);
         r->sky = d ? bfres_load(d, n) : NULL;
         free(d);
+        if (r->sky || r->own_sky || !strstr(views[r->style], theme_view(r->theme))) break;
+        fprintf(stderr, "[smm1ui] rescue: %s not in the SMM1 files: SMM1's own sky\n", name);
+        r->own_sky = true;
     }
     if (r->obj) {
         r->field = bfres_model(r->obj, "field_model");
