@@ -1,6 +1,11 @@
 # Progress
 
 ## PAUSED 2026-10-25 after v0.5.5 (owner's call); resume from here
+- **Released v0.6.0 (2026-10-31)** (https://github.com/smm2recomp/smm2recomp/releases/tag/v0.6.0): everything of the
+  2026-10-30/31 rounds below, plus Frame generation "120 fps (replay)" (Apple, off by default: the frame drawn again
+  with uniforms halfway), SMM1 mods One-way wall ledge and Fire Flower wall climb (not yet tried in play). Mac 0.6.0 in
+  /Applications (Super Mario Maker 2.app); iPad build 407 over Tailscale (a remote launch was refused: locked?), its
+  SMM1 copy given the theme backdrops (Model/*_DV_*). GitHub: #54 closed, #56 answered (try v0.5.10 / v0.6.0).
 - **2026-10-30/31 round (on main, not released; v0.5.10 was released 2026-10-30, GitHub only):** owner's plan
   (memory owner-plan-2026-10-30). Done: OCW handshake missing from the iPad (stale generated code; the Makefile now
   stops on a stale tree), Online tab, in-game backend restart, paste in text fields, the iPad menu's touch layout after
