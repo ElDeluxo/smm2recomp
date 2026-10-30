@@ -58,23 +58,23 @@ static struct {
     uint64_t current;        // the course being (or about to be) played
     uint64_t last_done;      // the last course cleared (its play result comes after)
     int ncredits;            // the run's cleared courses (for the ending's credits)
-    int form;                // Mario at the last goal: 0 small, 1 big (the ending's Mario)
+    struct hundred_look look;  // the players at the last goal (the ending's rescue scene)
     struct hundred_credit credits[32];
 } runs[4];
 
 static volatile int last_search_d = -1;  // the difficulty of the last Endless course list
 
 // Names and makers of the courses served (data id -> credit), for the ending's credits.
-static struct { uint64_t id; struct hundred_credit c; int style; } course_names[64];
+static struct { uint64_t id; struct hundred_credit c; int style, theme; } course_names[64];
 static int ncourse_names;
 
-static void note_course(uint64_t id, const char *name, const char *maker, int style) {
+static void note_course(uint64_t id, const char *name, const char *maker, int style, int theme) {
     pthread_mutex_lock(&state_lock);
     int i = 0;
     while (i < ncourse_names && course_names[i].id != id) i++;
     if (i == ncourse_names) i = ncourse_names < 64 ? ncourse_names++ : (int)(id % 64);
     course_names[i].id = id;
-    course_names[i].style = style;
+    course_names[i].style = style, course_names[i].theme = theme;
     snprintf(course_names[i].c.name, sizeof course_names[i].c.name, "%s", name);
     snprintf(course_names[i].c.maker, sizeof course_names[i].c.maker, "%s", maker);
     pthread_mutex_unlock(&state_lock);
@@ -401,7 +401,8 @@ static void *prefetch_thread(void *arg) {
     uint32_t id;
     if (m && code_to_data_id(json_str(json_get(m, "code"), ""), &id)) {
         const char *maker = json_str(json_get(m, "maker"), "");
-        note_course(id, json_str(json_get(m, "name"), ""), maker, style_index(json_str(json_get(m, "style"), "")));
+        note_course(id, json_str(json_get(m, "name"), ""), maker, style_index(json_str(json_get(m, "style"), "")),
+                    json_get(m, "theme") ? (int)json_num(json_get(m, "theme"), 0) : -1);
         extern void smm2_shader_hint_course(const char *style, int theme_main, int theme_sub);  // (shader_rank.c)
         smm2_shader_hint_course(json_str(json_get(m, "style"), ""), (int)json_num(json_get(m, "theme"), 0), -1);
         pthread_mutex_lock(&state_lock);
@@ -579,7 +580,8 @@ static void fill_course(uint64_t e, Json *m, uint32_t data_id, uint32_t difficul
     s64(e + 0x000, data_id);
     put_utf16(g64(e + 0x010), g32(e + 0x018), bare);
     const char *maker = json_str(json_get(m, "maker"), "");
-    note_course(data_id, json_str(json_get(m, "name"), ""), maker, style_index(json_str(json_get(m, "style"), "")));
+    note_course(data_id, json_str(json_get(m, "name"), ""), maker, style_index(json_str(json_get(m, "style"), "")),
+                json_get(m, "theme") ? (int)json_num(json_get(m, "theme"), 0) : -1);
     s64(e + 0x030, maker_pid(json_str(json_get(m, "maker_id"), ""), maker));
     put_utf16(g64(e + 0x040), g32(e + 0x048), json_str(json_get(m, "name"), ""));
     char desc[400];  // (an edited copy of someone else's course: the credit line, edit.c)
@@ -985,15 +987,24 @@ static Json *post_result(const char *path, const char *body, uint32_t d, const c
     return json_parse(again, (size_t)n);
 }
 
-// Mario's form at the goal (player 0, read when the clear is posted): 0 small, 1 big, -1 unknown. Player actors at
-// *(main+0x2c19290) + 0x28, form at player +0x4a8, the form -> size class table at main+0x23d5e0c (1 = small size).
-static int player_form(void) {
+// The players at the goal (read when the clear is posted), for the ending: the player actors at *(main+0x2c19290) +
+// 0x28 + 8 * slot (one, or in co-op one a player), each one's form at +0x4a8 (SMM2's enum "Normal, Super, Fire, ...,
+// USA"), and what it rides: +0x4c0 set in a Goomba's Shoe or on Yoshi, +0x4c4 for the other kind (Stiletto / Red
+// Yoshi) [obs v3.0.3 0x7101579290, the body-box choice: its shoe / Yoshi boxes by these bytes; inf: which byte is
+// which kind]. False when no player is there.
+static bool player_look(struct hundred_look *out) {
     uint64_t holder = g64(MAIN_ADDR(0x2c19290));
-    uint64_t pl = holder ? g64(holder + 0x28) : 0;
-    if (!pl) return -1;
-    uint32_t form = g32(pl + 0x4a8);
-    if (form >= 16) return -1;
-    return g32(MAIN_ADDR(0x23d5e0c) + 4ull * form) == 1 ? 0 : 1;
+    if (!holder) return false;
+    memset(out, 0, sizeof *out);
+    for (int i = 0; i < 4; i++) {
+        uint64_t pl = g64(holder + 0x28 + 8ull * (uint64_t)i);
+        if (!pl) continue;
+        uint32_t form = g32(pl + 0x4a8);
+        out->form[i] = form < 16 ? (int)form : 1;
+        out->mount[i] = !g8(pl + 0x4c0) ? 0 : g8(pl + 0x4c4) ? 2 : 1;
+        out->players = i + 1;
+    }
+    return out->players > 0;
 }
 
 // ---- DominateEndlessModeCourse: a clear (pending 1-Ups, coins, score with the time bonus)
@@ -1002,7 +1013,8 @@ WRAPPER(clear_course, 0x14ed120) {
     uint32_t d = req_diff(no, NO_DIFF);
     uint64_t id = g64(no + NO_CLEAR_ID);
     uint32_t pending = g8(no + NO_PENDING), coins = g8(no + NO_COINS), score = g32(no + NO_SCORE);
-    int form = player_form();
+    struct hundred_look look;
+    bool have_look = player_look(&look);
     pthread_mutex_lock(&state_lock);
     uint32_t dcoins = (coins + 100 - runs[d].coins % 100) % 100;  // (the game sends coins below 100)
     uint32_t dscore = score >= runs[d].score ? score - runs[d].score : 0;
@@ -1020,15 +1032,20 @@ WRAPPER(clear_course, 0x14ed120) {
         set_play(c, no, d, lives, clears);
         pthread_mutex_lock(&state_lock);
         runs[d].coins += dcoins, runs[d].score += dscore, runs[d].started = 0, runs[d].last_done = id;
-        if (form >= 0) runs[d].form = form;
+        if (have_look) {
+            look.theme = -1;
+            for (int i = 0; i < ncourse_names; i++)
+                if (course_names[i].id == id) look.theme = course_names[i].theme;
+            runs[d].look = look;
+        }
         add_credit(d, id);
         if (complete) runs[d].complete = true;
         pthread_mutex_unlock(&state_lock);
         bridge_event(complete ? "clear_last" : "clear", d);
         if (!complete) endless_prefetch((int)d);
-        LOG("[mod] clear %s (%s): lives %u, clears %u, pending %u, Mario %s%s\n", code, DIFF[d], lives, clears,
-            pending, form == 0 ? "small" : form == 1 ? "big" : "?",
-            complete ? " -- 100 Mario Challenge complete!" : "");
+        LOG("[mod] clear %s (%s): lives %u, clears %u, pending %u, players %d (form %d, mount %d), theme %d%s\n", code,
+            DIFF[d], lives, clears, pending, have_look ? look.players : 0, have_look ? look.form[0] : -1,
+            have_look ? look.mount[0] : -1, have_look ? look.theme : -1, complete ? " -- 100 Mario Challenge complete!" : "");
     }
     json_free(j);
     finish(c, no, j != NULL, 2);
@@ -1111,7 +1128,7 @@ void endless_fill_status(struct hundred_status *out, int active_d) {
         out->cleared = (int)runs[active_d].clears;
         out->total = !hundred_rules() ? 0 : runs[active_d].goal ? (int)runs[active_d].goal : totals[active_d];
         out->ncredits = runs[active_d].ncredits < 16 ? runs[active_d].ncredits : 16;
-        out->form = runs[active_d].form;
+        out->look = runs[active_d].look;
         memcpy(out->credits, runs[active_d].credits, sizeof out->credits);
         uint64_t id = runs[active_d].current;
         if (id) {

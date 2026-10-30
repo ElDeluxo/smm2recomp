@@ -1,12 +1,13 @@
 // SMM1's rescue scene, NetEndingDemoScene (rescue.c): Mario walks in from the left to Peach (or Toad on Easy)
 // standing on the style's ground model, drawn from the SMM1 dump's models (research/specs/smm1-ending.md §2).
 #pragma once
+#include "../hundred.h"
 #include "lyt.h"
 
 typedef struct Rescue Rescue;
-// style: 0 SMB1, 1 SMB3, 2 SMW, 3 NSMBU (the cleared course's); peach: Normal and up (else Toad);
-// form: Mario's power-up at the goal (0 small, 1 big)
-Rescue *rescue_new(int style, bool peach, int form);
+// style: 0 SMB1, 1 SMB3, 2 SMW, 3 NSMBU (the cleared course's); peach: Normal and up (else Toad); look: the players at
+// the goal (power-ups, Goomba's Shoe / Yoshi, co-op's Luigi) and the course's theme, NULL for small Mario alone
+Rescue *rescue_new(int style, bool peach, const struct hundred_look *look);
 void rescue_free(Rescue *r);
 int rescue_length(const Rescue *r);    // frames until the scene asks for the credits (818; 998 NSMBU with Peach)
 int rescue_text_in(const Rescue *r);   // the frame the balloon text comes in (Mario has stopped)

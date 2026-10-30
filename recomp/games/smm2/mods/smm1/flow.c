@@ -272,7 +272,7 @@ static void to_intro(int entry) {
 }
 static void to_ending(int d, int lives, int n, const struct hundred_credit *cr) {
     (void)lives;
-    Ending *e = ending_new_style(d, n, cr, F.st.style, F.st.form);
+    Ending *e = ending_new_style(d, n, cr, F.st.style, &F.st.look);
     close_scenes();
     ov_hide(&F.ov);
     F.end = e;
@@ -729,10 +729,22 @@ static void flow_test_open(const char *spec) {
     else if (!strcmp(s, "ending")) {
         struct hundred_credit cr[16];
         int n = y > 0 ? y : RUN_LENGTHS[F.d];
-        char *c3 = b ? strchr(b, ':') : NULL;  // ending:<d>:<n>:<style>[:<form>]
+        // ending:<d>:<n>:<style>[:<players>[:<theme>]], players: each one's form, '/' between them, a trailing 's'
+        // for a Goomba's Shoe / Yoshi, 'S' for a Stiletto / Red Yoshi (e.g. 2s/1: Fire Mario on Yoshi and Super Luigi)
+        char *c3 = b ? strchr(b, ':') : NULL;
         F.st.style = c3 ? atoi(c3 + 1) : 0;
         char *c4 = c3 ? strchr(c3 + 1, ':') : NULL;
-        F.st.form = c4 ? atoi(c4 + 1) : 0;
+        memset(&F.st.look, 0, sizeof F.st.look);
+        F.st.look.players = 1;
+        for (char *p = c4 ? c4 + 1 : NULL; p && *p && *p != ':' && F.st.look.players <= 4;) {
+            int i = F.st.look.players - 1;
+            F.st.look.form[i] = (int)strtol(p, &p, 10);
+            if (*p == 's' || *p == 'S') F.st.look.mount[i] = *p++ == 's' ? 1 : 2;
+            if (*p != '/') break;
+            p++, F.st.look.players++;
+        }
+        char *c5 = c4 ? strchr(c4 + 1, ':') : NULL;
+        F.st.look.theme = c5 ? atoi(c5 + 1) : 0;
         for (int i = 0; i < n && i < 16; i++) fake_course(i, &cr[i]);
         F.ending_only = true;
         to_ending(F.d, 100, n, cr);

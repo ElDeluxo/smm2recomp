@@ -57,14 +57,14 @@ static int costume_variant(int id) {  // [obs 0x024e8c84]
 
 Ending *ending_new(int d, int lives, int n, const struct hundred_credit *c) {
     (void)lives;
-    return ending_new_style(d, n, c, 0, 0);
+    return ending_new_style(d, n, c, 0, NULL);
 }
 
-Ending *ending_new_style(int d, int n, const struct hundred_credit *c, int style, int form) {
+Ending *ending_new_style(int d, int n, const struct hundred_credit *c, int style, const struct hundred_look *look) {
     Ending *e = calloc(1, sizeof *e);
     e->d = d < 0 ? 0 : d > 3 ? 3 : d;
     e->style = style == 4 ? 3 : style < 0 || style > 3 ? 0 : style;  // (SM3DW has no SMM1 scene: NSMBU's, the 3-D one [inf])
-    e->rescue = rescue_new(e->style, e->d != 0, form);
+    e->rescue = rescue_new(e->style, e->d != 0, look);
     e->rescue_len = rescue_length(e->rescue);
     e->text = lay_open("Play_EndingText_00");
     if (e->text) {

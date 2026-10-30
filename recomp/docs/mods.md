@@ -497,7 +497,15 @@ and SMM2's pause are SMM2's own too (the flow draws nothing for them); at 0 live
 
 The win: the Nth clear's answer has `run_complete`; on its Next the flow plays SMM1's ending (`hundred_ending_show`)
 and calls `hundred_run_finish()`, which finishes the run on the server (the completion is on its `hundred_<d>` board
-already).
+already). The rescue scene shows the players as they reached the last goal (`hundred_status.look`, read by `endless.c`
+when the clear is posted): each one's power-up (SMM1's Fire, SMB3 Raccoon, SMB1 Big Mushroom, SMW cape, NSMBU Fire and
+Propeller models; Super Mario's for the forms SMM1 has none of), a Goomba's Shoe / Stiletto (SMB1, SMB3) or Yoshi
+(SMW) carried over, the course theme's distant view behind the stage (SMM1's own sky for ground, airship and SMM2's
+new themes), and in co-op Luigi a step behind Mario (Mario's art with the reds made green). Not drawn: NSMBU's Yoshi,
+Toad and Toadette. The models the first SMM1 import didn't take come from the dump the first time a scene needs them
+(`smm1_model`). Test: `RECOMP_HUNDRED_FLOW_TEST=ending:<d>:<n>:<style>:<players>:<theme>`, players as forms with `s` /
+`S` for a shoe or Yoshi / the Stiletto, `/` between players (e.g. `ending:1:16:2:2s/4:5`: Fire Mario on Yoshi, Cape
+Luigi, a ghost house); `tools/test_smm1ui --flow` renders the same without the game.
 
 The flow is `games/smm2/mods/smm1/` (strong `hundred_flow_*`, `hundred_course_result`, the ending); it keeps weak
 stand-ins of the run side's functions, which `bridge.c` / `endless.c` replace. `hundred_run_status()` returns a

@@ -17,6 +17,16 @@ struct hundred_credit {
     char code[12];   // course ID, XXX-XXX-XXX ("" if unknown)
 };
 
+// The players at the last goal, for the ending's rescue scene (endless.c reads them when the clear is posted)
+struct hundred_look {
+    int players;  // 1, or in co-op the players in the course (slot order: Mario, Luigi, Toad, Toadette)
+    int form[4];  // SMM2's power-up form: 0 small, 1 Super, 2 Fire, 3 Propeller, 4 Cape, 5 Raccoon, 6 Big (Mega),
+                  // 7 Cat, 8 Builder, 9 Superball, 10 Link, 11 Frog, 12 Power Balloon, 13 Super Acorn, 14 Boomerang,
+                  // 15 SMB2 Mushroom
+    int mount[4];  // 0 none, 1 Goomba's Shoe / Yoshi, 2 the other one (Stiletto / Red Yoshi)
+    int theme;     // the course's (main area's) theme: 0 ground .. 9 forest (the course format's), -1 unknown
+};
+
 struct hundred_status {
     int difficulty;  // 0..3 Easy, Normal, Expert, Super Expert; -1 no run
     int lives, cleared, total;  // total: 8, 16, 16, 6 (SMM1's run lengths)
@@ -27,7 +37,7 @@ struct hundred_status {
     int style;                      // the current (or last) course's game style: 0 SMB1, 1 SMB3, 2 SMW, 3 NSMBU, 4 SM3DW
     int ncredits;                   // the courses cleared so far in this run, in order
     struct hundred_credit credits[16];
-    int form;   // Mario's power-up at the last goal: 0 small, 1 big (the ending's Mario)
+    struct hundred_look look;  // the players at the last goal (the ending's rescue scene)
     bool loading;  // the server is still gathering this difficulty's courses (TGRCode: up to a minute): show it
 };
 

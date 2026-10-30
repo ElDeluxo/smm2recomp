@@ -12,7 +12,8 @@
 //   msg/<Layout>.msbt   the English layout texts (Message/LayoutMsg_<US|EU>en.szs), common/<Group>/<Name>.msbt
 //   model/<Name>.bfres  the ending scene's models from Pack/StaticSkin.pack: <Style>_Object_peach (Peach / Toad and
 //                       the ground), <Style>_Player_{Mario,SpMario}Mdl (Mario), Yaz0 and SARC removed; the
-//                       styles' sky distant views <Style>_DV_sky (Model/*.szs)
+//                       styles' sky distant views <Style>_DV_sky (Model/*.szs); any other model of the pack or of
+//                       Model/ the first time it is asked for (smm1_model: power-ups, mounts, theme backdrops)
 //   sound/<Name>.bfstm  the screens' music (Sound/Resource/Stream), sound/<Name>.bars their sound effects
 // Nothing of it is in the repository; the folder is the player's own, like the rest of the data folder.
 #include "smm1_data.h"
@@ -496,10 +497,56 @@ bool smm1_data_open(void) {
     return ok;
 }
 
+// A model the first generation didn't take (the rescue scene's power-ups, mounts and theme backdrops, added later):
+// from Pack/StaticSkin.pack, else the loose Model/<name>.szs, into the cache the first time it is asked for.
+static bool unwrap_model(const uint8_t *z, size_t zn, const char *name) {
+    size_t an, bn;
+    uint8_t *arc = lyt_yaz0(z, zn, &an);
+    LSarc inner;
+    bool ok = false;
+    if (arc && lyt_sarc_open(&inner, arc, an)) {
+        const uint8_t *bf = lyt_sarc_get(&inner, "Output.bfres", &bn);
+        char out[160];
+        snprintf(out, sizeof out, "model/%s.bfres", name);
+        if (bf) put(out, bf, bn), ok = true;
+        lyt_sarc_close(&inner);
+    }
+    free(arc);
+    return ok;
+}
+static pthread_mutex_t g_model_lock = PTHREAD_MUTEX_INITIALIZER;
+static bool extract_model(const char *name) {
+    ensure_dump();
+    char rel[160];
+    snprintf(rel, sizeof rel, "Model/%s.szs", name);
+    bool ok = false;
+    pthread_mutex_lock(&g_model_lock);
+    size_t pn;
+    uint8_t *pack = dump_file("Pack/StaticSkin.pack", &pn);  // (27 MB: not kept, a model is taken once)
+    LSarc ps;
+    if (pack && lyt_sarc_open(&ps, pack, pn)) {
+        size_t zn;
+        const uint8_t *z = lyt_sarc_get(&ps, rel, &zn);
+        if (z) ok = unwrap_model(z, zn, name);
+        lyt_sarc_close(&ps);
+    }
+    free(pack);
+    if (!ok) {
+        size_t zn;
+        uint8_t *z = dump_file(rel, &zn);
+        if (z) ok = unwrap_model(z, zn, name), free(z);
+    }
+    pthread_mutex_unlock(&g_model_lock);
+    if (ok) fprintf(stderr, LOGP "model %s taken from the dump\n", name);
+    return ok;
+}
+
 uint8_t *smm1_model(const char *name, size_t *n) {
     char p[300];
     snprintf(p, sizeof p, CACHE "/model/%s.bfres", name);
-    return smm1_read_file(p, n);
+    uint8_t *b = smm1_read_file(p, n);
+    if (!b && extract_model(name)) b = smm1_read_file(p, n);
+    return b;
 }
 
 uint8_t *smm1_sound_file(const char *name, size_t *n) {

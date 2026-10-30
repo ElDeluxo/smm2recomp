@@ -5,8 +5,10 @@
 
 typedef struct Ending Ending;
 Ending *ending_new(int difficulty, int lives, int n, const struct hundred_credit *credits);
-// style: the cleared course's game style (0 SMB1 .. 3 NSMBU, 4 SM3DW shows NSMBU's), form: Mario's power-up (0 small, 1 big)
-Ending *ending_new_style(int difficulty, int n, const struct hundred_credit *credits, int style, int form);
+// style: the cleared course's game style (0 SMB1 .. 3 NSMBU, 4 SM3DW shows NSMBU's); look: the players at the last goal
+// (their power-ups and mounts, the course's theme; NULL: small Mario alone, SMM1's stage)
+Ending *ending_new_style(int difficulty, int n, const struct hundred_credit *credits, int style,
+                         const struct hundred_look *look);
 void ending_free(Ending *e);
 int ending_step(Ending *e, const UiIn *in);  // EV_DONE when over
 int ending_length(const Ending *e);          // ticks until EV_DONE

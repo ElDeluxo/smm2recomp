@@ -92,6 +92,13 @@ int main(int argc, char **argv) {
         Bfres *b = d ? bfres_load(d, n) : NULL;
         if (!b) return 1;
         bfres_dump(b);
+        if (argc > 3)  // --bfres <Output.bfres> <out_dir>: its textures as <out_dir>/<name>.png too
+            for (int i = 0; i < b->ntex; i++) {
+                const LTex *t = lyt_tex(b->tex[i]);
+                char path[512];
+                snprintf(path, sizeof path, "%s/%s.png", argv[3], b->tex_name[i]);
+                if (t && t->px) write_png(path, t->px, t->w, t->h);
+            }
         return 0;
     }
     if (!smm1_data_open()) return 1;
