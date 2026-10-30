@@ -3,6 +3,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <pthread.h>
+#include <unistd.h>
+
 #include "mod.h"
 #include "../../../runtime/kernel.h"
 #include "../../../runtime/net/http.h"
@@ -12,6 +15,35 @@ static __thread int slow_ms;  // (srv_call_slow: this thread's request may take 
 static __thread int quiet;    // (srv_quiet_thread: this thread's answers aren't logged)
 
 void srv_quiet_thread(void) { quiet = 1; }
+
+// A request the game waits on (a course's data before the course: SMM2 holds a black screen meanwhile, 20 s at most,
+// retried once) says so over the game once it has taken a while, so it doesn't look like a freeze (owner, 2026-10-30:
+// "I got the sense the server wasn't replying"). Only those requests: srv_waited(true) around them (endless.c), not
+// the background ones (prefetches, pictures). A watchdog thread looks twice a second.
+#define SLOW_NOTICE_MS 4000
+extern void menu_notice(const char *text, double seconds);  // runtime/ui/menu.mm
+extern uint64_t plat_now_ns(void);
+static _Atomic uint64_t g_wait_since;  // when the request the game waits on started (ns; 0: none)
+static _Thread_local bool t_waited;
+static void *slow_watch(void *arg) {
+    (void)arg;
+    for (;;) {
+        usleep(500000);
+        uint64_t since = g_wait_since;
+        if (since && plat_now_ns() - since > (uint64_t)SLOW_NOTICE_MS * 1000000)
+            menu_notice("Waiting for the course server...", 1.0);
+    }
+    return NULL;
+}
+static void watch_start(void) {
+    pthread_t t;
+    if (pthread_create(&t, NULL, slow_watch, NULL) == 0) pthread_detach(t);
+}
+void srv_waited(bool on) {
+    static pthread_once_t once = PTHREAD_ONCE_INIT;
+    pthread_once(&once, watch_start);
+    t_waited = on;
+}
 
 static int request_typed(const char *method, const char *path, const char *body, size_t blen, const char *type,
                          HttpResponse *r) {
@@ -28,7 +60,25 @@ static int request_typed(const char *method, const char *path, const char *body,
     // worker threads share cores with the one that draws, and a picture the server waited seconds for froze the
     // frame for as long, 4 s at a time while Course World's lists scrolled)
     kernel_host_wait_begin();
-    int st = http_request(method, url, hdr, body, blen, slow_ms ? slow_ms : g_mod.timeout_ms, r);
+    if (t_waited) g_wait_since = plat_now_ns();
+    int st;
+    // (tests: RECOMP_MOD_TEST_DOWN=<path part>[:<from n-th>]: such requests wait out the timeout and fail, as with a
+    // server that stopped answering - from the n-th match on, so a run can start first)
+    static const char *down = (const char *)-1;
+    if (down == (const char *)-1) down = getenv("RECOMP_MOD_TEST_DOWN");
+    static int down_seen;
+    char part[128] = "";
+    int from = 1;
+    if (down) sscanf(down, "%127[^:]:%d", part, &from);
+    if (down && part[0] && strstr(path, part) && ++down_seen >= from) {
+        usleep((useconds_t)(slow_ms ? slow_ms : g_mod.timeout_ms) * 1000);
+        memset(r, 0, sizeof *r);
+        snprintf(r->error, sizeof r->error, "timed out (RECOMP_MOD_TEST_DOWN)");
+        st = 0;
+    } else {
+        st = http_request(method, url, hdr, body, blen, slow_ms ? slow_ms : g_mod.timeout_ms, r);
+    }
+    if (t_waited) g_wait_since = 0;
     kernel_host_wait_end();
     bool text = body && !strcmp(type, "application/json");
     if (!st) LOG("[mod] %s %s: %s\n", method, path, r->error);

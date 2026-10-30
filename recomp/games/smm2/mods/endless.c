@@ -840,7 +840,12 @@ WRAPPER(get_course_file, 0x14de010) {
     size_t len = 0;
     uint8_t *data = take_prefetched((uint32_t)id, &len);
     if (data) MLOG("course %s: prefetched\n", code);
-    else data = srv_get_bytes_slow(path, &len, DATA_WAIT_MS + 6000);
+    else {
+        extern void srv_waited(bool on);  // (server.c: a slow answer says so over the game's black screen)
+        srv_waited(true);
+        data = srv_get_bytes_slow(path, &len, DATA_WAIT_MS + 6000);
+        srv_waited(false);
+    }
     if (!data || len != COURSE_SIZE || !dest) {
         LOG("[mod] course %s: %s\n", code, data ? "not a course (size)" : "download failed");
         free(data);
