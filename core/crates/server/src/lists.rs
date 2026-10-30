@@ -158,6 +158,8 @@ pub(crate) struct Lists {
     page: Option<Page>,
     /// The courses of the source's Super Worlds held ([`crate::superworlds`]), by code.
     worlds: HashMap<String, Listed>,
+    /// Courses looked up at the source by their ID (search by ID), by code.
+    found: HashMap<String, Listed>,
 }
 
 impl Lists {
@@ -167,6 +169,7 @@ impl Lists {
             .flat_map(|l| &l.courses)
             .find(|c| c.meta.code == code)
             .or_else(|| self.worlds.get(code))
+            .or_else(|| self.found.get(code))
     }
 
     /// A Super World's courses, listed from now on (a code listed already keeps its record).
@@ -260,6 +263,67 @@ impl Store {
     /// store); never blocks.
     pub fn on_course(&self, f: impl Fn(&str) + Send + Sync + 'static) {
         let _ = self.course_wanted.set(Box::new(f));
+    }
+
+    /// Who looks up a course nobody listed by its ID when a client asks for it (once per store);
+    /// never blocks.
+    pub fn on_course_info(&self, f: impl Fn(&str) + Send + Sync + 'static) {
+        let _ = self.info_wanted.set(Box::new(f));
+    }
+
+    /// A course the source found by its ID: listed from now on (its data and thumbnails are fetched
+    /// as for any listed course).
+    pub fn add_found(&self, course: Listed) {
+        let mut g = self.lists.lock().unwrap();
+        g.found.insert(course.meta.code.clone(), course);
+    }
+
+    /// The source has no course `code` (a lookup by ID that failed).
+    pub fn note_info_failed(&self, code: &str) {
+        self.info_failed
+            .lock()
+            .unwrap()
+            .insert(code.to_string(), Instant::now());
+    }
+
+    /// [`Self::course_json`], and for a course nobody listed, a lookup at the source by its ID,
+    /// waited for up to `wait` (none when there is no source, or it found nothing in the last
+    /// minute).
+    pub fn course_json_wait(&self, code: &str, wait: Duration) -> Option<Value> {
+        if let Some(v) = self.course_json(code) {
+            return Some(v);
+        }
+        let valid = code.len() == 11
+            && code.bytes().enumerate().all(|(i, b)| {
+                if i == 3 || i == 7 {
+                    b == b'-'
+                } else {
+                    b.is_ascii_alphanumeric()
+                }
+            });
+        let fetch = self.info_wanted.get()?;
+        let recent = |s: &Self| {
+            s.info_failed
+                .lock()
+                .unwrap()
+                .get(code)
+                .is_some_and(|t| t.elapsed() < Duration::from_secs(60))
+        };
+        if !valid || recent(self) {
+            return None;
+        }
+        fetch(code);
+        let t0 = Instant::now();
+        while t0.elapsed() < wait {
+            std::thread::sleep(Duration::from_millis(50));
+            if let Some(v) = self.course_json(code) {
+                return Some(v);
+            }
+            if recent(self) {
+                return None;
+            }
+        }
+        None
     }
 
     pub fn list_status(&self, kind: Kind) -> Status {

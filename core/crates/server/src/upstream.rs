@@ -73,6 +73,16 @@ pub trait Source: Send {
     fn endless(&mut self, d: Difficulty, count: usize) -> Result<Vec<Value>, SourceError>;
     /// A course file by its code (no dashes): the encrypted `.bcd` or the plain body.
     fn course(&mut self, code: &str) -> Result<Vec<u8>, SourceError>;
+    /// A second client of the same source, for what clients wait for (a course looked up by ID, a
+    /// course's data) while this one is busy with a slow search; None: everything goes through
+    /// this one.
+    fn another(&self) -> Option<Box<dyn Source>> {
+        None
+    }
+    /// A course's record by its code (no dashes), for a search by ID of a course no list has.
+    fn course_info(&mut self, _code: &str) -> Result<Value, SourceError> {
+        Err(SourceError::Failed("no lookups by ID".into()))
+    }
     /// A course's thumbnail by its code (no dashes; `entire`: the whole-course map): a JPEG, or the
     /// game's thumbnail block.
     fn thumbnail(&mut self, _code: &str, _entire: bool) -> Result<Vec<u8>, SourceError> {
@@ -206,6 +216,25 @@ impl Source for TgrCode {
         self.get(&format!("/level_data/{code}"))
     }
 
+    fn another(&self) -> Option<Box<dyn Source>> {
+        // (TGRCode's searches take ~10 s, a course's record or file ~0.3-1 s)
+        Some(Box::new(TgrCode::with_base(&self.base)))
+    }
+
+    fn course_info(&mut self, code: &str) -> Result<Value, SourceError> {
+        let body = self.get(&format!("/level_info/{code}"))?;
+        let v: Value = serde_json::from_slice(&body)
+            .map_err(|e| SourceError::Failed(format!("course {code}: {e}")))?;
+        if v["course_id"].is_string() {
+            Ok(v)
+        } else {
+            Err(SourceError::Failed(format!(
+                "course {code}: {}",
+                v["error"]
+            )))
+        }
+    }
+
     fn super_worlds(&mut self) -> Result<Vec<Value>, SourceError> {
         let body = self.get("/get_super_worlds")?;
         let v: Value = serde_json::from_slice(&body)
@@ -246,6 +275,56 @@ pub enum Keys {
     /// Regions of the player's own game executable to search (read-only and data segments, or
     /// the whole loaded image).
     Find(Vec<Vec<u8>>),
+}
+
+/// The course key table and how a downloaded file becomes a course body: shared by the fetcher
+/// and the client lane (whichever downloads first finds the table).
+struct Decoder {
+    keys: Keys,
+    table: Option<KeyTable>,
+}
+
+impl Decoder {
+    fn new(keys: Keys) -> Self {
+        let table = match &keys {
+            Keys::Table(t) => Some(**t),
+            Keys::Find(_) => None,
+        };
+        Self { keys, table }
+    }
+
+    /// The plain course body of a downloaded file.
+    fn body(&mut self, raw: &[u8]) -> Option<Vec<u8>> {
+        if raw.len() == COURSE_SIZE {
+            return Some(raw.to_vec());
+        }
+        if raw.len() != BCD_SIZE {
+            return None;
+        }
+        if self.table.is_none()
+            && let Keys::Find(regions) = &self.keys
+        {
+            let t0 = Instant::now();
+            self.table = regions
+                .iter()
+                .find_map(|r| keyfind::find_in(r, raw).map(|(_, t)| t));
+            eprintln!(
+                "[upstream] course key table {} in the game ({} ms)",
+                if self.table.is_some() {
+                    "found"
+                } else {
+                    "not found"
+                },
+                t0.elapsed().as_millis()
+            );
+            if self.table.is_some() {
+                self.keys = Keys::Find(Vec::new()); // (the image copy is no longer needed)
+            }
+        }
+        crypto::decrypt_bcd(raw, self.table.as_ref()?, true)
+            .ok()
+            .map(|b| b.body)
+    }
 }
 
 pub struct Options {
@@ -338,6 +417,7 @@ pub fn start(store: Arc<Store>, source: Box<dyn Source>, keys: Keys, opts: Optio
     }
     let tx = Arc::new(Mutex::new(tx));
     let short = tx.clone();
+    let lane_source = source.another();
     let mut f = Fetcher::new(source, keys, opts);
     let run_waits = f.run_waits.clone();
     store.on_short(move |d| {
@@ -367,9 +447,39 @@ pub fn start(store: Arc<Store>, source: Box<dyn Source>, keys: Keys, opts: Optio
             let _ = wake.lock().unwrap().send(Job::Wake);
         });
     }
-    if lists {
+    if lists && let Some(lane) = lane_source {
+        // (what a client waits for goes to a client of its own: the fetcher's searches take ~10 s)
         let wake = tx.clone();
         store.on_lists(move || {
+            let _ = wake.lock().unwrap().send(Job::Wake);
+        });
+        let lane_tx = client_lane(
+            Arc::downgrade(&store),
+            lane,
+            f.decoder.clone(),
+            f.opts.backoff,
+        );
+        let infos = Mutex::new(lane_tx.clone());
+        store.on_course_info(move |code| {
+            let _ = infos.lock().unwrap().send(LaneJob::Info(code.to_string()));
+        });
+        let data = Mutex::new(lane_tx);
+        store.on_course(move |code| {
+            let _ = data.lock().unwrap().send(LaneJob::Data(code.to_string()));
+        });
+    } else if lists {
+        let wake = tx.clone();
+        store.on_lists(move || {
+            let _ = wake.lock().unwrap().send(Job::Wake);
+        });
+        let infos = f.wanted_infos.clone();
+        let wake = tx.clone();
+        store.on_course_info(move |code| {
+            let mut q = infos.lock().unwrap();
+            if !q.iter().any(|c| c == code) {
+                q.push_back(code.to_string());
+            }
+            drop(q);
             let _ = wake.lock().unwrap().send(Job::Wake);
         });
         let queue = f.wanted_courses.clone();
@@ -421,6 +531,97 @@ pub fn start(store: Arc<Store>, source: Box<dyn Source>, keys: Keys, opts: Optio
             }
         }
     });
+}
+
+/// What a client waits for, done by the client lane: a course looked up by its ID, a listed course's
+/// data.
+enum LaneJob {
+    Info(String),
+    Data(String),
+}
+
+/// The client lane: a second client of the source on a thread of its own, for the requests a client
+/// is waiting on (Course World's search by ID, a listed course's data), so they don't queue behind
+/// the fetcher's searches. A busy answer waits out its pause (or `backoff`) and tries again, three
+/// times at most.
+fn client_lane(
+    store: std::sync::Weak<Store>,
+    mut source: Box<dyn Source>,
+    decoder: Arc<Mutex<Decoder>>,
+    backoff: Duration,
+) -> mpsc::Sender<LaneJob> {
+    let (tx, rx) = mpsc::channel::<LaneJob>();
+    std::thread::spawn(move || {
+        let mut failed: std::collections::HashMap<String, Instant> = Default::default();
+        while let Ok(job) = rx.recv() {
+            let Some(store) = store.upgrade() else { return };
+            let (code, info) = match job {
+                LaneJob::Info(c) => (c, true),
+                LaneJob::Data(c) => (c, false),
+            };
+            if store.get(&code).is_some() || (info && store.listed(&code).is_some()) {
+                continue;
+            }
+            if !info
+                && failed
+                    .get(&code)
+                    .is_some_and(|t| t.elapsed() < Duration::from_secs(60))
+            {
+                continue;
+            }
+            let raw = code.replace('-', "");
+            for attempt in 0..3 {
+                let r = if info {
+                    source.course_info(&raw).map(|v| match listed_of(&v, None) {
+                        Some(l) => {
+                            eprintln!("[upstream] {code}: found by its ID");
+                            store.add_found(l);
+                        }
+                        None => {
+                            eprintln!("[upstream] {code}: a record it can't read");
+                            store.note_info_failed(&code);
+                        }
+                    })
+                } else {
+                    let Some(listed) = store.listed(&code) else {
+                        break;
+                    };
+                    source.course(&raw).map(|file| {
+                        let body = decoder.lock().unwrap().body(&file);
+                        let r = match body {
+                            Some(body) => store
+                                .import(&body, listed.meta)
+                                .map_err(|e| format!("import: {e:?}")),
+                            None => Err(format!("not a course it can read ({} bytes)", file.len())),
+                        };
+                        match r {
+                            Ok(_) => eprintln!("[upstream] {code}: fetched for a client"),
+                            Err(e) => {
+                                eprintln!("[upstream] {code}: {e}");
+                                failed.insert(code.clone(), Instant::now());
+                            }
+                        }
+                    })
+                };
+                match r {
+                    Ok(()) => break,
+                    Err(SourceError::Busy(pause)) if attempt < 2 => {
+                        std::thread::sleep(pause.unwrap_or(backoff).min(Duration::from_secs(5)));
+                    }
+                    Err(e) => {
+                        eprintln!("[upstream] {code}: {e}");
+                        if info {
+                            store.note_info_failed(&code);
+                        } else {
+                            failed.insert(code.clone(), Instant::now());
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    });
+    tx
 }
 
 /// Requests this close together are one burst (a page's pictures, asked for one after another).
@@ -503,8 +704,7 @@ enum Fetched {
 
 struct Fetcher {
     source: Box<dyn Source>,
-    keys: Keys,
-    table: Option<KeyTable>,
+    decoder: Arc<Mutex<Decoder>>,
     opts: Options,
     searched: [Option<Instant>; 4],
     last_request: Option<Instant>,
@@ -518,6 +718,8 @@ struct Fetcher {
     no_thumbnail: HashSet<(String, bool)>,
     /// Listed courses a client asked for the data of, in order.
     wanted_courses: Arc<Mutex<std::collections::VecDeque<String>>>,
+    /// Courses nobody listed that a client asked for by ID, in order (looked up at the source).
+    wanted_infos: Arc<Mutex<std::collections::VecDeque<String>>>,
     /// Listed courses the source didn't give, and when (not asked for again for a minute).
     failed_courses: std::collections::HashMap<String, Instant>,
     /// Per list (Popular, New): no request before then (after a failure), and that wait.
@@ -545,14 +747,9 @@ struct Fetcher {
 
 impl Fetcher {
     fn new(source: Box<dyn Source>, keys: Keys, opts: Options) -> Self {
-        let table = match &keys {
-            Keys::Table(t) => Some(**t),
-            Keys::Find(_) => None,
-        };
         Self {
             source,
-            keys,
-            table,
+            decoder: Arc::new(Mutex::new(Decoder::new(keys))),
             opts,
             searched: [None; 4],
             last_request: None,
@@ -561,6 +758,7 @@ impl Fetcher {
             wanted_thumbnails: Default::default(),
             no_thumbnail: HashSet::new(),
             wanted_courses: Default::default(),
+            wanted_infos: Default::default(),
             failed_courses: Default::default(),
             list_retry: [None; 2],
             list_backoff: [Duration::ZERO; 2],
@@ -591,6 +789,7 @@ impl Fetcher {
     fn clients_waiting(&self) -> bool {
         !self.wanted_thumbnails.lock().unwrap().is_empty()
             || !self.wanted_courses.lock().unwrap().is_empty()
+            || !self.wanted_infos.lock().unwrap().is_empty()
             || !self.wanted_worlds.lock().unwrap().is_empty()
     }
 
@@ -759,6 +958,7 @@ impl Fetcher {
 
     /// What clients wait for: Super Worlds, the data of listed courses, then thumbnails.
     fn serve_waiting(&mut self, store: &Store) {
+        self.look_up_wanted(store);
         self.fetch_worlds(store);
         self.import_wanted(store);
         self.serve_thumbnails(store);
@@ -782,6 +982,42 @@ impl Fetcher {
             updated |= self.refresh_pool(store);
         }
         updated
+    }
+
+    /// The courses clients searched for by ID that no list has, each looked up at the source and
+    /// listed (while the source isn't busy); one it has no course for is noted, so the client's wait
+    /// ends.
+    fn look_up_wanted(&mut self, store: &Store) {
+        while !self.busy() {
+            let next = self.wanted_infos.lock().unwrap().pop_front();
+            let Some(code) = next else { return };
+            if store.listed(&code).is_some() || store.get(&code).is_some() {
+                continue;
+            }
+            let raw = code.replace('-', "");
+            let interval = self.opts.thumbnail_interval;
+            match self.request(interval, |s| s.course_info(&raw)) {
+                Err(SourceError::Busy(_)) => {
+                    // (asked again after the pause)
+                    self.wanted_infos.lock().unwrap().push_front(code);
+                    return;
+                }
+                Ok(v) => match listed_of(&v, None) {
+                    Some(l) => {
+                        eprintln!("[upstream] {code}: found by its ID");
+                        store.add_found(l);
+                    }
+                    None => {
+                        eprintln!("[upstream] {code}: a record it can't read");
+                        store.note_info_failed(&code);
+                    }
+                },
+                Err(e) => {
+                    eprintln!("[upstream] {code}: {e}");
+                    store.note_info_failed(&code);
+                }
+            }
+        }
     }
 
     /// The Super Worlds clients asked for, each fetched and kept (while the source isn't busy).
@@ -1194,35 +1430,7 @@ impl Fetcher {
 
     /// The plain course body of a downloaded file.
     fn body(&mut self, raw: &[u8]) -> Option<Vec<u8>> {
-        if raw.len() == COURSE_SIZE {
-            return Some(raw.to_vec());
-        }
-        if raw.len() != BCD_SIZE {
-            return None;
-        }
-        if self.table.is_none()
-            && let Keys::Find(regions) = &self.keys
-        {
-            let t0 = Instant::now();
-            self.table = regions
-                .iter()
-                .find_map(|r| keyfind::find_in(r, raw).map(|(_, t)| t));
-            eprintln!(
-                "[upstream] course key table {} in the game ({} ms)",
-                if self.table.is_some() {
-                    "found"
-                } else {
-                    "not found"
-                },
-                t0.elapsed().as_millis()
-            );
-            if self.table.is_some() {
-                self.keys = Keys::Find(Vec::new()); // (the image copy is no longer needed)
-            }
-        }
-        crypto::decrypt_bcd(raw, self.table.as_ref()?, true)
-            .ok()
-            .map(|b| b.body)
+        self.decoder.lock().unwrap().body(raw)
     }
 }
 
@@ -1322,7 +1530,10 @@ mod tests {
         .unwrap()
     }
 
+    #[derive(Clone)]
     struct Fake {
+        /// A second client for the client lane ([`Source::another`]): a copy of this one.
+        lane: bool,
         records: Vec<Value>,
         files: std::collections::HashMap<String, Vec<u8>>,
         searches: Arc<std::sync::atomic::AtomicUsize>,
@@ -1348,6 +1559,9 @@ mod tests {
         world_details: std::collections::HashMap<String, Value>,
         world_requests: Arc<std::sync::atomic::AtomicUsize>,
         world_busy: u32,
+        /// Lookups by ID: the records the source has, and how many lookups were made.
+        infos: std::collections::HashMap<String, Value>,
+        info_requests: Arc<std::sync::atomic::AtomicUsize>,
     }
 
     impl Fake {
@@ -1414,6 +1628,19 @@ mod tests {
             Ok(self.new.iter().take(count).cloned().collect())
         }
 
+        fn another(&self) -> Option<Box<dyn Source>> {
+            self.lane.then(|| Box::new(self.clone()) as Box<dyn Source>)
+        }
+
+        fn course_info(&mut self, code: &str) -> Result<Value, SourceError> {
+            self.info_requests
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.infos
+                .get(code)
+                .cloned()
+                .ok_or_else(|| SourceError::Failed("HTTP 400".into()))
+        }
+
         fn super_worlds(&mut self) -> Result<Vec<Value>, SourceError> {
             self.world_requests
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -1477,6 +1704,7 @@ mod tests {
         files.insert("N24N99PNF".to_string(), bcd(&course_body("M1")));
         files.insert("PDCYMMWDF".to_string(), course_body("M3"));
         let f = Fake {
+            lane: false,
             records: vec![
                 record("N24N99PNF", 26065833, 40, 10),
                 record("PDCYMMWDF", 60709023, 21, 4),
@@ -1500,6 +1728,8 @@ mod tests {
             world_details: Default::default(),
             world_requests: Default::default(),
             world_busy: 0,
+            infos: Default::default(),
+            info_requests: Default::default(),
         };
         (f, searches)
     }
@@ -1630,7 +1860,7 @@ mod tests {
         image.extend(vec![0xA5u8; 4096]);
         let mut fetch = Fetcher::new(Box::new(f), Keys::Find(vec![image]), quick());
         assert_eq!(fetch.wanted(&store, Difficulty::Expert), 2);
-        assert_eq!(fetch.table, Some(table()));
+        assert_eq!(fetch.decoder.lock().unwrap().table, Some(table()));
     }
 
     #[test]
@@ -1923,6 +2153,52 @@ mod tests {
                     .any(|c| band(c["difficulty"].as_u64().unwrap()) == d)
             );
         }
+    }
+
+    #[test]
+    fn a_course_nobody_listed_is_found_by_its_id() {
+        found_by_id(false);
+    }
+
+    #[test]
+    fn a_course_nobody_listed_is_found_by_its_id_in_the_client_lane() {
+        found_by_id(true);
+    }
+
+    fn found_by_id(lane: bool) {
+        let store = Arc::new(Store::open(tmp(if lane { "byid-lane" } else { "byid" })).unwrap());
+        let (mut f, _) = fake(false);
+        f.lane = lane;
+        f.new = vec![listed_record("PDCYMMWDF", 1, now())];
+        // (TGRCode's level_info: a record like a list's, without the uploader)
+        let mut rec = record("N24N99PNF", 26065833, 40, 10);
+        rec.as_object_mut().unwrap().remove("uploader");
+        f.infos.insert("N24N99PNF".into(), rec);
+        let lookups = f.info_requests.clone();
+        start(
+            store.clone(),
+            Box::new(f),
+            Keys::Table(Box::new(table())),
+            quick(),
+        );
+        // looked up while the request waits, then listed: its data is fetched like any listed course's
+        assert!(store.listed("N24-N99-PNF").is_none());
+        let (st, body) = get(&store, "/api/courses/N24-N99-PNF");
+        assert_eq!(st, 200);
+        let v: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["code"], "N24-N99-PNF");
+        assert!(store.listed("N24-N99-PNF").is_some());
+        let (st, data) = get(&store, "/api/courses/N24-N99-PNF/data?wait_ms=10000");
+        assert_eq!((st, data), (200, course_body("M1")));
+        // an ID the source has no course for: not found as soon as the source says so, and not asked
+        // again within the minute; a malformed one isn't asked at all
+        let t0 = Instant::now();
+        assert_eq!(get(&store, "/api/courses/ABC-DEF-GHJ").0, 404);
+        assert!(t0.elapsed() < Duration::from_secs(3));
+        let n = lookups.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(get(&store, "/api/courses/ABC-DEF-GHJ").0, 404);
+        assert_eq!(get(&store, "/api/courses/not-a-code").0, 404);
+        assert_eq!(lookups.load(std::sync::atomic::Ordering::SeqCst), n);
     }
 
     #[test]

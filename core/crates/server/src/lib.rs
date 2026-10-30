@@ -192,6 +192,10 @@ pub struct Store {
     lists_wanted: std::sync::OnceLock<lists::ListsWanted>,
     /// Told when a listed course the store doesn't hold is wanted (code).
     course_wanted: std::sync::OnceLock<lists::CourseWanted>,
+    /// Told when a course nobody listed is asked for by its ID (code): [`upstream`] looks it up.
+    info_wanted: std::sync::OnceLock<lists::CourseWanted>,
+    /// IDs the source had no course for, and when (a lookup isn't waited for again soon).
+    info_failed: Mutex<std::collections::HashMap<String, std::time::Instant>>,
     /// Course World's Super Worlds ([`superworlds`]), and who is told when a client asks for the
     /// pool or for a world the store doesn't hold.
     superworlds: Mutex<superworlds::SuperWorlds>,
@@ -481,6 +485,8 @@ impl Store {
             lists: Mutex::new(lists),
             lists_wanted: std::sync::OnceLock::new(),
             course_wanted: std::sync::OnceLock::new(),
+            info_wanted: std::sync::OnceLock::new(),
+            info_failed: Default::default(),
             superworlds: Mutex::new(superworlds),
             sw_pool_wanted: std::sync::OnceLock::new(),
             sw_world_wanted: std::sync::OnceLock::new(),
@@ -1705,7 +1711,8 @@ pub fn handle(
             mark(&mut v["courses"]);
             json(200, v)
         }
-        ("GET", ["api", "courses", code]) => match store.course_json(code) {
+        // (a course nobody listed: looked up at the source by its ID, for Course World's search by ID)
+        ("GET", ["api", "courses", code]) => match store.course_json_wait(code, INFO_WAIT) {
             Some(mut v) => {
                 mark(&mut v);
                 json(200, v)
@@ -1807,6 +1814,10 @@ pub fn start_relay(
 /// How long `GET /api/courses/<code>/data` waits for a listed course the server doesn't hold
 /// (under the game's 8 s request timeout).
 pub const DATA_WAIT_MS: u64 = 7000;
+
+/// How long `GET /api/courses/<code>` waits for the source to look up a course nobody listed (the game's
+/// own timeout is 8 s).
+const INFO_WAIT: std::time::Duration = std::time::Duration::from_secs(6);
 
 /// Endless Challenge difficulties.
 pub const ENDLESS: &[&str] = &["easy", "normal", "expert", "super_expert"];
