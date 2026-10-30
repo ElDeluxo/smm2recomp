@@ -106,6 +106,7 @@ static bool config_load(void) {
 // The modules are loaded and nothing of the game has run yet (runtime/mods.c mods_boot): write the domain into the
 // game's own host string, and tell the network stack which one host it may reach.
 void game_modules_loaded(void) {
+    g_ocw.active = false;  // (an in-game reboot onto another backend: the hook makes the game's own call again)
     if (net_backend() != NET_BACKEND_OCW) return;  // (the game is left exactly as it is)
     if (!config_load()) return;
 
@@ -242,6 +243,7 @@ static void config_save(void) {
 static bool rows_read;  // the config has been read into the buffers for the menu
 
 int ocw_rows(GameModRow *out, int room) {
+    if (net_backend_setting() != NET_BACKEND_OCW) return 0;  // (only with OpenCourse World chosen: owner, 2026-10-30)
     if (!rows_read) rows_read = true, config_load();  // (ignores its own complaints: empty fields are fine here)
     // (named fields, not positions: the row struct is shared and has grown once already)
     static const GameModRow rows[] = {

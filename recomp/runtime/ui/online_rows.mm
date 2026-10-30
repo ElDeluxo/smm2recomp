@@ -1,4 +1,4 @@
-// The Mods tab's Online section (runtime/ui/menu.mm tab_mods): which backend the game's online features talk to, and
+// The Online tab (runtime/ui/menu.mm tab_online, runtime/ui/mods_page.mm online_page): which backend the game's online features talk to, and
 // the Nextendo Network account (runtime/net/nextendo.h) - sign in in the browser (desktop / Android) or in the system's
 // sign-in sheet (iOS, runtime/ui/nextendo_ios.mm). Plain C++ here: the same on every platform.
 #include <SDL3/SDL.h>
@@ -24,6 +24,8 @@ extern "C" bool online_rows_available(void) { return true; }
 // The game asked to go online and the runtime is offline (runtime/services/nifm.c): say why and what to do, at most
 // every 20 s
 extern "C" void menu_notice(const char *text, double seconds);
+extern "C" void rt_request_reboot(int kind);
+extern "C" void menu_toggle(void);
 extern "C" void rt_log(const char *fmt, ...);
 #define LOG_NOTICE(t) rt_log("[online] notice: %s\n", t)
 extern "C" void online_offline_notice(void) {
@@ -85,8 +87,16 @@ extern "C" void online_rows(void) {
         m++;
     }
     static char d[700];
-    snprintf(d, sizeof d, "%s\n\nTakes effect at the next start.", desc);
+    snprintf(d, sizeof d, "%s\n\nTakes effect when the game starts again (Restart the game now, below).", desc);
     if (m > 0 && opt_choice("Online backend", &sel, names, m, 0, d)) net_backend_select((NetBackend)ids[sel]);
+    // a backend chosen now runs from the game's next start: restarted here, without quitting the app (the network
+    // settings are read again at the reboot: net/netcfg.c net_config_reload)
+    if (net_backend_restart_needed()) {
+        if (opt_action("Restart the game now", "Restart",
+                       "The online backend you chose takes effect when the game starts again. Progress since your "
+                       "last save is lost."))
+            rt_request_reboot(1 /* RT_REBOOT_GAME */), menu_toggle();
+    }
 
     NxStatus st;
     nextendo_status(&st);

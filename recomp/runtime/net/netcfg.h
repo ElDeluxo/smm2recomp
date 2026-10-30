@@ -85,6 +85,8 @@ void net_log_secret(const char *s);
 typedef struct { NetBackend id; const char *key, *label, *desc; bool available; } NetBackendOption;
 int net_backend_options(const NetBackendOption **out);
 bool net_backend_select(NetBackend b);  // false: not available
+void net_config_reload(void);          // at an in-game reboot: the settings read again (main.c boot)
+bool net_backend_restart_needed(void);  // the backend chosen differs from the one the game runs with
 
 // Names. Returns true and the IPv4 address (host order) the redirect table gives `name`, false = no such name
 // (every name not in the table). Literal dotted addresses resolve to themselves.

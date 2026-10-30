@@ -35,6 +35,8 @@ typedef struct { char pattern[128]; uint32_t ip; } Rule;  // "name" or "*.domain
 
 static pthread_once_t once = PTHREAD_ONCE_INIT;
 static NetBackend backend_set = NET_BACKEND_OURS, backend_eff = NET_BACKEND_OURS;
+static NetBackend backend_booted = NET_BACKEND_OURS;  // the setting as the last (re)load read it: what the game runs with
+static bool loaded;
 static char fallback_why[160];  // why this session runs as ours though another backend is set (net_backend_fall_back)
 static NetTrust trust = NET_TRUST_LOCAL_CA;
 static bool log_on, log_data_on;
@@ -126,7 +128,8 @@ static void load(void) {
             if (!strcmp(v, backend_keys[i])) backend_set = (NetBackend)i;
         if (!strcmp(v, "localnex") || !strcmp(v, "local_nex")) backend_set = NET_BACKEND_LOCAL_NEX;
     }
-    backend_eff = backend_set;
+    backend_eff = backend_booted = backend_set;
+    loaded = true;
     if (backend_set == NET_BACKEND_NEXTENDO && !nextendo_signed_in()) {  // (the store only: no network)
         LOG("[net] backend nextendo: not signed in; using our server\n");
         backend_eff = NET_BACKEND_OURS;
@@ -213,6 +216,37 @@ static void load(void) {
 }
 
 static void init(void) { pthread_once(&once, load); }
+
+// At an in-game reboot (main.c boot): the settings read again, so a backend chosen in the menu takes effect without
+// quitting the app (owner, 2026-10-30: changing server wanted a full restart). Everything load() sets goes back to its
+// default first; the guest threads are stopped, so nothing reads these meanwhile. Before the first load: nothing.
+void net_config_reload(void) {
+    if (!loaded) return;
+    backend_set = backend_eff = backend_booted = NET_BACKEND_OURS;
+    fallback_why[0] = 0;
+    trust = NET_TRUST_LOCAL_CA, trust_set = false;
+    log_on = log_data_on = test_server_set = false;
+    test_ip = 0x7f000001, test_port = 44300;
+    nrules = 0;
+    snprintf(ca_path, sizeof ca_path, "%s", "net/test-ca.pem");
+    token_file[0] = nex_token_file[0] = 0;
+    nx_server = nx_nat = 0;
+    memset(pin, 0, sizeof pin);
+    pthread_mutex_lock(&ocw_lock);
+    ocw_name[0] = ocw_fixed[0] = 0;
+    ocw_nips = ocw_oldest = 0, ocw_cur = 0, ocw_when = 0;
+    pthread_mutex_unlock(&ocw_lock);
+    pthread_mutex_lock(&rev_lock);
+    nrev = 0;
+    pthread_mutex_unlock(&rev_lock);
+    load();
+    LOG("[net] settings read again: backend %s\n", backend_keys[backend_set]);
+}
+
+bool net_backend_restart_needed(void) {
+    init();
+    return backend_set != backend_booted;
+}
 
 NetBackend net_backend(void) { init(); return __atomic_load_n(&backend_eff, __ATOMIC_ACQUIRE); }
 // The backend failed its login this session (a game's mod says when: games/smm2/mods/online.c): the rest of the session

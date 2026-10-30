@@ -183,6 +183,8 @@ static void boot(const char *root) {
     if (!gamelib_load(root, why, sizeof why)) FATAL("%s\n", why);
     loader_load(exefs);
     { extern void embed_server_boot(void); embed_server_boot(); }  // (runtime/net/embed_server.h: before the mods' settings)
+    { extern void net_config_reload(void); net_config_reload(); }  // (a backend chosen since the last boot: before
+                                                                    // the mods, which look at it - ocw.c)
     mods_boot();
     { extern void settings_load(void); settings_load(); }
     { extern void online_sign_in_at_start(void); online_sign_in_at_start(); }  // (runtime/ui/online_rows.mm)
