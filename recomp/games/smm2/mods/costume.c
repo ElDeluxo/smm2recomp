@@ -675,7 +675,8 @@ static void goal_fanfare(Cpu *c) {
 }
 static void down_fanfare(Cpu *c) {
     extern void quick_retry_miss(void);  // (mods/quick_retry.c: the miss is fast-forwarded when it's on)
-    if ((uint32_t)c->x[2] == 7) quick_retry_miss();
+    extern void endless_miss_demo(void);  // (mods/endless.c: a skip from now on costs the life)
+    if ((uint32_t)c->x[2] == 7) quick_retry_miss(), endless_miss_demo();
     char res[48];
     snprintf(res, sizeof res, "%s", g_p[0].wear);
     bool worn = costumes_on() && res[0] && (uint32_t)c->x[2] == 7, mine = worn && has_sound(res, "down");

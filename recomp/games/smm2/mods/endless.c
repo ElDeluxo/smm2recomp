@@ -185,7 +185,24 @@ const char *mod_own_maker_id(void) { return own_maker_id; }
 static bool hundred_rules(void) { return mod_hundred_rules(); }
 // the server keeps a run slot per ruleset: every run request says which (?ruleset=)
 static const char *RULESET(void) { return hundred_rules() ? "hundred" : "smm2"; }
-static Json *post_result(const char *path, const char *body, uint32_t d, const char *code);  // (a refused result: below)
+static Json *post_result(const char *path, const char *body, uint32_t d, const char *code);
+
+// The game's own lives after a skip (research/specs/endless-challenge.md §2.4): its course end puts the counters back
+// to the snapshot taken when the course started and takes a life only when its own flag (run +0x48) says the skip came
+// during a miss demo - so a skip after a miss was posted showed the lives from before it (owner, 2026-10-30: 100 shown,
+// 99 on the server). The server's lives go into both the current and the snapshot counters (lives[4] at counters +8,
+// one per player) and the flag is cleared, so the course end lands on the server's number. Run = *(main+0x2c56bb0):
+// +0x30 the current counters, +0x40 the snapshot.
+static void run_lives_set(uint32_t lives) {
+    uint64_t run = g64(MAIN_ADDR(0x2c56bb0));
+    if (run < 0x7000000000ull) return;
+    for (int k = 0; k < 2; k++) {
+        uint64_t ct = g64(run + (k ? 0x40 : 0x30)), lp = ct > 0x7000000000ull ? g64(ct + 8) : 0;
+        if (lp < 0x7000000000ull) continue;
+        for (int i = 0; i < 4; i++) s32(lp + 4 * i, lives);
+    }
+    s8(run + 0x48, 0);
+}  // (a refused result: below)
 
 // Name and best per difficulty for the player's own record (online.c GetUsers). Best = the best clears of SMM2's
 // rules, or with SMM1's rules the number of completed 100 Mario runs on that difficulty (the server's hundred_<d>
@@ -879,6 +896,15 @@ WRAPPER(get_course_file, 0x14de010) {
 // ---- StartEndlessModeCourse: posted when a new course starts, and again during a miss demo (the life it costs).
 // The first post for a course is the start; another post for the same course before its result is a miss.
 
+// The miss demo has started (the death fanfare, mods/costume.c) and its miss isn't posted yet: a skip now costs the
+// life (the server's rule, mmk_modes::endless mark_miss_demo; SMM1's own). The game posts the miss partway through the
+// demo, so a skip pressed before that came with no miss at all, and the lives shown stayed as they were (owner, 2026-10-30).
+static _Atomic bool g_miss_demo;
+void endless_miss_demo(void) {
+    if (!g_miss_demo) MLOG("miss demo: a skip now costs the life\n");
+    g_miss_demo = true;
+}
+
 WRAPPER(start_course, 0x14ecf30) {
     uint32_t d = req_diff(no, NO_DIFF);
     uint64_t id = g64(no + NO_COURSE_ID);
@@ -886,6 +912,7 @@ WRAPPER(start_course, 0x14ecf30) {
     bool miss = runs[d].started == id && id;
     runs[d].started = id;
     pthread_mutex_unlock(&state_lock);
+    g_miss_demo = false;  // (a new course, or the miss posted: either way no skip owes a life now)
     char code[12];
     code_of(id, code);
     if (!miss) {  // a new course: the server's lives and clears as they are
@@ -1010,15 +1037,23 @@ WRAPPER(skip_course, 0x14ed5e0) {
     char code[12], path[64], body[160];
     code_of(id, code);
     snprintf(path, sizeof path, "/api/endless/%s/result?ruleset=%s", DIFF[d], RULESET());
-    snprintf(body, sizeof body, "{\"code\":\"%s\",\"result\":\"skip\",\"during_miss\":false}", code);
+    bool during_miss = g_miss_demo;
+    g_miss_demo = false;
+    snprintf(body, sizeof body, "{\"code\":\"%s\",\"result\":\"skip\",\"during_miss\":%s}", code,
+             during_miss ? "true" : "false");
     Json *j = post_result(path, body, d, code);
     if (j) {
+        // (the lives as the server has them now: a skip during the miss demo cost one)
+        uint32_t lives = (uint32_t)json_num(json_get(j, "lives"), 0);
+        set_play(c, no, d, lives, (uint32_t)json_num(json_get(j, "clears"), 0));
+        run_lives_set(lives);
         pthread_mutex_lock(&state_lock);
         runs[d].started = 0;
         pthread_mutex_unlock(&state_lock);
         bridge_event("skip", d);
         endless_prefetch((int)d);
-        LOG("[mod] skip %s (%s): lives %u\n", code, DIFF[d], (uint32_t)json_num(json_get(j, "lives"), 0));
+        LOG("[mod] skip %s (%s): lives %u%s\n", code, DIFF[d], (uint32_t)json_num(json_get(j, "lives"), 0),
+            during_miss ? " (during the miss: the life counted)" : "");
     }
     json_free(j);
     finish(c, no, j != NULL, 2);
