@@ -255,7 +255,10 @@ static void wait_cb(id<MTLCommandBuffer> c) {
 static pthread_mutex_t gone_lock = PTHREAD_MUTEX_INITIALIZER;
 static struct { void *nvn, *mtl; } gone[4096];
 static int ngone;
+static _Atomic int rp_tex_gone;  // (the frame replay: textures destroyed since this frame began - many: a scene change)
+#define RP_GONE_MAX 16
 void renderer_texture_gone(void *nvn_tex, void *mtl_tex) {
+    rp_tex_gone++;
     pthread_mutex_lock(&gone_lock);
     if (ngone < 4096) { gone[ngone].nvn = nvn_tex; gone[ngone].mtl = mtl_tex; ngone++; }
     pthread_mutex_unlock(&gone_lock);
@@ -484,7 +487,8 @@ static id<MTLTexture> view_of_base(id<MTLTexture> base, NvnTexture *t, const Nvn
     MTLTextureType type = base.textureType;
     if (type == MTLTextureTypeCube && nly != 6) type = nly == 1 ? MTLTextureType2D : MTLTextureType2DArray;  // (some faces)
     if (render && (type == MTLTextureType2DArray || type == MTLTextureTypeCube) && nly == 1) type = MTLTextureType2D;
-    if (lv0 + nlv > base.mipmapLevelCount) nlv = base.mipmapLevelCount - lv0;
+    if (lv0 + nlv > base.mipmapLevelCount) nlv = lv0 < base.mipmapLevelCount ? base.mipmapLevelCount - lv0 : 0;
+    if (!nlv || !nly) return base;  // (a view of nothing: Metal refuses it)
     if (pf == base.pixelFormat && lv0 == 0 && nlv == base.mipmapLevelCount && ly0 == 0 && type == base.textureType)
         return base;
     static int vlog;  // LARECOMP_LOG_VIEWS: texture views that change the pixel format
@@ -856,6 +860,7 @@ static id<MTLBuffer> ring;
 static uint64_t ring_off;
 #define RING_SIZE (64u << 20)
 
+static void exec_list(uint64_t handle, int depth);
 static uint64_t ring_alloc(const void *data, uint64_t size) {
     if (!ring) ring = [dev newBufferWithLength:RING_SIZE options:MTLResourceStorageModeShared];
     uint64_t aligned = (ring_off + 255) & ~255ull;
@@ -867,6 +872,169 @@ static uint64_t ring_alloc(const void *data, uint64_t size) {
     memcpy((uint8_t *)ring.contents + aligned, data, size);
     ring_off = aligned + size;
     return aligned;
+}
+
+// ------------------------------------------------------------------ frame replay (Video "Frame generation: 120 fps
+// (replay)", metal.m backend_present): the in-between image of frames N-1 and N is frame N drawn again with every
+// draw's uniform data halfway between the two frames' - objects and the camera where they were half a frame earlier,
+// drawn by the game's own shaders (nothing guessed from the images). A frame's command lists (backend_execute, in
+// order) and the state at its start are kept; each draw's uniform buffers are kept as the draw used them, keyed by the
+// draw's place in the frame (SMM2's draw order is the same from frame to frame [obs: LARECOMP_INTERP_PROBE, 335 of 337
+// draws with the same program at the same place]; its uniform buffers alternate between two sets of addresses, so
+// the address can't be the key). The replay runs after the frame's own image is out (metal.m), with fences left out.
+// A float is blended only where both frames have a plausible float there (not an integer's bit pattern) and the step
+// isn't a jump (a cut, another object at that place); a buffer with many jumps keeps frame N's values.
+static bool g_rp_record, g_replaying;
+static uint64_t rp_handles[4096];
+static int rp_nh;
+static bool rp_open;
+static ExecState rp_start;
+static uint32_t rp_draw, rp_this_draw;
+typedef struct { uint32_t draw; uint8_t stage, slot; uint32_t size; uint64_t prog, off; } RpEnt;
+typedef struct {
+    RpEnt *e; int n, cap;
+    uint8_t *b; uint64_t nb, capb;
+    uint64_t *sig; uint32_t *first; uint32_t nd, capd;  // per draw: its signature, its first entry
+} RpArena;
+static RpArena rp_ar[2];  // [rp_cur]: this frame's (being drawn); the other: the last frame's
+static int rp_cur;
+#define RP_MAX_BYTES (48u << 20)
+uint64_t g_rp_frames, g_rp_blended_bufs, g_rp_kept_bufs;  // (stats)
+
+void renderer_replay_record(bool on) { g_rp_record = on; }
+static void rp_frame_begin(void) {
+    rp_open = true, rp_nh = 0, rp_draw = 0, rp_tex_gone = 0;
+    rp_start = st;
+    rp_ar[rp_cur].n = 0, rp_ar[rp_cur].nb = 0, rp_ar[rp_cur].nd = 0;
+}
+// A draw's signature: what it draws with, not its uniform data (those buffers' addresses alternate from frame to
+// frame) - the program, the draw's own parameters, vertex buffers, textures and target. A draw is blended only with
+// the last frame's draw of the same signature: at its own place, or the nearest within 16 places (objects come and go).
+static uint32_t rp_pair;  // (replay) the last frame's draw paired with this one, ~0 for none
+static uint64_t rp_signature(const CmdRec *r) {
+    uint64_t h = 1469598103934665603ull;
+#define RP_MIX(v) (h = (h ^ (uint64_t)(v)) * 1099511628211ull)
+    RP_MIX((uintptr_t)st.program);
+    for (int i = 0; i < 4; i++) RP_MIX(r->x[i]), RP_MIX(st.vbuf[i].addr), RP_MIX(st.tex[1][i]), RP_MIX(st.tex[0][i]);
+    RP_MIX((uintptr_t)st.rt.color[0]);
+#undef RP_MIX
+    return h;
+}
+// how far apart two draws' uniform data are (the sum of the floats' differences, buffers of the same slot and size)
+static double rp_distance(const RpArena *a, uint32_t da, const RpArena *b, uint32_t db) {
+    double d = 0;
+    for (uint32_t i = a->first[da]; i < (uint32_t)a->n && a->e[i].draw == da; i++) {
+        const RpEnt *ea = &a->e[i], *eb = NULL;
+        for (uint32_t j = b->first[db]; j < (uint32_t)b->n && b->e[j].draw == db; j++)
+            if (b->e[j].stage == ea->stage && b->e[j].slot == ea->slot && b->e[j].size == ea->size) { eb = &b->e[j]; break; }
+        if (!eb) { d += 1e6; continue; }
+        const float *fa = (const float *)(a->b + ea->off), *fb = (const float *)(b->b + eb->off);
+        for (uint32_t k = 0; k < ea->size / 4 && k < 256; k++) {
+            float x = fa[k], y = fb[k];
+            if (isfinite(x) && isfinite(y) && fabsf(x) < 1e7f && fabsf(y) < 1e7f) d += fabsf(x - y);
+        }
+    }
+    return d;
+}
+static void rp_draw_begin(const CmdRec *r) {
+    RpArena *cur = &rp_ar[rp_cur], *prev = &rp_ar[rp_cur ^ 1];
+    if (g_replaying) {  // (of several of the same signature - terrain chunks, which differ only in their uniform
+                        // data - the one whose data is nearest: the same chunk, not its neighbour one place on)
+        rp_pair = ~0u;
+        if (rp_this_draw >= cur->nd) return;
+        uint64_t sig = cur->sig[rp_this_draw];
+        double best = 1e30;
+        for (int k = 0; k <= 16; k++)
+            for (int sgn = 0; sgn < (k ? 2 : 1); sgn++) {
+                int64_t pd = sgn ? (int64_t)rp_this_draw - k : (int64_t)rp_this_draw + k;
+                if (pd < 0 || pd >= prev->nd || prev->sig[pd] != sig) continue;
+                double dist = rp_distance(cur, rp_this_draw, prev, (uint32_t)pd);
+                if (dist < best) best = dist, rp_pair = (uint32_t)pd;
+                if (dist == 0) return;
+            }
+        return;
+    }
+    if (!(g_rp_record && rp_open) || rp_this_draw != cur->nd) return;
+    if (cur->nd == cur->capd) {
+        cur->capd = cur->capd ? cur->capd * 2 : 4096;
+        cur->sig = realloc(cur->sig, sizeof(uint64_t) * cur->capd), cur->first = realloc(cur->first, sizeof(uint32_t) * cur->capd);
+    }
+    cur->sig[cur->nd] = rp_signature(r), cur->first[cur->nd] = (uint32_t)cur->n, cur->nd++;
+}
+static void rp_note(int stage, int slot, uint64_t size, const void *data) {
+    RpArena *a = &rp_ar[rp_cur];
+    if (a->nb + size > RP_MAX_BYTES) return;
+    if (a->n == a->cap) a->cap = a->cap ? a->cap * 2 : 8192, a->e = realloc(a->e, sizeof(RpEnt) * (size_t)a->cap);
+    if (a->nb + size > a->capb) {
+        a->capb = a->capb ? a->capb * 2 : (4u << 20);
+        while (a->capb < a->nb + size) a->capb *= 2;
+        a->b = realloc(a->b, a->capb);
+    }
+    memcpy(a->b + a->nb, data, size);
+    a->e[a->n++] = (RpEnt){rp_this_draw, (uint8_t)stage, (uint8_t)slot, (uint32_t)size, (uint64_t)(uintptr_t)st.program, a->nb};
+    a->nb += size;
+}
+static const RpEnt *rp_find(const RpArena *a, uint32_t draw, int stage, int slot) {  // a draw's buffer in an arena
+    if (draw >= a->nd) return NULL;
+    for (uint32_t i = a->first[draw]; i < (uint32_t)a->n && a->e[i].draw == draw; i++)
+        if (a->e[i].stage == stage && a->e[i].slot == slot) return &a->e[i];
+    return NULL;
+}
+static bool rp_plausible(float f, uint32_t bits) { return bits == 0 || (isfinite(f) && fabsf(f) > 1e-20f && fabsf(f) < 1e7f); }
+static const void *rp_blend(int stage, int slot, uint64_t size, const void *fallback) {
+    const RpArena *cur = &rp_ar[rp_cur], *prev = &rp_ar[rp_cur ^ 1];
+    const RpEnt *c = rp_find(cur, rp_this_draw, stage, slot), *p = rp_pair == ~0u ? NULL : rp_find(prev, rp_pair, stage, slot);
+    if (!c) return fallback;
+    const uint8_t *cb = cur->b + c->off;
+    if (!p || p->size != c->size || p->prog != c->prog || c->size < size) { g_rp_kept_bufs++; return cb; }
+    static uint8_t tmp[0x10000];
+    const uint8_t *pb = prev->b + p->off;
+    uint32_t n = (uint32_t)(size / 4), jumps = 0, moved = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        uint32_t xa, xb;
+        memcpy(&xa, pb + 4 * i, 4), memcpy(&xb, cb + 4 * i, 4);
+        float a, b, o;
+        memcpy(&a, &xa, 4), memcpy(&b, &xb, 4);
+        if (xa == xb || !rp_plausible(a, xa) || !rp_plausible(b, xb)) { memcpy(tmp + 4 * i, &xb, 4); continue; }
+        float d = fabsf(b - a);
+        if (d > 48.0f && d > 0.25f * fmaxf(fabsf(a), fabsf(b))) { jumps++; memcpy(tmp + 4 * i, &xb, 4); continue; }
+        o = a + (b - a) * 0.5f, moved++;
+        memcpy(tmp + 4 * i, &o, 4);
+    }
+    memcpy(tmp + 4 * n, cb + 4 * n, size - 4 * (uint64_t)n);
+    if (jumps * 4 > moved + jumps && jumps > 2) { g_rp_kept_bufs++; return cb; }  // (another object's data: keep N's)
+    g_rp_blended_bufs++;
+    return tmp;
+}
+// The in-between image: frame N's lists again with blended uniforms (metal.m: after frame N's own image is copied
+// out). false: nothing to replay (the first frame, or none kept). Either way the frame's records move to "last".
+bool renderer_replay_frame(void) {
+    bool ok = rp_open && rp_nh > 0 && rp_ar[rp_cur ^ 1].n > 0 && rp_tex_gone <= RP_GONE_MAX;  // (a scene change: none)
+    static uint64_t skipped;
+    if (rp_open && rp_tex_gone > RP_GONE_MAX && skipped++ % 60 == 0)
+        LOG("[replay] no in-between frame: %d textures gone this frame (%llu such frames)\n", (int)rp_tex_gone,
+            (unsigned long long)skipped);
+    if (ok) {
+        renderer_submit();
+        ExecState end = st;
+        st = rp_start, st.rt_dirty = true;
+        g_replaying = true, rp_draw = 0;
+        for (int i = 0; i < rp_nh; i++) exec_list(rp_handles[i], 0);
+        renderer_submit();
+        g_replaying = false;
+        st = end, st.rt_dirty = true;
+        if (++g_rp_frames % 600 == 1)
+            LOG("[replay] %llu in-between frames; uniform buffers blended %llu, kept as they are %llu\n",
+                (unsigned long long)g_rp_frames, (unsigned long long)g_rp_blended_bufs, (unsigned long long)g_rp_kept_bufs);
+    }
+    rp_open = false;
+    rp_cur ^= 1;
+    return ok;
+}
+void renderer_replay_skip(void) {  // (a frame with no in-between image: its records still become the last frame's)
+    if (!rp_open) return;
+    rp_open = false;
+    rp_cur ^= 1;
 }
 
 static void ring_reset(void) { ring_off = 0; }
@@ -2056,7 +2224,9 @@ static void renderer_swizzle_row(NvnTexture *t, const NvnTextureView *v, bool ha
 
 // Upload helper: a separate command buffer, committed now so it runs before the current pass.
 static id<MTLTexture> sampled_of_base(id<MTLTexture> base, NvnTexture *t, const NvnTextureView *v, bool has_view, int want_type);
+static id<MTLTexture> dummy_texture(int want_type);
 static id<MTLTexture> sampled_texture(NvnTexture *t, const NvnTextureView *v, bool has_view, int want_type) {
+    if (g_replaying && (!t || !t->width || !t->height)) return dummy_texture(want_type);  // (the frame replay: gone)
     // uploads (if the CPU-side contents changed) go into their own command buffer, committed before
     // the current one so they land first
     return sampled_of_base(renderer_texture(t, nil, false), t, v, has_view, want_type);
@@ -2350,7 +2520,10 @@ static void bind_cbufs(int stage, ShaderInfo *si) {
         if ((si->cbuf_dynamic & (1u << k)) && r.size) size = r.size > 0x10000 ? 0x10000 : r.size;  // indexed: whole buffer
         if (size > r.size && r.size) size = r.size;
         if (size < 16) size = 16;
-        uint64_t off = ring_alloc((void *)(uintptr_t)r.addr, size);  // snapshot, as later CPU writes must not leak in
+        const void *data = (void *)(uintptr_t)r.addr;
+        if (g_replaying && stage < 2) data = rp_blend(stage, k, size, data);
+        else if (g_rp_record && rp_open && stage < 2) rp_note(stage, k, size, data);
+        uint64_t off = ring_alloc(data, size);  // snapshot, as later CPU writes must not leak in
         if (stage == 0) [enc setVertexBuffer:ring offset:off atIndex:k];
         else [enc setFragmentBuffer:ring offset:off atIndex:k];
         if (g_debug_frame) {
@@ -2849,6 +3022,8 @@ static MPipe *pipe_request(Prog *pr, MTLRenderPipelineDescriptor *pd, NSString *
 }
 
 static void draw(CmdRec *r, bool indexed) {
+    rp_this_draw = rp_draw++;  // (the frame replay's key: the draw's place in the frame)
+    if (g_rp_record || g_replaying) rp_draw_begin(r);
     if (!st.program) { stat_skipped++; return; }
     static bool logged_modes;
     if (!logged_modes) {
@@ -2866,6 +3041,32 @@ static void draw(CmdRec *r, bool indexed) {
     Prog *pr = get_program(st.program, &vkey, &fkey);
     if (shader_mode() == SHADERS_PREFETCH) g_prefetch.unforeseen += g_prog_creates - made;
     if (!prog_usable(pr)) { stat_skipped++; return; }
+    {   // (probe) LARECOMP_INTERP_PROBE=<from frame>:<frames>: each draw's program and uniform buffers (address, size,
+        // a hash of the first 256 bytes) - how draws and their data line up from one frame to the next
+        static long pf = -2, pn;
+        static uint64_t lastf, nd;
+        if (pf == -2) { pf = -1; const char *e = getenv("LARECOMP_INTERP_PROBE"); if (e) sscanf(e, "%ld:%ld", &pf, &pn); }
+        extern uint64_t renderer_present_count(void);
+        uint64_t f = renderer_present_count();
+        if (pf >= 0 && f >= (uint64_t)pf && f < (uint64_t)(pf + pn)) {
+            if (f != lastf) lastf = f, nd = 0;
+            char line[1024];
+            int o = snprintf(line, sizeof line, "[iprobe] f%llu d%llu vs %llx fs %llx n%u", (unsigned long long)f,
+                             (unsigned long long)nd++, (unsigned long long)st.program->stages[0].code_addr,
+                             (unsigned long long)st.program->stages[1].code_addr, (unsigned)r->x[2]);
+            for (int sg = 0; sg < 2; sg++)
+                for (int i = 0; i < 18 && o < (int)sizeof line - 64; i++) {
+                    Range u = st.ubuf[sg][i];
+                    if (!u.addr) continue;
+                    uint32_t h = 2166136261u;
+                    const uint8_t *b = (const uint8_t *)(uintptr_t)u.addr;
+                    for (uint64_t k = 0; k < u.size && k < 256; k++) h = (h ^ b[k]) * 16777619u;
+                    o += snprintf(line + o, sizeof line - (size_t)o, " %c%d:%llx:%llu:%08x", sg ? 'f' : 'v', i,
+                                  (unsigned long long)u.addr, (unsigned long long)u.size, h);
+                }
+            LOG("%s\n", line);
+        }
+    }
     {   // mirror mode (runtime/hle/mirror.c): the scene's composite into the window image is drawn mirrored - the
         // unblended full-screen draw sampling an image the window's size (the window images also serve as scratch
         // targets earlier in the frame: those draws sample smaller images; the HUD after it blends)
@@ -4005,6 +4206,7 @@ static void exec_list(uint64_t handle, int depth) {
             memcpy((void *)(uintptr_t)(r->x[0] + r->x[2]), x, r->x[3]);
             break;
         case CMD_FENCE_SYNC: {
+            if (g_replaying) break;  // (the frame replay: the frame's fences were signalled by its own run)
             // The CPU may read GPU-written memory (compute results) once the fence is signaled.
             static int fence_flush = -1;
             if (fence_flush < 0) fence_flush = getenv("LARECOMP_FENCE_FLUSH") ? 1 : 0;
@@ -4189,6 +4391,10 @@ void renderer_reset(void) {
 
 void backend_execute(uint64_t handle) {
     @autoreleasepool {
+        if (g_rp_record) {  // (the frame replay: this frame's lists, in order)
+            if (!rp_open) rp_frame_begin();
+            if (rp_nh < (int)(sizeof rp_handles / sizeof *rp_handles)) rp_handles[rp_nh++] = handle;
+        }
         exec_list(handle, 0);
         static int sync_submit = -1;
         if (sync_submit < 0) sync_submit = getenv("LARECOMP_SYNC_SUBMIT") ? 1 : 0;

@@ -685,11 +685,19 @@ static void tab_display(void) {
     opt_choice("Anti-aliasing", &g_settings.antialias, aa, 2, AA_OFF,
                "Smooths jagged edges of the game image before it is scaled to the window. SMAA: finds the edges and "
                "blends only along them, so textures stay sharp. Most useful at a lower internal resolution.");
+#if defined(__APPLE__)
+    static const char *fg[] = {"Off", "120 fps", "120 fps (replay)"};
+    int nfg = 3;
+#else
     static const char *fg[] = {"Off", "120 fps"};
-    opt_choice("Frame generation", &g_settings.frame_gen, fg, 2, FRAMEGEN_OFF,
+    int nfg = 2;
+#endif
+    opt_choice("Frame generation", &g_settings.frame_gen, fg, nfg, FRAMEGEN_OFF,
                "Adds a generated frame between each pair of real frames for 120 fps on 120 Hz displays (ProMotion, "
                "high-refresh monitors). The game itself still runs at 60. Adds a little input lag; fast motion may show "
-               "small artifacts. Does nothing on a 60 Hz display.");
+               "small artifacts. Replay (experimental): the game draws the in-between frame itself, with everything "
+               "where it was half a frame earlier - no artifacts from guessing, but more work for the GPU. Does "
+               "nothing on a 60 Hz display.");
 
     opt_section("Game");
     if (opt_toggle("Skip intro", &g_settings.skip_intro, false,

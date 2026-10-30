@@ -115,7 +115,8 @@ void settings_load(void) {
                                   (n >= 1 && n <= 4) ? n : n > 4 ? 4 : RES_MATCH;  // (5x-8x were removed)
         }
         else if (!strcmp(key, "upscaler")) g_settings.upscaler = !strcmp(val, "bilinear") ? UPSCALE_BILINEAR : UPSCALE_SHARP;  // (metalfx / fsr1: this OS's)
-        else if (!strcmp(key, "frame_gen")) g_settings.frame_gen = !strcmp(val, "120") ? FRAMEGEN_120 : FRAMEGEN_OFF;
+        else if (!strcmp(key, "frame_gen"))
+            g_settings.frame_gen = !strcmp(val, "120") ? FRAMEGEN_120 : !strcmp(val, "replay") ? FRAMEGEN_REPLAY : FRAMEGEN_OFF;
         else if (!strcmp(key, "antialias")) g_settings.antialias = !strcmp(val, "off") ? AA_OFF : AA_SMAA;  // ("fxaa": SMAA now)
         else if (!strcmp(key, "inv_keys")) g_settings.inv_keys = atoi(val) != 0;
         else if (!strcmp(key, "dpad_move")) g_settings.dpad_move = atoi(val) != 0;
@@ -173,7 +174,7 @@ void settings_save(void) {
     fprintf(f, "ahead_fast = %d\n", g_settings.ahead_fast);
     fprintf(f, "theme = %s\n", g_theme_names[g_settings.theme >= 0 && g_settings.theme < N_THEMES ? g_settings.theme : THEME_DEFAULT]);
     fprintf(f, "upscaler = %s\n", g_settings.upscaler == UPSCALE_METALFX ? "metalfx" : g_settings.upscaler == UPSCALE_FSR1 ? "fsr1" : "bilinear");
-    fprintf(f, "frame_gen = %s\n", g_settings.frame_gen == FRAMEGEN_120 ? "120" : "off");
+    fprintf(f, "frame_gen = %s\n", g_settings.frame_gen == FRAMEGEN_120 ? "120" : g_settings.frame_gen == FRAMEGEN_REPLAY ? "replay" : "off");
     fprintf(f, "antialias = %s\n", g_settings.antialias == AA_SMAA ? "smaa" : "off");
     if (g_settings.res_mode == RES_DYNAMIC) fprintf(f, "resolution = dynamic\n");
     else if (g_settings.res_mode == RES_Q75) fprintf(f, "resolution = 75%%\n");

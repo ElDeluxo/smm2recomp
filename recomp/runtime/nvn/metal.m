@@ -1337,6 +1337,13 @@ void backend_present(NvnTexture *t) {
     g_last_presented = t;
     extern void renderer_submit(void);
     renderer_submit();  // same queue: the present pass runs after the frame's work
+    {   // the frame replay (renderer.m): its records are kept from the next frame on while it is chosen
+        extern void renderer_replay_record(bool on);
+        extern void renderer_replay_skip(void);
+        extern bool g_frame_hidden;
+        if (g_frame_hidden || g_settings.frame_gen != FRAMEGEN_REPLAY) renderer_replay_skip();
+        renderer_replay_record(g_settings.frame_gen == FRAMEGEN_REPLAY);
+    }
     TexBackend *b = t->backend;
     if (b) b->presented = true;
     extern bool g_frame_hidden;  // (objects.c: a mod's fast-forward, no window image)
@@ -1369,12 +1376,6 @@ void backend_present(NvnTexture *t) {
             fg_prev = fg_cur = nil;
         }
         id<MTLTexture> dst = fg_on ? fg_cur : drawable.texture;
-        MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
-        rp.colorAttachments[0].texture = dst;
-        rp.colorAttachments[0].loadAction = MTLLoadActionClear;
-        rp.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1);
-        rp.colorAttachments[0].storeAction = MTLStoreActionStore;
-        id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:rp];
         // Next frame's render resolution follows the window: the 1920x1080 image scaled to fit.
         double dw = drawable.texture.width, dh = drawable.texture.height;
         extern void widescreen_frame_end(uint64_t frame);
@@ -1418,6 +1419,16 @@ void backend_present(NvnTexture *t) {
         static int present_logged;
         if (!present_logged++)
             LOG("[metal] present: texture %p backend %p image %p\n", (void *)t, (void *)b, b ? (__bridge void *)b->tex : NULL);
+        // the game image into a window-sized image (the drawable, or frame generation's): also the frame replay's
+        // in-between image, by the same steps, so the two look alike
+        const float cr0 = crop[0], cr1 = crop[1], cr2 = crop[2], cr3 = crop[3];  // (a block can't take the array)
+        void (^draw_game)(id<MTLCommandBuffer>, id<MTLTexture>) = ^(id<MTLCommandBuffer> cb, id<MTLTexture> dst) {
+        MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
+        rp.colorAttachments[0].texture = dst;
+        rp.colorAttachments[0].loadAction = MTLLoadActionClear;
+        rp.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1);
+        rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+        id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:rp];
         if ((b && b->tex) || present_solid[3] > 0.0f) {
             id<MTLTexture> src = (b && b->tex) ? raw_view(b->tex) : nil;
             // SMAA (Video tab "Anti-aliasing"): first, at the game image's size (MetalFX then upscales its result)
@@ -1434,7 +1445,7 @@ void backend_present(NvnTexture *t) {
             // spatial upscaler brings it to the window's size first (the whole image, so the interior crop below
             // still applies); the present pass then samples it about 1:1. Its own pass: the drawable's pass is
             // ended and resumed (load) around it.
-            id<MTLTexture> up = src ? metalfx_upscale(cb, src, vw / crop[2], vh / crop[3]) : nil;
+            id<MTLTexture> up = src ? metalfx_upscale(cb, src, vw / cr2, vh / cr3) : nil;
             if (up) {
                 [enc endEncoding];
                 up = metalfx_encode(cb, src);
@@ -1448,8 +1459,8 @@ void backend_present(NvnTexture *t) {
             float flip = renderer_origin_lower_left() ? 1.0f : 0.0f;
             [enc setViewport:(MTLViewport){vx, vy, vw, vh, 0, 1}];
             [enc setRenderPipelineState:present_pipe];
-            float pv[8] = {flip, 0, 0, 0, crop[0], crop[1], crop[2], crop[3]};
-            memcpy(g_shot_crop, crop, sizeof crop);
+            float pv[8] = {flip, 0, 0, 0, cr0, cr1, cr2, cr3};
+            g_shot_crop[0] = cr0, g_shot_crop[1] = cr1, g_shot_crop[2] = cr2, g_shot_crop[3] = cr3;
             [enc setVertexBytes:pv length:sizeof pv atIndex:0];
             [enc setFragmentBytes:present_solid length:sizeof present_solid atIndex:1];
             [enc setFragmentTexture:src atIndex:0];
@@ -1457,6 +1468,8 @@ void backend_present(NvnTexture *t) {
             [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
         }
         [enc endEncoding];
+        };
+        draw_game(cb, dst);
         static long menu_at = -1;  // test hook: open the menu at this frame (LARECOMP_MENU_AT)
         if (menu_at < 0) menu_at = getenv("LARECOMP_MENU_AT") ? atol(getenv("LARECOMP_MENU_AT")) : 0;
         if (menu_at && (long)total_frames + 1 == menu_at) { extern void menu_test_open(void); menu_test_open(); }
@@ -1481,7 +1494,19 @@ void backend_present(NvnTexture *t) {
                 td.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
                 gen_tex = [dev newTextureWithDescriptor:td];
             }
-            if (fg_gen && !fgm_encode(dev, cb, fg_prev, fg_cur, 0.5f, !fg_last_gen, gen_tex)) fg_gen = false;
+            extern bool renderer_replay_frame(void);
+            extern void renderer_replay_skip(void);
+            if (fg_gen && g_settings.frame_gen == FRAMEGEN_REPLAY) {
+                // the frame replay (renderer.m): this frame's own image is out (committed: the replay draws over the
+                // game's images), then the frame again with everything half a frame back, through the same steps
+                [cb commit];
+                cb = [queue commandBuffer];
+                if (renderer_replay_frame()) draw_game(cb, gen_tex);
+                else fg_gen = false;
+            } else {
+                if (g_settings.frame_gen == FRAMEGEN_REPLAY) renderer_replay_skip();
+                if (fg_gen && !fgm_encode(dev, cb, fg_prev, fg_cur, 0.5f, !fg_last_gen, gen_tex)) fg_gen = false;
+            }
             fg_last_gen = fg_gen;
             // (a drawable can only be drawn into: copies to it are draws)
             void (^copy_to)(id<MTLTexture>, id<MTLTexture>) = ^(id<MTLTexture> from, id<MTLTexture> to) {

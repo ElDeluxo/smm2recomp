@@ -12,7 +12,8 @@ enum { UPSCALE_BILINEAR = 0, UPSCALE_METALFX = 1 /* macOS */, UPSCALE_FSR1 = 2 /
 #define UPSCALE_SHARP UPSCALE_FSR1
 #endif
 enum { AA_OFF = 0, AA_SMAA = 1 };
-enum { FRAMEGEN_OFF = 0, FRAMEGEN_120 = 1 };  // runtime/nvn/framegen.h
+enum { FRAMEGEN_OFF = 0, FRAMEGEN_120 = 1, FRAMEGEN_REPLAY = 2 };  // runtime/nvn/framegen.h; REPLAY: Metal's frame replay
+                                                                  // (renderer.m), elsewhere the same as 120
 // Menu colour themes (runtime/ui/menu.mm kThemes: the palettes, in this order; names are the ini values)
 enum { THEME_DEFAULT = 0, THEME_NES = 1, N_THEMES = 2 };
 extern const char *const g_theme_names[N_THEMES];  // the ini's value and the menu's label: "Default", "NES"

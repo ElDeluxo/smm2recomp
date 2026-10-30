@@ -56,6 +56,17 @@ title screen was checked against Ryujinx. Names and behaviour only: no game code
   warp, none clearly better on a jumping Mario: a neighbour's vector only when clearly better, a blend instead of one
   image where nothing matches, 8-px blocks refined from the 16-px field. Image matching can't tell a sprite changing
   pose from its background; exact per-draw motion from the game's own draws would be the next step.
+- **Frame replay** (Video > Frame generation > "120 fps (replay)", Apple only, off by default; `renderer.m` "frame
+  replay", `metal.m` backend_present): the in-between image is frame N drawn again by the game's own command lists,
+  with every draw's uniform data halfway between frames N-1 and N, so objects and the camera are where they were half a
+  frame earlier and nothing is guessed from pixels (the way N64 recomps interpolate). A frame's lists, its starting
+  state and each draw's uniform buffers (keyed by the draw's place in the frame; SMM2's uniform buffers alternate
+  between two address sets, so not by address) are kept. A draw blends with the last frame's draw of the same
+  signature (program, draw parameters, vertex buffers, textures, target) at its place or within 16 places, the one
+  with the nearest uniform data (terrain chunks differ only there). Only plausible floats are blended, not jumps; a
+  frame in which more than 16 textures were destroyed (a scene change) gets no in-between image; fences are left out of
+  the replay. Costs a second encoding of the frame (draws doubled; 60 fps held on an M-series Mac). Logs `[replay]`;
+  `LARECOMP_INTERP_PROBE=<frame>:<n>` logs each draw's program and uniform buffers for n frames.
 - **Conditional rendering.** SMM2 clears a render target on its first bind each frame by guarding ClearColor with
   SetRenderEnableConditional on a per-target report, then resets the report (ReportCounter / ReportValue /
   ClearBuffer) so later binds skip the clear. LAS ignored the condition, so every later bind cleared the layout
