@@ -660,6 +660,10 @@ static void tab_display(void) {
                "small artifacts. Does nothing on a 60 Hz display.");
 
     opt_section("Game");
+    if (opt_toggle("Skip intro", &g_settings.skip_intro, false,
+                   "Skips the boot logo presentation animations and goes directly to the title screen.")) {
+        settings_save();
+    }
     opt_toggle("Remove blur", &g_settings.blur_removal, false,
                "Turns off the tilt-shift blur at the top and bottom of the screen.");
     opt_toggle("Hide Hero Mode icon", &g_settings.hide_hero_icon, false,
