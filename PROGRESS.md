@@ -1,6 +1,16 @@
 # Progress
 
 ## PAUSED 2026-10-25 after v0.5.5 (owner's call); resume from here
+- **2026-10-30/31 round (on main, not released; v0.5.10 was released 2026-10-30, GitHub only):** owner's plan
+  (memory owner-plan-2026-10-30). Done: OCW handshake missing from the iPad (stale generated code; the Makefile now
+  stops on a stale tree), Online tab, in-game backend restart, paste in text fields, the iPad menu's touch layout after
+  an app switch, "Waiting for the course server..." over a slow download, three previous logs kept, #26 Course Maker PC
+  controls, #37 Video > Shaders, the 100 Mario ending's look (power-ups, shoe / Yoshi, the course theme's backdrop,
+  co-op Luigi), the won run's result screen Next only, the Mods tab in groups, SMM1 mods (off by default): Ground pound
+  hop, Catch while spin jumping, Full death fanfare in pits. Research: `research/specs/smm1-mods-moves.md` (fire
+  climbing = no throw boost in SMM1; the one-way wall's ledge is an extra SMM1 collider). Open: the spin catch not yet
+  tried in an SMW course; one-way wall ledge; fire climbing (asked the owner what they remember); the backlog (graphics
+  check, a full 100 Mario test, 120 fps on Metal); #56 reply drafted (Intel HD 520: try v0.5.10), not posted.
 - **Released v0.5.6 (2026-10-29)** (https://github.com/smm2recomp/smm2recomp/releases/tag/v0.5.6): the 2026-10-28 pass
   below, plus the Windows log file (the exe is a console program: its own console is now freed and the log written to
   smm2recomp.log; it never was before) and the Linux CPU-count log line (#25). Mac 0.5.6; iPad build 361 over
