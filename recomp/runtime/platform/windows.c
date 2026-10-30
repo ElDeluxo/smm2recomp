@@ -147,6 +147,7 @@ static void log_to_file_without_console(void) {
     if (!append) {  // (the last session's log is kept beside it: a crash's is gone otherwise at the next start)
         char prev[MAX_PATH + 16];
         snprintf(prev, sizeof prev, "%s" GAME_EXE ".previous.log", exe);
+        plat_keep_logs(prev);
         remove(prev);
         rename(g_log_path, prev);
     }

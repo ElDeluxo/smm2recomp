@@ -151,6 +151,7 @@ static void log_to_file_without_terminal(void) {
     {  // (the last session's log is kept beside it)
         char prev[sizeof g_log_path + 16];
         snprintf(prev, sizeof prev, "%s/" GAME_EXE ".previous.log", dir);
+        plat_keep_logs(prev);
         rename(g_log_path, prev);
     }
     if (!freopen(g_log_path, "w", stderr)) { g_log_path[0] = 0; return; }
@@ -191,6 +192,7 @@ static void log_to_file_without_terminal(void) {
     if (!append) {  // (the last session's log is kept beside it: a crash's is gone otherwise at the next start)
         char prev[sizeof g_log_path + 16];
         snprintf(prev, sizeof prev, "%s/" GAME_EXE ".previous.log", dir);
+        plat_keep_logs(prev);
         rename(g_log_path, prev);
     }
     if (!freopen(g_log_path, append ? "a" : "w", stderr)) { g_log_path[0] = 0; return; }

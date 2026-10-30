@@ -88,6 +88,7 @@ void plat_init(void) {
         snprintf(path, sizeof path, "%s/Documents/smm2recomp.log", home ? home : "/tmp");
         char prev[1100];  // (the last session's log is kept beside it: a crash's is gone otherwise at the next start)
         snprintf(prev, sizeof prev, "%s/Documents/smm2recomp.previous.log", home ? home : "/tmp");
+        plat_keep_logs(prev);
         rename(path, prev);
         if (freopen(path, "w", stderr)) { setvbuf(stderr, NULL, _IOLBF, 0); dup2(fileno(stderr), 1); }
     }
@@ -108,6 +109,7 @@ void plat_init(void) {
             if (!append) {  // (the last session's log is kept beside it: a crash's is gone otherwise at the next start)
                 char prev[1100];
                 snprintf(prev, sizeof prev, "%s/" GAME_ID "recomp.previous.log", dir);
+                plat_keep_logs(prev);
                 rename(path, prev);
             }
             if (freopen(path, append ? "a" : "w", stderr)) {

@@ -83,3 +83,21 @@ void rt_fault_report(const char *what, uint64_t fault_addr, uint64_t host_pc, ui
 #ifdef __cplusplus
 }
 #endif
+
+// The logs of the sessions before this one: <name>.previous.log moves to .previous2.log, that one to .previous3.log,
+// before the last session's log takes its place - three earlier sessions kept, not one (owner, 2026-10-30: a black
+// screen's log was gone by the time it was looked for, the app having been started again since).
+#include <stdio.h>
+#include <string.h>
+static inline void plat_keep_logs(const char *prev) {
+    size_t n = strlen(prev);
+    const char *suf = ".previous.log";
+    size_t k = strlen(suf);
+    if (n < k || strcmp(prev + n - k, suf) || n + 2 >= 1100) return;
+    char p2[1100], p3[1100];
+    snprintf(p2, sizeof p2, "%.*s.previous2.log", (int)(n - k), prev);
+    snprintf(p3, sizeof p3, "%.*s.previous3.log", (int)(n - k), prev);
+    remove(p3);
+    rename(p2, p3);
+    rename(prev, p2);
+}
