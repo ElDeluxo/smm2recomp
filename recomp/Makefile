@@ -255,6 +255,16 @@ GAMELIB_SRCS := tools/gen.py tools/lifter.py tools/analyze.py tools/nso.py tools
                 tools/simd_c.py tools/gamelib_entry.c $(GAME_HLE) $(wildcard $(GAME_PATCHES)) $(GAME_PATCH_DEPS) \
                 runtime/cpu.h runtime/simd.h runtime/simd_fp.h runtime/gamelib.h
 GAMELIB_ID := $(shell (cat $(GAMELIB_SRCS); echo '$(GENFLAGS)') | (shasum -a 256 2>/dev/null || sha256sum) | cut -c1-16)
+# The generated C must come from the same generator and patches: `make gen` stamps $(GEN)/.gen-<GAMELIB_ID>. Built from
+# older generated code, a library carried the new id without the new patches (the iPad's game code was from
+# 2026-10-18: no OpenCourse World handshake, no relaxed checks), so a stale tree stops the build instead.
+ifneq ($(GEN_SRC),)
+ifeq ($(wildcard $(GEN)/.gen-$(GAMELIB_ID)),)
+ifeq ($(filter gen clean-gen venv embed-server,$(MAKECMDGOALS)),)
+$(error the generated game code in $(GEN) is older than the generator and patches (GAMELIB_ID $(GAMELIB_ID)): run `make GAME=$(GAME) gen` first)
+endif
+endif
+endif
 
 RT_OBJ   := $(patsubst %.c,$(B)/rt/%.o,$(patsubst runtime/%,%,$(RT_SRC)))
 ifneq ($(IOS),)
@@ -415,6 +425,7 @@ gen:
 	cd tools && ../$(PY) gen.py sdk ../$(GAMEFILES)/exefs/sdk $(shell printf '%#x' $$(($(GUEST_ORIGIN) + 0x4000000))) ../$(GEN)/sdk --hle ../$(GAME_HLE) $(GENSIMD)
 	cd tools && ../$(PY) gen.py main ../$(GAMEFILES)/exefs/main $(GUEST_ORIGIN) ../$(GEN)/main \
 	    $(if $(wildcard $(GAME_PATCHES)),--patches ../$(GAME_PATCHES)) $(GENSIMD)
+	rm -f $(GEN)/.gen-* && touch $(GEN)/.gen-$(GAMELIB_ID)
 
 clean-gen:
 	rm -rf $(GEN) $(B)/obj
