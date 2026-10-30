@@ -47,7 +47,15 @@ title screen was checked against Ryujinx. Names and behaviour only: no game code
   `LARECOMP_FORCE_DISPLAY_HZ=<hz>` stands in for the display's refresh (the Mac's displays are 60 Hz);
   `LARECOMP_FRAMEGEN_ANY_PACE=1` drops the 12-22 ms rule (software renderers); `LARECOMP_FRAMEGEN_COST=1` logs
   each frame's match cost (Metal; tuning `FG_CUT_COST`). Tests: `make -C recomp test-framegen` (logic + passes on
-  synthetic images, macOS), `tools/test_framegen_glsl.c` (the GLSL forms through shaderc, Linux).
+  synthetic images, macOS), `tools/test_framegen_glsl.c` (the GLSL forms through shaderc, Linux),
+  `tools/framegen_png.m` (`make build/framegen_png`: the Metal passes again on a captured strip,
+  `framegen_png <prev|gen|cur.png> <out.png>`, for tuning on the game's own frames). Tried 2026-10-31: MetalFX's frame
+  interpolation (macOS / iOS 26) with our block motion and a flat depth. With its history kept it follows that
+  motion, so a sprite changing pose (a jumping Mario's hands and legs) breaks up as in the warp; with the history
+  dropped each frame it returns the current frame unchanged (no interpolation at all). Not used. Also tried on the
+  warp, none clearly better on a jumping Mario: a neighbour's vector only when clearly better, a blend instead of one
+  image where nothing matches, 8-px blocks refined from the 16-px field. Image matching can't tell a sprite changing
+  pose from its background; exact per-draw motion from the game's own draws would be the next step.
 - **Conditional rendering.** SMM2 clears a render target on its first bind each frame by guarding ClearColor with
   SetRenderEnableConditional on a per-target report, then resets the report (ReportCounter / ReportValue /
   ClearBuffer) so later binds skip the clear. LAS ignored the condition, so every later bind cleared the layout

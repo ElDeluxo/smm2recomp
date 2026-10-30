@@ -512,6 +512,12 @@ build/test_framegen: tools/test_framegen.m runtime/nvn/framegen_metal.m runtime/
 	@mkdir -p build
 	clang -O1 -fobjc-arc -DFG_NO_SDL -I runtime -framework Metal -framework Foundation -o $@ tools/test_framegen.m \
 	    runtime/nvn/framegen_metal.m runtime/nvn/framegen_src.c
+# frame generation on a captured strip (LARECOMP_FRAMEGEN_SHOT's prev | generated | cur): the passes again, offline
+build/framegen_png: tools/framegen_png.m runtime/nvn/framegen_metal.m runtime/nvn/framegen_src.c runtime/nvn/framegen.h
+	@mkdir -p build
+	clang -O1 -fobjc-arc -DFG_NO_SDL -I runtime -framework Metal -framework Foundation -framework ImageIO \
+	    -framework CoreGraphics -framework UniformTypeIdentifiers -o $@ tools/framegen_png.m runtime/nvn/framegen_metal.m \
+	    runtime/nvn/framegen_src.c
 test-framegen: build/test_framegen_logic build/test_framegen
 	build/test_framegen_logic
 	build/test_framegen
