@@ -59,3 +59,13 @@ void shader_ahead_program_set(const uint8_t *const code[3], const size_t cmax[3]
 const AheadShader *shader_ahead_set_next(int wait_ms, double max_age_ms);
 int shader_ahead_set_pending(void);
 void shader_ahead_set_done(const AheadShader *s);       // (frees it)
+
+// What the backend's compile-ahead is doing, for the menu (Video > Shaders, GitHub #37): state 0 off / not started, 1
+// running, 2 the game's files done (only the programs it sets still go through); items: shaders and programs gone
+// through, compiled: sources compiled now (the rest were cached). The backend sets it, the menu reads it.
+typedef struct { int state, items, compiled; } AheadStatus;
+void shader_ahead_status_set(int state, int items, int compiled);
+AheadStatus shader_ahead_status(void);
+// The player's "prepare at full speed" (settings: ahead_fast, from the next start): all CPU cores, and no waiting for
+// a quiet moment between the game's own builds.
+bool shader_ahead_fast(void);

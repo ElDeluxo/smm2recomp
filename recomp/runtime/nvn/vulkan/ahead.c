@@ -38,7 +38,8 @@ static void compile_glsl(const char *src, int stage) {
     if (!src || vah.stop) return;
     if (vk_spirv_cached(src, stage)) { vah.cached++; return; }
     static double quiet = -1;  // (the game's own builds first: they come in bursts, a quiet moment must last a while)
-    if (quiet < 0) quiet = getenv("LARECOMP_AHEAD_QUIET_MS") ? atof(getenv("LARECOMP_AHEAD_QUIET_MS")) : 1500;
+    if (quiet < 0) quiet = getenv("LARECOMP_AHEAD_QUIET_MS") ? atof(getenv("LARECOMP_AHEAD_QUIET_MS"))
+                           : shader_ahead_fast() ? 0 : 1500;  // (Video > Shaders, full speed: no waiting)
     while (build_idle_ms() < quiet && !vah.stop) SDL_Delay(20);
     if (vah.stop) return;
     size_t n = 0;
@@ -92,6 +93,7 @@ static bool scanned(const AheadShader *s, void *ud) {
     take_set(0, -1, s->rank >= 1 ? 1 << 30 : 1);
     if (vah.stop) return false;
     vah.items++;
+    shader_ahead_status_set(1, vah.items, vah.compiled);  // (the menu's progress: Video > Shaders)
     item(s);
     if (now_ms() - vah.last_log > 30000) {
         vah.last_log = now_ms();
@@ -117,6 +119,7 @@ static void *worker(void *arg) {
     vah.t0 = vah.last_log = now_ms();
     maxwell_gmem_base = HEAP_BASE;  // (as the game's translations: the bounds appear in the sources)
     maxwell_gmem_size = HEAP_MAX;
+    shader_ahead_status_set(scan ? 1 : 2, 0, 0);
     if (scan) {
         AheadScanStats st;
         bool full = shader_ahead_scan(g_romfs_dir, scanned, NULL, &vah.stop, &st);
@@ -131,6 +134,7 @@ static void *worker(void *arg) {
             FILE *f = fopen("cache/ahead_vk.done", "w");
             if (f) { fputs(s, f); fclose(f); }
         }
+        shader_ahead_status_set(full ? 2 : 0, st.shaders + st.programs, vah.compiled);
     }
     while (!vah.stop) take_set(1000, -1, 1 << 30);  // (then the programs the game sets, for as long as it runs)
     return NULL;

@@ -35,6 +35,9 @@ extern "C" {
 void input_reset(void);
 void controls_bindings_draw(float scale);  // controls_ui.mm
 #include "../input_bind.h"
+extern "C" {
+#include "../nvn/shader_ahead.h"
+}
 extern "C" const char *menu_clipboard(void);  // (below: the system clipboard's text)
 #include "../paths.h"
 #include "../platform.h"
@@ -687,6 +690,22 @@ static void tab_display(void) {
                "Turns off the tilt-shift blur at the top and bottom of the screen.");
     opt_toggle("Hide Hero Mode icon", &g_settings.hide_hero_icon, false,
                "Hides the Hero Mode emblem in the corner of the screen while playing a Hero Mode file.");
+    {   // the shader compile-ahead (GitHub #37): how far it is, and the switch to let it run at full speed
+        opt_section("Shaders");
+        AheadStatus a = shader_ahead_status();
+        char v[64];
+        if (a.state == 2) snprintf(v, sizeof v, "Prepared");
+        else if (a.state == 1) snprintf(v, sizeof v, "Preparing: %d so far", a.items);
+        else snprintf(v, sizeof v, "Starts with the game");
+        opt_action("Shader preparation", v,
+                   "The game's shaders are prepared in the background while you play, so effects don't hitch the first "
+                   "time they appear. It takes a few minutes the first time, and again after an update; until it's "
+                   "done, the first time something appears it may hitch briefly. Once prepared, they're kept.");
+        opt_toggle("Prepare at full speed", &g_settings.ahead_fast, false,
+                   "Prepares the shaders with every CPU core and without pausing for the game. It finishes much sooner "
+                   "but can make the game stutter meanwhile: turn it on, wait at the title screen until Shader "
+                   "preparation says Prepared, then turn it off if you like. From the next start.");
+    }
     opt_end();
 }
 

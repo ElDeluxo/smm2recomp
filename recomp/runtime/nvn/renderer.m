@@ -1583,7 +1583,8 @@ static void ahead_compile(char kind, const char *msl, const char *from, AheadCtx
     double p0 = now_ms();
     // (the game's own builds go first: it waits for them. They come in bursts, so a quiet moment must last a while)
     static double quiet = -1;
-    if (quiet < 0) quiet = getenv("LARECOMP_AHEAD_QUIET_MS") ? atof(getenv("LARECOMP_AHEAD_QUIET_MS")) : 1500;
+    if (quiet < 0) quiet = getenv("LARECOMP_AHEAD_QUIET_MS") ? atof(getenv("LARECOMP_AHEAD_QUIET_MS"))
+                           : shader_ahead_fast() ? 0 : 1500;  // (Video > Shaders, full speed: no waiting)
     // (and while the device is hot or saving power: it's the game's to use first)
     while ((build_idle_ms() < quiet || NSProcessInfo.processInfo.thermalState >= NSProcessInfoThermalStateSerious ||
             NSProcessInfo.processInfo.lowPowerModeEnabled) && !ah.stop)
@@ -1643,6 +1644,7 @@ static bool ahead_scanned(const AheadShader *s, void *ud) {
     ahead_take_set(ud, 0, -1, s->rank >= 1 ? INT_MAX : 1);
     if (ah.stop) return false;
     ah.items++;
+    shader_ahead_status_set(1, ah.items, ah.compiled);  // (the menu's progress: Video > Shaders)
     ahead_item(s, ud);
     if (now_ms() - ah.last_log > 30000) {
         ah.last_log = now_ms();
@@ -1673,7 +1675,10 @@ static void shader_ahead_start(const ShaderKey *vkey, const ShaderKey *fkey) {
     ah.where = [NSMutableDictionary new];
     atexit(ahead_stop);
     char *romfs = strdup(g_romfs_dir);
-    int jobs = getenv("LARECOMP_AHEAD_JOBS") ? atoi(getenv("LARECOMP_AHEAD_JOBS")) : TARGET_OS_IPHONE ? 2 : 4;
+    int jobs = getenv("LARECOMP_AHEAD_JOBS") ? atoi(getenv("LARECOMP_AHEAD_JOBS"))
+               : shader_ahead_fast() ? (int)NSProcessInfo.processInfo.activeProcessorCount
+               : TARGET_OS_IPHONE ? 2 : 4;
+    shader_ahead_status_set(scan ? 1 : 2, 0, 0);
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         ah.t0 = ah.last_log = now_ms();
         maxwell_gmem_base = HEAP_BASE;  // (as the game's translations: the bounds appear in the sources)
@@ -1697,6 +1702,7 @@ static void shader_ahead_start(const ShaderKey *vkey, const ShaderKey *fkey) {
                 mkdir("cache", 0755);
                 [stamp writeToFile:@"cache/ahead.done" atomically:YES encoding:NSUTF8StringEncoding error:nil];
             }
+            shader_ahead_status_set(full ? 2 : 0, st.shaders + st.programs, ah.compiled);
         }
         free(romfs);
         while (!ah.stop) ahead_take_set(&cx, 1000, -1, INT_MAX);  // (then the programs the game sets, for as long as it runs)

@@ -67,6 +67,7 @@ typedef struct {
     char rando_seed[128];  // active randomizer seed (rando/<name>/), empty = vanilla
     bool skip_intro;     // skip the boot logo presentation animations
     int theme;           // THEME_*: the look of the menu (Video tab > Theme)
+    bool ahead_fast;     // prepare shaders at full speed (all cores, no waiting for quiet moments): Video > Shaders
 } Settings;
 
 enum { N_TUNIC_COLOURS = 13, N_HEART_COLOURS = 9 };

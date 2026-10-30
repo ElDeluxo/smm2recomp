@@ -482,3 +482,12 @@ void shader_ahead_set_done(const AheadShader *s) {
     free(it->bytes);
     free(it);
 }
+
+// ---- status for the menu (shader_ahead.h)
+static _Atomic int st_state, st_items, st_compiled;
+void shader_ahead_status_set(int state, int items, int compiled) { st_state = state, st_items = items, st_compiled = compiled; }
+AheadStatus shader_ahead_status(void) { return (AheadStatus){st_state, st_items, st_compiled}; }
+bool shader_ahead_fast(void) {
+    extern bool settings_ahead_fast(void);  // (runtime/settings.c)
+    return settings_ahead_fast();
+}

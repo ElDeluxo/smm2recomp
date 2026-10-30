@@ -102,6 +102,7 @@ void settings_load(void) {
         else if (!strcmp(key, "skip_intro")) g_settings.skip_intro = atoi(val) != 0;
         else if (!strcmp(key, "show_fps")) g_settings.show_fps = atoi(val) != 0;
         else if (!strcmp(key, "show_memory")) g_settings.show_memory = atoi(val) != 0;
+        else if (!strcmp(key, "ahead_fast")) g_settings.ahead_fast = atoi(val) != 0;
         else if (!strcmp(key, "theme")) {  // (a name from g_theme_names; anything else: the default)
             g_settings.theme = THEME_DEFAULT;
             for (int i = 0; i < N_THEMES; i++)
@@ -169,6 +170,7 @@ void settings_save(void) {
     fprintf(f, "skip_intro = %d\n", g_settings.skip_intro);
     fprintf(f, "show_fps = %d\n", g_settings.show_fps);
     fprintf(f, "show_memory = %d\n", g_settings.show_memory);
+    fprintf(f, "ahead_fast = %d\n", g_settings.ahead_fast);
     fprintf(f, "theme = %s\n", g_theme_names[g_settings.theme >= 0 && g_settings.theme < N_THEMES ? g_settings.theme : THEME_DEFAULT]);
     fprintf(f, "upscaler = %s\n", g_settings.upscaler == UPSCALE_METALFX ? "metalfx" : g_settings.upscaler == UPSCALE_FSR1 ? "fsr1" : "bilinear");
     fprintf(f, "frame_gen = %s\n", g_settings.frame_gen == FRAMEGEN_120 ? "120" : "off");
@@ -205,3 +207,5 @@ void settings_save(void) {
     fprintf(f, "rando_seed = %s\n", g_settings.rando_seed);
     fclose(f);
 }
+
+bool settings_ahead_fast(void) { return g_settings.ahead_fast; }  // (nvn/shader_ahead.c: C callers without the struct)
