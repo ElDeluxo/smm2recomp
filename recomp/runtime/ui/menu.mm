@@ -512,6 +512,16 @@ static bool g_touch_ui =
 #else
     false;
 #endif
+// What a pointer event says: on the iPhone / iPad always touch - iPadOS hands a pointer event over when the app comes
+// back from another one, which turned the rows compact (the text fields lost their margins: owner, 2026-10-30)
+static bool touch_layout(bool touch) {
+#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
+    (void)touch;
+    return true;
+#else
+    return touch;
+#endif
+}
 
 // The clipboard's text (kept until the next call: SDL's copy is freed), "" when there is none
 extern "C" const char *menu_clipboard(void) {
@@ -536,12 +546,12 @@ static void drain_events(ImGuiIO &io) {
         case QEvent::MOUSE_POS:
             io.AddMouseSourceEvent(q.touch ? ImGuiMouseSource_TouchScreen : ImGuiMouseSource_Mouse);
             io.AddMousePosEvent(q.x, q.y);
-            g_touch_ui = q.touch;
+            g_touch_ui = touch_layout(q.touch);
             break;
         case QEvent::MOUSE_BUTTON:
             io.AddMouseSourceEvent(q.touch ? ImGuiMouseSource_TouchScreen : ImGuiMouseSource_Mouse);
             io.AddMouseButtonEvent(q.button, q.down);
-            g_touch_ui = q.touch;
+            g_touch_ui = touch_layout(q.touch);
             break;
         case QEvent::WHEEL:
             io.AddMouseSourceEvent(q.touch ? ImGuiMouseSource_TouchScreen : ImGuiMouseSource_Mouse);
