@@ -1068,10 +1068,13 @@ __attribute__((weak)) void hundred_flow_describe(char *out, size_t n) { snprintf
 // SMM2 goes back to its Endless menu underneath while the flow plays the ending, which Next starts (HUNDRED_NEXT).
 static void end_check_can(Cpu *c) {
     uint64_t screen = g64(c->x[0] + 0x288);
-    if (awaiting_next && run_won && run_d >= 0 && screen && g8(screen + 0x2a4) && g32(screen + 0x2a0) == 5) {
+    // (Quit on that last screen does the same as Next: the run is won, there is nothing to keep - owner, 2026-10-30)
+    uint32_t choice = screen ? g32(screen + 0x2a0) : 0;
+    if (awaiting_next && run_won && run_d >= 0 && screen && g8(screen + 0x2a4) && (choice == 5 || choice == 8)) {
         s32(screen + 0x2a0, 8);
         awaiting_next = false, next_menu_since = 0, leaving_won = true;
-        LOG("[mod] bridge: Next on the result screen (the run is won): SMM2 goes back to its menu\n");
+        LOG("[mod] bridge: %s on the result screen (the run is won): SMM2 goes back to its menu\n",
+            choice == 5 ? "Next" : "Quit (as Next)");
         result(HUNDRED_NEXT);
     }
     guest_call_orig(c, END_CHECK_CAN_EXEC);
