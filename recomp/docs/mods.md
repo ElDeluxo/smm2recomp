@@ -1234,6 +1234,16 @@ Tests: `tools/test_net.sh` (`tools/test_netcfg.c`: routing, destinations, the ID
   NetAppTask state names, made from the player's own game by `stategen.py`; never committed) logs each state entered.
 - Machine load matters: with ~28 other game instances on this Mac one instance reaches Network Play in 4-12 min.
 
+## Course Maker PC controls (`mods/pc_editor.c`)
+
+A PC's mouse and keyboard in the Course Maker (GitHub #26), on top of the mouse as a finger: the **right mouse
+button** erases (the Course Maker's own "[L] / [R] Erase": L held, then a finger at the pointer; drag to erase along
+the way), the **middle button** drags the course and the **wheel** scrolls it (the right stick; Shift+wheel: up /
+down), **Ctrl+Z** (Cmd+Z on macOS) is the Undodog (B), and **1 ... 9, 0, -, =** pick the palette's twelve slots (a tap
+on the slot). Only while the Course Maker is up (the play info's kind word, 0 = edit) and only from a PC's keyboard and
+mouse (`runtime/hle/input.c` `game_pc_key` / `game_pc_mouse` / `game_pc_wheel`). There, 1 and 3 pick slots instead of
+ZL / ZR (multigrab). Copy and paste aren't mapped: SMM2 copies through a held part's own menu.
+
 ## OpenCourse World (`backend=ocw`)
 
 `games/smm2/mods/ocw.c`. **OpenCourse World** (<https://opencourse.world/>) is a replacement online service for

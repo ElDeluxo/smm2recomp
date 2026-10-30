@@ -70,6 +70,18 @@ WEAK uint64_t pets_menu_input(uint64_t b, int32_t st[4]) { (void)st; return b; }
 WEAK void input_note_rstick(int32_t ry) { (void)ry; }
 // test scripts' held stick / buttons (frame-limited; 0 = none)
 WEAK int32_t g_test_lx, g_test_ly, g_stick_lx, g_stick_ly;
+WEAK int32_t g_test_rx, g_test_ry;  // the right stick held by a mod until g_test_rstick_until (runtime/hle/input.c)
+WEAK uint64_t g_test_rstick_until;
+
+// ---- a PC's keys, mouse buttons and wheel, before they become the game's input (runtime/hle/input.c): a game can take
+// them for its own PC controls (SMM2: the Course Maker, games/smm2/mods/pc_editor.c). true: taken. Keys: an SDL scancode,
+// cmd = Ctrl (Cmd on macOS); mouse: button 2 middle, 3 right, act 0 down / 1 move / 2 up, x, y in 0..1 of the window.
+WEAK bool game_pc_key(int scancode, bool cmd, bool shift, bool down, bool repeat) {
+    (void)scancode, (void)cmd, (void)shift, (void)down, (void)repeat;
+    return false;
+}
+WEAK bool game_pc_mouse(int button, int act, float x, float y) { (void)button, (void)act, (void)x, (void)y; return false; }
+WEAK bool game_pc_wheel(float dx, float dy, bool shift) { (void)dx, (void)dy, (void)shift; return false; }
 WEAK uint64_t g_test_stick_until, g_test_buttons, g_test_buttons_until, g_stick_freeze_until;
 
 // ---- a game's host-drawn screens over its frame (renderers via runtime/ui/menu.mm; input.c): none

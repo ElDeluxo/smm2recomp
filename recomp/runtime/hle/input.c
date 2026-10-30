@@ -233,6 +233,54 @@ static bool real_gamepad(SDL_JoystickID id) {
     return true;
 }
 
+// A game's PC controls (runtime/game_hooks.c game_pc_*): keys with Ctrl / Cmd, the middle and right mouse buttons, the
+// wheel. A key taken when pressed is taken when released too, so the game never sees half of it.
+static bool pc_event(const SDL_Event *e) {
+    extern bool game_pc_key(int scancode, bool cmd, bool shift, bool down, bool repeat);
+    extern bool game_pc_mouse(int button, int act, float x, float y);
+    extern bool game_pc_wheel(float dx, float dy, bool shift);
+    static bool taken[SDL_SCANCODE_COUNT];
+    switch (e->type) {
+    case SDL_EVENT_KEY_DOWN: case SDL_EVENT_KEY_UP: {
+        int sc = e->key.scancode;
+        if (sc <= 0 || sc >= SDL_SCANCODE_COUNT) return false;
+        bool down = e->type == SDL_EVENT_KEY_DOWN;
+        if (!down) {
+            if (!taken[sc]) return false;
+            taken[sc] = false;
+            game_pc_key(sc, false, false, false, false);
+            return true;
+        }
+#ifdef __APPLE__
+        bool cmd = (e->key.mod & SDL_KMOD_GUI) != 0;
+#else
+        bool cmd = (e->key.mod & SDL_KMOD_CTRL) != 0;
+#endif
+        if (!game_pc_key(sc, cmd, (e->key.mod & SDL_KMOD_SHIFT) != 0, true, e->key.repeat)) return false;
+        taken[sc] = true;
+        return true;
+    }
+    case SDL_EVENT_MOUSE_BUTTON_DOWN: case SDL_EVENT_MOUSE_BUTTON_UP: case SDL_EVENT_MOUSE_MOTION: {
+        if (e->button.which == SDL_TOUCH_MOUSEID) return false;
+        int b = e->type == SDL_EVENT_MOUSE_MOTION
+                    ? (e->motion.state & SDL_BUTTON_RMASK ? 3 : e->motion.state & SDL_BUTTON_MMASK ? 2 : 0)
+                    : e->button.button == SDL_BUTTON_RIGHT ? 3 : e->button.button == SDL_BUTTON_MIDDLE ? 2 : 0;
+        if (!b) return false;
+        SDL_Window *w = SDL_GetWindowFromID(e->type == SDL_EVENT_MOUSE_MOTION ? e->motion.windowID : e->button.windowID);
+        int ww = 1, wh = 1;
+        if (w) SDL_GetWindowSize(w, &ww, &wh);
+        float x = e->type == SDL_EVENT_MOUSE_MOTION ? e->motion.x : e->button.x;
+        float y = e->type == SDL_EVENT_MOUSE_MOTION ? e->motion.y : e->button.y;
+        return game_pc_mouse(b, e->type == SDL_EVENT_MOUSE_BUTTON_DOWN ? 0 : e->type == SDL_EVENT_MOUSE_MOTION ? 1 : 2,
+                             x / (ww > 0 ? ww : 1), y / (wh > 0 ? wh : 1));
+    }
+    case SDL_EVENT_MOUSE_WHEEL:
+        return game_pc_wheel(e->wheel.x, e->wheel.y, (SDL_GetModState() & SDL_KMOD_SHIFT) != 0);
+    default:
+        return false;
+    }
+}
+
 void input_handle_event(const SDL_Event *e) {
     extern bool touchpad_handle_event(const SDL_Event *e);  // runtime/ui/touchpad.mm (the on-screen controller)
     extern bool touch_handle_event(const SDL_Event *e);  // runtime/hle/touch.c (touches, the mouse as a finger)
@@ -248,6 +296,7 @@ void input_handle_event(const SDL_Event *e) {
         default: break;
     }
     if (touchpad_handle_event(e) || touch_handle_event(e)) return;
+    if (pc_event(e)) return;  // (a game's own PC controls: game_pc_key / mouse / wheel)
     if (!scanned) {
         scanned = true;
         int n = 0;
@@ -346,12 +395,15 @@ static void test_push(uint64_t frame, unsigned long start, unsigned long len, co
         if (frame == start) snprintf(g_window_shot_request, sizeof g_window_shot_request, "build/%s.png", arg);
         return;
     }
-    if (!strcmp(dev, "click")) {  // "frame:click:<x>/<y>:frames": the left mouse button held at window point x, y
+    if (!strcmp(dev, "click") || !strcmp(dev, "rclick") || !strcmp(dev, "mclick")) {
+        // "frame:click:<x>/<y>:frames": the left mouse button held at window point x, y (rclick: the right, mclick: the
+        // middle button)
         float x = 0, y = 0;
         sscanf(arg, "%f/%f", &x, &y);
         if (frame != start && frame != start + len) return;
         e.type = frame == start ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
-        e.button.which = 1, e.button.button = SDL_BUTTON_LEFT, e.button.down = frame == start, e.button.x = x, e.button.y = y;
+        e.button.which = 1, e.button.down = frame == start, e.button.x = x, e.button.y = y;
+        e.button.button = dev[0] == 'r' ? SDL_BUTTON_RIGHT : dev[0] == 'm' ? SDL_BUTTON_MIDDLE : SDL_BUTTON_LEFT;
         SDL_Window *w = SDL_GetMouseFocus() ? SDL_GetMouseFocus() : SDL_GetKeyboardFocus();
         if (!w) { int n = 0; SDL_Window **ws = SDL_GetWindows(&n); if (n > 0) w = ws[0]; SDL_free(ws); }
         e.button.windowID = w ? SDL_GetWindowID(w) : 0;
@@ -458,7 +510,7 @@ static void host_test_frame(uint64_t frame) {
             unsigned long start = 0, len = 10;
             char dev[8] = "", name[400] = "";
             if (sscanf(tok, "%lu:%7[a-z]:%399[^:]:%lu", &start, dev, name, &len) < 3) continue;
-            if (!strcmp(dev, "type") || !strcmp(dev, "kbd") || !strcmp(dev, "touch") || !strcmp(dev, "sdlpad") || !strcmp(dev, "sdlkey") || !strcmp(dev, "shot") || !strcmp(dev, "tap") || !strcmp(dev, "drag") || !strcmp(dev, "click") || !strcmp(dev, "finger")) {
+            if (!strcmp(dev, "type") || !strcmp(dev, "kbd") || !strcmp(dev, "touch") || !strcmp(dev, "sdlpad") || !strcmp(dev, "sdlkey") || !strcmp(dev, "shot") || !strcmp(dev, "tap") || !strcmp(dev, "drag") || !strcmp(dev, "click") || !strcmp(dev, "rclick") || !strcmp(dev, "mclick") || !strcmp(dev, "finger")) {
                 test_push(frame, start, len, dev, name);
                 continue;
             }
@@ -580,6 +632,9 @@ void input_frame(uint64_t frame) {
         extern int32_t g_test_lx, g_test_ly;
         extern uint64_t g_test_stick_until;
         if (frame < g_test_stick_until) { lx = g_test_lx; ly = g_test_ly; }
+        extern int32_t g_test_rx, g_test_ry;  // (a mod's right stick: SMM2's Course Maker scrolled by the mouse)
+        extern uint64_t g_test_rstick_until;
+        if (frame < g_test_rstick_until) { rx = g_test_rx; ry = g_test_ry; }
         extern uint64_t g_test_buttons, g_test_buttons_until;  // (LARECOMP_PLACE action script)
         if (frame < g_test_buttons_until) b |= g_test_buttons;
     }
