@@ -5,6 +5,14 @@
   below, plus the Windows log file (the exe is a console program: its own console is now freed and the log written to
   smm2recomp.log; it never was before) and the Linux CPU-count log line (#25). Mac 0.5.6; iPad build 361 over
   Tailscale (local devicectl unavailable), launched to the title; private Windows v0.5.6 zip.
+- **2026-10-30 second round (on main, not released):** PR #55 merged (steve-spiteri: the RTX 50 device loss was a
+  vertex shader of a 3D World effect - a predicated forward BRA as `pc = target; continue;` hung the GPU when a warp's
+  lanes diverged; now an `if`; GLSL only; Sunrase confirmed on an RTX 5070 laptop GPU). PR #53 merged (ElDeluxo: OCW
+  play-history sync from its REST API; skip intro, opt-in, Video > Game; checked on Metal). #54 fixed (server): search by
+  ID looks the course up at TGRCode (level_info) when no list has it, and a client lane (a second TgrCode client, its own
+  thread, shared key decoder) serves lookups and listed courses' data instead of queueing behind the fetcher's ~10 s
+  searches; TGRCode answers 429 after a few quick requests (rate limit), the lane waits it out (3 tries). Tested
+  against TGRCode with `mmk server --upstream tgrcode`: lookup 0.3 s, data 1.8 s while the fetcher was priming.
 - **Released v0.5.9 (2026-10-30), GitHub only:** the LARECOMP_VK_SKIP_FS test for #37.
 - **2026-10-30 round (in v0.5.9):** #37 traces on v0.5.8 (both RTX 50 players) end on the same draws at the
   same addresses: fs 72711e4500 (vs 72711e4200) or fs 7284734e00 (vs 7284734b00). Added LARECOMP_VK_SKIP_FS=<addr> for
