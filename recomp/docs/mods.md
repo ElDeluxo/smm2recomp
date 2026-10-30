@@ -691,6 +691,8 @@ menu's Mods tab (always shown), kept in `smm2mods.ini`; an environment variable 
 | Overlapping pipes (SMM1) | `smm1_overlap_pipes=1` | `RECOMP_SMM1_PIPES=1` | from the next course load / placement |
 | Mid-air shell jumps (SMM1) | `smm1_shell_jumps=1` | `RECOMP_SMM1_SHELL_JUMPS=1` | immediately |
 | SMM1 course card (100 Mario) | `hundred_smm1_card=1` | `RECOMP_HUNDRED_SMM1_CARD=1` | from the next course |
+| Ground pound hop (SMM1) | `smm1_pound_hop=1` | `RECOMP_SMM1_POUND_HOP=1` | immediately |
+| Catch while spin jumping (SMM1) | `smm1_spin_catch=1` | `RECOMP_SMM1_SPIN_CATCH=1` | immediately |
 
 `RECOMP_SMM1_LOG=1` logs every decision the hooks see (`[smm1] ...`), on or off.
 
@@ -709,6 +711,19 @@ other part is "solid" (main+0xfe8490: pipes count); a solid part whose shape ove
   each draws and collides as itself [obs: in the test course Mario walks into one, stands on the short one and
   jumps up onto the tall one it overlaps].
 - A course saved with overlapping pipes needs the setting to load (SMM2, and the setting off, treat it as broken).
+
+**Ground pound hop.** SMM1's ground pound begins with vy +1.0 and the gravity off, so Mario rises 1 px a frame while
+he curls up (`hip_start`), then holds for 5 frames with vy 0 and dives at -6 [obs, Block.rpx v208: the pound's begin
+and exec]. SMM2's begin zeroes vy and the gravity and he hangs still. With the setting on, in SMW and NSMBU style
+courses (SMM1's styles with a pound) a normal pound's begin (main+0x15c6540, its argument 0) leaves vy 1.0, and its
+exec (main+0x15c6790) puts vy back to 0 when the wind-up ends. Checked in an NSMBU course (`RECOMP_MOD_AUTOPLAY=pound`:
+autoplay's jumps with Down alone at their top): y rises 1.0 a frame for 10 frames, then the hold and the dive.
+
+**Catch while spin jumping.** Neither game starts a spin jump with an item in hand (both make it a plain jump). In
+SMM1 a Super Mario World style spin jump lets the player grab, so a thrown-up item can be caught while spinning, and
+the spin goes on bouncing off enemies with it [obs v208: the spin's begin sets the state's grab flag with SMW's spin
+action]. SMM2's spin begin (main+0x15df8a0) sets only the other flag (+0x494 bit 23). With the setting on, in SMW
+style courses it also sets the grab flag (+0x494 bit 22); the bounces already stay spins with an item in SMM2.
 
 **Mid-air shell jumps.** SMM1's shell code is SMM2's (the kicks, the speeds, and the mid-air kick off a wall: the
 "wall assist", below) except two rules [obs, Block.rpx v208 against SMM2]; on a shell the setting applies SMM1's:

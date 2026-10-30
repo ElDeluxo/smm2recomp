@@ -253,20 +253,49 @@ void relax_toggles_changed(void);
 int ocw_rows(GameModRow *out, int room);
 void ocw_rows_changed(void);
 static int own_shown;  // (the tab showed the switches above: apply them on a change)
+
+// The tab's groups (owner, 2026-10-30: grouped, as SMM1's own features are): each switch goes under the first group
+// whose list starts its label; a switch no group names goes under "Other" at the end. (A group is a row without a
+// switch: runtime/ui/mods_page.mm shows it as a section header. The order of the switches doesn't matter to their
+// mods: each one's _changed reads its own.)
+static const struct { const char *name; const char *labels[8]; } GROUPS[] = {
+    {"100 Mario Challenge", {"100 Mario Challenge", "SMM1 course card", "Co-op", "Quick level return"}},
+    {"SMM1 power-ups", {"Mystery Mushroom", "Lanky Mario"}},
+    {"SMM1 moves and hit boxes", {"Mid-air shell jumps", "Ground pound hop", "Catch while spin jumping", "Muncher hit box"}},
+    {"SMM1 Course Maker", {"Overlapping pipes"}},
+    {"Look and sound", {"SMW goal wipe"}},
+    {"Courses", {"Courses:", "No word filter", "Play courses the game calls broken"}},
+};
+static int group_of(const char *label) {
+    for (size_t g = 0; g < sizeof GROUPS / sizeof *GROUPS; g++)
+        for (int k = 0; k < 8 && GROUPS[g].labels[k]; k++)
+            if (!strncmp(label, GROUPS[g].labels[k], strlen(GROUPS[g].labels[k]))) return (int)g;
+    return -1;
+}
+
 int game_mod_toggles(const GameModToggle **out) {
-    static GameModToggle all[24];  // (each mod below is given the room that is left)
+    static GameModToggle flat[32], all[48];  // (each mod below is given the room that is left)
     const GameModToggle *own;
     int n = own_shown = mod_toggles(&own);
-    for (int i = 0; i < n; i++) all[i] = own[i];
-    n += smm1_extras_toggles(all + n, (int)(sizeof all / sizeof *all) - n);
-    n += smw_goal_toggles(all + n, (int)(sizeof all / sizeof *all) - n);
-    n += muncher_hitbox_toggles(all + n, (int)(sizeof all / sizeof *all) - n);
-    n += quick_retry_toggles(all + n, (int)(sizeof all / sizeof *all) - n);
-    n += coop_toggles(all + n, (int)(sizeof all / sizeof *all) - n);
-    n += lanky_toggles(all + n, (int)(sizeof all / sizeof *all) - n);
-    n += relax_toggles(all + n, (int)(sizeof all / sizeof *all) - n);
-    *out = n ? all : NULL;
-    return n;
+    for (int i = 0; i < n; i++) flat[i] = own[i];
+    n += smm1_extras_toggles(flat + n, (int)(sizeof flat / sizeof *flat) - n);
+    n += smw_goal_toggles(flat + n, (int)(sizeof flat / sizeof *flat) - n);
+    n += muncher_hitbox_toggles(flat + n, (int)(sizeof flat / sizeof *flat) - n);
+    n += quick_retry_toggles(flat + n, (int)(sizeof flat / sizeof *flat) - n);
+    n += coop_toggles(flat + n, (int)(sizeof flat / sizeof *flat) - n);
+    n += lanky_toggles(flat + n, (int)(sizeof flat / sizeof *flat) - n);
+    n += relax_toggles(flat + n, (int)(sizeof flat / sizeof *flat) - n);
+    int m = 0, ngroups = (int)(sizeof GROUPS / sizeof *GROUPS);
+    for (int g = 0; g <= ngroups; g++) {  // (g == ngroups: the switches no group names)
+        bool header = false;
+        for (int i = 0; i < n; i++) {
+            if (!flat[i].value || group_of(flat[i].label) != (g < ngroups ? g : -1)) continue;
+            if (!header) all[m++] = (GameModToggle){g < ngroups ? GROUPS[g].name : "Other", "", NULL, false}, header = true;
+            all[m++] = flat[i];
+        }
+    }
+    *out = m ? all : NULL;
+    return m;
 }
 
 // The non-switch rows of the same tab (runtime/game_hooks.c): OpenCourse World's section only, so far.

@@ -6,6 +6,8 @@
 //   RECOMP_SMM1_PIPES=1         smm1_overlap_pipes=1   pipes may overlap pipes (Course Maker and courses)
 //   RECOMP_HUNDRED_SMM1_CARD=1  hundred_smm1_card=1    100 Mario: SMM1's start card at a course's start (off: SMM2's
 //                                                      own course-in card, as after a miss; mods/smm1/flow.c)
+//   RECOMP_SMM1_POUND_HOP=1     smm1_pound_hop=1       a ground pound rises a little first (SMW, NSMBU), as in SMM1
+//   RECOMP_SMM1_SPIN_CATCH=1    smm1_spin_catch=1      SMW's spin jump may grab / catch an item, as in SMM1
 //
 // The behaviour comes from the game's own code: host hooks after single instructions (games/smm2/mods/smm1_extras.py
 // lists them) change a register or the flags while a setting is on, and do nothing otherwise. What SMM1 does was
@@ -19,7 +21,7 @@
 
 typedef struct { const char *label, *desc; bool *value; bool def; } GameModToggle;  // (runtime/game_hooks.c)
 
-static bool shell_jumps, overlap_pipes, smm1_card;
+static bool shell_jumps, overlap_pipes, smm1_card, pound_hop, spin_catch;
 
 static const struct Setting {
     const char *key, *env;
@@ -28,6 +30,8 @@ static const struct Setting {
     {"smm1_shell_jumps", "RECOMP_SMM1_SHELL_JUMPS", &shell_jumps},
     {"smm1_overlap_pipes", "RECOMP_SMM1_PIPES", &overlap_pipes},
     {"hundred_smm1_card", "RECOMP_HUNDRED_SMM1_CARD", &smm1_card},
+    {"smm1_pound_hop", "RECOMP_SMM1_POUND_HOP", &pound_hop},
+    {"smm1_spin_catch", "RECOMP_SMM1_SPIN_CATCH", &spin_catch},
 };
 #define NSETTINGS (sizeof settings / sizeof *settings)
 
@@ -81,6 +85,15 @@ int smm1_extras_toggles(GameModToggle *out, int room) {
          "In the 100 Mario Challenge, SMM1's course card (the course, its maker and the lives) after the map instead "
          "of SMM2's own course-in card. From the next course.",
          &shown[2], false},
+        {"Ground pound hop (SMM1)",
+         "In Super Mario World and New Super Mario Bros. U style courses a ground pound rises a little (about half "
+         "a block) while Mario curls up, before it drops, as in SMM1 (SMM2: he hangs still). Immediately.",
+         &shown[3], false},
+        {"Catch while spin jumping (SMM1)",
+         "In Super Mario World style courses a spin jump can grab or catch an item, as in SMM1: throw it up, spin "
+         "jump, catch it while spinning and keep spin-bouncing off enemies with it (SMM2: a spin jump can't "
+         "grab). Immediately.",
+         &shown[4], false},
     };
     load();
     int n = 0;
@@ -174,4 +187,66 @@ void smm1_extras_after(Cpu *c, uint64_t addr) {
         if (shell_jumps) c->x[9] = 0;  // -> the epilogue's 5 frames
         break;
     }
+}
+
+// ---- SMM1 moves (research/specs/smm1-mods-moves.md), function overrides: each runs the game's own function and,
+// with its setting on, changes what that function left in the player (x0 in all three)
+#define STYLE_PTR MAIN_ADDR(0x2c57d58)            // *(*(this) + 0x30) + 0x1c: the course's style (2 SMW, 3 NSMBU)
+#define HIP_ENTER MAIN_ADDR(0x15c6540)            // HipAttack (the ground pound) begin
+#define HIP_EXEC MAIN_ADDR(0x15c6790)             // ... its exec
+#define SPIN_ENTER MAIN_ADDR(0x15df8a0)           // SpinJump begin
+#define P_VY 0x240
+#define P_HIP_ARG 0x2488   // the pound's argument: 0 a normal pound (1: straight into the dive)
+#define P_HIP_PHASE 0x2478 // 0 the wind-up (hip_start), 1 the hold, 2 the dive
+#define P_STATE_FLAGS 0x494  // bit 22: the state lets the player grab (SMM1 +0x42c bit 8)
+
+static int course_style(void) {
+    load();
+    uint64_t h = g64(STYLE_PTR), info = h ? g64(h + 0x30) : 0;
+    return info ? (int)g32(info + 0x1c) : -1;
+}
+
+// SMM1's pound begin sets vy +1.0 with the gravity off, so Mario rises 1 px a frame while `hip_start` plays (about
+// 9 frames in NSMBU), then the hold puts vy back to 0 [obs v208 0x026bf3e0, 0x026bf640]. SMM2's begin zeroes vy and
+// gravity and its wind-up never touches them: the begin's vy is set to 1.0, and set back to 0 when the wind-up ends.
+static void hip_enter(Cpu *c) {
+    uint64_t p = c->x[0];
+    guest_call_orig(c, HIP_ENTER);
+    int st = course_style();
+    if (getenv("RECOMP_SMM1_LOG"))
+        LOG("[smm1] ground pound begin: style %d, argument %u%s\n", st, g32(p + P_HIP_ARG),
+            pound_hop && (st == 2 || st == 3) && !g32(p + P_HIP_ARG) ? " -> rises (SMM1)" : "");
+    if (pound_hop && (st == 2 || st == 3) && g32(p + P_HIP_ARG) == 0) {
+        float one = 1.0f;
+        uint32_t w;
+        memcpy(&w, &one, 4);
+        s32(p + P_VY, w);
+    }
+}
+static void hip_exec(Cpu *c) {
+    uint64_t p = c->x[0];
+    uint32_t before = g32(p + P_HIP_PHASE);
+    guest_call_orig(c, HIP_EXEC);
+    load();
+    if (getenv("RECOMP_SMM1_LOG") && before == 0)
+        LOG("[smm1] ground pound wind-up: y %.2f vy %.2f, phase now %u\n", g32f(p + 0x234), g32f(p + P_VY),
+            g32(p + P_HIP_PHASE));
+    if (pound_hop && before == 0 && g32(p + P_HIP_PHASE) == 1) s32(p + P_VY, 0);
+}
+// SMM1's spin begin lets the player grab in SMW style (+0x42c |= 0x100 with the style's mw_spin_jump) [obs v208
+// 0x026ce914]; SMM2's sets only the other flag (+0x494 |= 0x800000) [obs v3.0.3 main+0x15df924].
+static void spin_enter(Cpu *c) {
+    uint64_t p = c->x[0];
+    guest_call_orig(c, SPIN_ENTER);
+    int st = course_style();
+    if (getenv("RECOMP_SMM1_LOG"))
+        LOG("[smm1] spin jump begin: style %d, state flags %#x%s\n", st, g32(p + P_STATE_FLAGS),
+            spin_catch && st == 2 ? " -> may grab (SMM1)" : "");
+    if (spin_catch && st == 2) s32(p + P_STATE_FLAGS, g32(p + P_STATE_FLAGS) | 0x400000u);
+}
+
+__attribute__((constructor)) static void smm1_moves_register(void) {
+    hle_override(HIP_ENTER, hip_enter, "SMM1 extras: ground pound begin (hop)");
+    hle_override(HIP_EXEC, hip_exec, "SMM1 extras: ground pound exec (hop ends)");
+    hle_override(SPIN_ENTER, spin_enter, "SMM1 extras: spin jump begin (catch)");
 }
