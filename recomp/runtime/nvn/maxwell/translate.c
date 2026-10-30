@@ -2234,11 +2234,48 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
     if (annotate < 0) annotate = getenv("LARECOMP_SAVE_MSL") != NULL;
     c->branchy = any_branch;
     c->code = code;  // (emit_insn looks at neighbouring words for a few patterns)
+    // GLSL: a predicated forward BRA to the next label, with no label in between, skips straight-line code. That code
+    // becomes the body of an `if (!P)` and execution flows into the label's case, instead of `pc = target; continue;`
+    // through the dispatch switch (`@P0 BRA l; ...; l:` => `if (!p0) { ... } case l:`). Same behaviour, and the lanes of
+    // a warp that differ on P rejoin right there. On an RTX 5080 Laptop (driver 617.42) the old form hung the GPU when
+    // the lanes of a warp went different ways at such a skip: the vertex shader of a 3D World effect (4 vertices, 4-5
+    // instances) ran until the 2 s watchdog (vkWaitSemaphores: device lost, "ip invalid", #30 / #37); the recorded draw
+    // replayed offline hangs with the old form and runs in 2 ms with this one. MSL is left as it was (tools/test_translate
+    // checks it byte for byte). LARECOMP_NO_BRA_IF=1: the old form.
+    static int bra_if = -1;
+    if (bra_if < 0) bra_if = getenv("LARECOMP_NO_BRA_IF") == NULL;
+    int open_ifs = 0;  // (the regions open now all end at the same label: none holds one)
+    size_t close_at = 0;
     for (size_t i = 0; i < end && !c->fail; i++) {
         if (i % 4 == 0) continue;
         uint32_t pc = (uint32_t)(i * 8);
+        if (open_ifs && i == close_at) {
+            while (open_ifs-- > 0) sp(&c->body, "  }\n");
+            open_ifs = 0;
+        }
         if (any_branch && label[i]) sp(&c->body, "  case %uu:\n", pc);
         if (annotate) sp(&c->body, "    // pc %x: %016llx\n", pc, (unsigned long long)((const uint64_t *)code)[i]);
+        uint64_t bw = ((const uint64_t *)code)[i];
+        if (bra_if && c->glsl && any_branch && (bw & 0xfff0000000000020ull) == 0xe240000000000000ull) {
+            int bpr = (int)bits(bw, 16, 3);
+            bool bprn = bits(bw, 19, 1);
+            int64_t bt = norm_target((int64_t)pc + 8 + sbits(bw, 20, 24));
+            bool guarded_bra = !(bpr == PT && !bprn), never = bpr == PT && bprn;  // (@pt: unconditional; @!pt: never taken)
+            size_t tgt = bt > 0 ? (size_t)(bt / 8) : 0;
+            if (guarded_bra && !never && bt > (int64_t)pc + 8 && tgt < end && label[tgt] && (!open_ifs || tgt == close_at)) {
+                bool clear = true;  // (scheduling words every fourth slot are not instructions)
+                for (size_t j = i + 1; j < tgt && clear; j++)
+                    if (j % 4 != 0 && label[j]) clear = false;
+                if (clear) {
+                    c->uses_branches = true;
+                    sp(&c->body, "  if (%s) {\n", P(bpr, !bprn));
+                    open_ifs++;
+                    close_at = tgt;
+                    info->num_insts++;
+                    continue;
+                }
+            }
+        }
         emit_insn(c, ((const uint64_t *)code)[i], pc);
         if (dbg && pc == maxwell_dbg_pc) {
             int rr = maxwell_dbg_reg % 1000, half = maxwell_dbg_reg / 1000;  // +1000: low f16, +2000: high f16
