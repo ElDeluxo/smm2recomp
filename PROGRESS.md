@@ -8,9 +8,13 @@
   controls, #37 Video > Shaders, the 100 Mario ending's look (power-ups, shoe / Yoshi, the course theme's backdrop,
   co-op Luigi), the won run's result screen Next only, the Mods tab in groups, SMM1 mods (off by default): Ground pound
   hop, Catch while spin jumping, Full death fanfare in pits. Research: `research/specs/smm1-mods-moves.md` (fire
-  climbing = no throw boost in SMM1; the one-way wall's ledge is an extra SMM1 collider). Open: the spin catch not yet
-  tried in an SMW course; one-way wall ledge; fire climbing (asked the owner what they remember); the backlog (graphics
-  check, a full 100 Mario test, 120 fps on Metal); #56 reply drafted (Intel HD 520: try v0.5.10), not posted.
+  climbing = no throw boost in SMM1; the one-way wall's ledge is an extra SMM1 collider). Backlog: graphics ticked off
+  (owner: spot on, on the iPad); a full Easy 100 Mario run end to end (autoplay; found and fixed the ending's black
+  backdrop with a subset SMM1 copy, autoplay stuck at the skip hint); 120 fps: MetalFX interpolation and warp variants
+  tried, none better, nothing changed (docs/smm2-bringup.md; tools/framegen_png.m). Open: the spin catch not yet tried
+  in an SMW course; one-way wall ledge (a new collider: asked the owner); fire climbing (asked); #56 reply drafted
+  (Intel HD 520: try v0.5.10), not posted. The Mac app's and the iPad stage's SMM1 copies got the theme backdrops
+  (Model/*_DV_*); the iPad needs a data push.
 - **Released v0.5.6 (2026-10-29)** (https://github.com/smm2recomp/smm2recomp/releases/tag/v0.5.6): the 2026-10-28 pass
   below, plus the Windows log file (the exe is a console program: its own console is now freed and the log written to
   smm2recomp.log; it never was before) and the Linux CPU-count log line (#25). Mac 0.5.6; iPad build 361 over
