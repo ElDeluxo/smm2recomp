@@ -180,8 +180,19 @@ static void create_device(void) {
     // of the 3.2 GB heap (128 MB on lavapipe and Adreno, 1-2 GB on some desktop GPUs), so the heap's import is reached
     // through its device address instead (bufferDeviceAddress: part of Vulkan 1.3). Without host memory import there is
     // no heap on the GPU at all: draw stages then read per-draw copies of their storage buffers (exec.c gfx_gmap).
-    // LARECOMP_VK_NO_BDA=1: the old storage buffer binding; LARECOMP_VK_NO_GMEM=1: no import (the per-draw copies).
-    bool no_gmem = !g_vk.host_import || getenv("LARECOMP_VK_NO_GMEM");
+    // On integrated GPUs (UMA) or devices with <= 4 GB device memory, importing the 3.2 GB guest heap
+    // starves the GPU of memory for textures and render targets, leading to VK_ERROR_OUT_OF_DEVICE_MEMORY.
+    VkPhysicalDeviceMemoryProperties mem_props;
+    vkGetPhysicalDeviceMemoryProperties(g_vk.phys, &mem_props);
+    uint64_t dev_local_size = 0;
+    for (uint32_t i = 0; i < mem_props.memoryHeapCount; i++) {
+        if (mem_props.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) {
+            dev_local_size += mem_props.memoryHeaps[i].size;
+        }
+    }
+    bool low_vram = (dev_local_size > 0 && dev_local_size <= 4294967296ULL) ||
+                    (g_vk.props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU);
+    bool no_gmem = !g_vk.host_import || low_vram || getenv("LARECOMP_VK_NO_GMEM");
     g_vk.bda = have12.bufferDeviceAddress && have.features.shaderInt64 && !no_gmem && !getenv("LARECOMP_VK_NO_BDA");
     VkPhysicalDeviceVertexAttributeDivisorFeaturesEXT div = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_ATTRIBUTE_DIVISOR_FEATURES_EXT,
